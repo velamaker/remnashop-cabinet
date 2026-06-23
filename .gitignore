@@ -24,6 +24,9 @@ backups/
 logs/
 *.log
 
+# Оформление конкретной установки (название/цвета) — не часть кода
+assets/branding.json
+
 # Editor / OS
 .DS_Store
 .idea/
