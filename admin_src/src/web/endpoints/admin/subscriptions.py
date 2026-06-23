@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.application.common import Remnawave
 from src.application.common.dao import PlanDao, SubscriptionDao, UserDao
 from src.application.dto import PlanSnapshotDto, SubscriptionDto
 from src.core.enums import SubscriptionStatus
@@ -18,6 +19,23 @@ from ._common import AdminUser
 router = APIRouter(prefix="/subscriptions", tags=["Admin - Subscriptions"])
 
 UNLIMITED_YEAR = 2099
+
+
+async def _sync_remnawave(awaitable: Any) -> Any:
+    """Выполняет вызов к Remnawave, превращая ошибку панели в понятный 502.
+
+    Вызывается ДО session.commit(), чтобы при сбое синхронизации локальные
+    изменения откатились и админ увидел ошибку, а не «тихое» расхождение.
+    """
+    try:
+        return await awaitable
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Ошибка синхронизации с Remnawave: {exc}",
+        )
 
 
 def _sub_to_dict(s: SubscriptionDto) -> dict[str, Any]:
@@ -64,7 +82,9 @@ async def extend_subscription(
     user_id: int,
     body: ExtendRequest,
     _admin: AdminUser,
+    user_dao: FromDishka[UserDao],
     subscription_dao: FromDishka[SubscriptionDao],
+    remnawave: FromDishka[Remnawave],
     session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     if body.days == 0 or abs(body.days) > 3650:
@@ -73,6 +93,10 @@ async def extend_subscription(
     sub = await subscription_dao.get_current(user_id)
     if not sub:
         raise HTTPException(status_code=404, detail="No active subscription found")
+
+    user = await user_dao.get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
     now = datetime.now(timezone.utc)
     # Продление (+): считаем от текущего срока или от now, если уже истёк.
@@ -83,6 +107,9 @@ async def extend_subscription(
     else:
         new_expire = sub.expire_at + timedelta(days=body.days)
         sub.expire_at = new_expire if new_expire > now else now
+
+    # Сначала синхронизируем срок в панели Remnawave (если упадёт — локально не коммитим).
+    await _sync_remnawave(remnawave.update_user(user=user, uuid=sub.user_remna_id, subscription=sub))
 
     updated = await subscription_dao.update(sub)
     if not updated:
@@ -99,11 +126,15 @@ async def disable_subscription(
     user_id: int,
     _admin: AdminUser,
     subscription_dao: FromDishka[SubscriptionDao],
+    remnawave: FromDishka[Remnawave],
     session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     sub = await subscription_dao.get_current(user_id)
     if not sub:
         raise HTTPException(status_code=404, detail="No subscription found")
+
+    # Отключаем доступ в панели Remnawave.
+    await _sync_remnawave(remnawave.disable_user(sub.user_remna_id))
 
     updated = await subscription_dao.update_status(sub.id, SubscriptionStatus.DISABLED)
     if not updated:
@@ -120,11 +151,15 @@ async def delete_subscription(
     user_id: int,
     _admin: AdminUser,
     subscription_dao: FromDishka[SubscriptionDao],
+    remnawave: FromDishka[Remnawave],
     session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     sub = await subscription_dao.get_current(user_id)
     if not sub:
         raise HTTPException(status_code=404, detail="No subscription found")
+
+    # Удаляем пользователя из панели Remnawave (доступ к VPN прекращается).
+    await _sync_remnawave(remnawave.delete_user(sub.user_remna_id))
 
     updated = await subscription_dao.update_status(sub.id, SubscriptionStatus.DELETED)
     if not updated:
@@ -150,6 +185,7 @@ async def grant_subscription(
     user_dao: FromDishka[UserDao],
     plan_dao: FromDishka[PlanDao],
     subscription_dao: FromDishka[SubscriptionDao],
+    remnawave: FromDishka[Remnawave],
     session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     if body.days <= 0 or body.days > 3650:
@@ -173,24 +209,59 @@ async def grant_subscription(
     if existing and existing.is_active:
         base = existing.expire_at if existing.expire_at > now else now
         existing.expire_at = base + timedelta(days=body.days)
+        existing.traffic_limit = plan.traffic_limit
+        existing.device_limit = plan.device_limit
+        existing.traffic_limit_strategy = plan.traffic_limit_strategy or TrafficLimitStrategy.NO_RESET
+        existing.tag = plan.tag
         existing.plan_snapshot = snapshot
+        # Синхронизируем срок/план в панели.
+        await _sync_remnawave(
+            remnawave.update_user(user=user, uuid=existing.user_remna_id, subscription=existing)
+        )
         updated = await subscription_dao.update(existing)
         if not updated:
             raise HTTPException(status_code=500, detail="Failed to update subscription")
         await session.commit()
         return {"success": True, "subscription": _sub_to_dict(updated), "action": "extended"}
 
-    # Create new subscription
+    # Нет активной подписки — создаём пользователя в панели Remnawave.
+    remna_user = None
+    try:
+        remna_user = await remnawave.create_user(user, plan=snapshot)
+    except Exception:  # noqa: BLE001
+        # Возможно, пользователь уже есть в панели (была удалённая подписка) —
+        # находим его и обновляем под новый план.
+        try:
+            candidates = []
+            if user.telegram_id:
+                candidates = await remnawave.get_users_by_telegram_id(user.telegram_id)
+            if not candidates and user.email:
+                candidates = await remnawave.get_users_by_email(user.email)
+            if candidates:
+                remna_user = await remnawave.update_user(
+                    user=user, uuid=candidates[0].uuid, plan=snapshot, reset_traffic=True,
+                )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Ошибка синхронизации с Remnawave: {exc}",
+            )
+    if remna_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Не удалось создать пользователя в Remnawave",
+        )
+
     new_sub = SubscriptionDto(
         user_id=user_id,
-        user_remna_id=user.remna_id if hasattr(user, "remna_id") else uuid4(),
-        status=SubscriptionStatus.ACTIVE,
+        user_remna_id=remna_user.uuid,
+        status=SubscriptionStatus(remna_user.status),
         is_trial=body.is_trial,
         traffic_limit=plan.traffic_limit,
         device_limit=plan.device_limit,
         traffic_limit_strategy=plan.traffic_limit_strategy or TrafficLimitStrategy.NO_RESET,
-        expire_at=now + timedelta(days=body.days),
-        url="",
+        expire_at=remna_user.expire_at,
+        url=remna_user.subscription_url,
         plan_snapshot=snapshot,
     )
 
