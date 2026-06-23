@@ -22,7 +22,15 @@ interface BrandingValue {
 const BrandingContext = createContext<BrandingValue | null>(null);
 
 const ACCENT_VARS = ["--accent", "--accent-hover", "--accent-2", "--accent-subtle", "--accent-glow"];
-const BG_VARS = ["--bg", "--bg-subtle", "--bg-raised", "--bg-overlay"];
+// При кастомном фоне переопределяем не только поверхности, но и цвет текста и
+// границ — иначе тёмный текст темы теряется на тёмном фоне (и наоборот).
+const BG_VARS = [
+  "--bg", "--bg-subtle", "--bg-raised", "--bg-overlay",
+  "--fg", "--fg-muted", "--fg-subtle", "--border", "--border-subtle",
+];
+
+const LIGHT_FG = "238, 243, 251"; // #eef3fb — текст для тёмного фона
+const DARK_FG = "28, 27, 23";     // #1c1b17 — текст для светлого фона
 
 /** Применяет акцентный цвет, derive-я оттенки. null → возврат к теме. */
 export function applyAccent(accent: string | null) {
@@ -52,6 +60,14 @@ export function applyBackground(background: string | null) {
   root.setProperty("--bg-subtle", dark ? lighten(hex, 0.04) : darken(hex, 0.03));
   root.setProperty("--bg-raised", dark ? lighten(hex, 0.08) : lighten(hex, 0.5));
   root.setProperty("--bg-overlay", dark ? lighten(hex, 0.12) : darken(hex, 0.06));
+
+  // Подбираем текст и границы под яркость фона, чтобы буквы не терялись.
+  const fg = dark ? LIGHT_FG : DARK_FG;
+  root.setProperty("--fg", `rgb(${fg})`);
+  root.setProperty("--fg-muted", `rgba(${fg}, 0.62)`);
+  root.setProperty("--fg-subtle", `rgba(${fg}, 0.40)`);
+  root.setProperty("--border", `rgba(${fg}, 0.16)`);
+  root.setProperty("--border-subtle", `rgba(${fg}, 0.09)`);
 }
 
 export function BrandingProvider({ children }: { children: ReactNode }) {
