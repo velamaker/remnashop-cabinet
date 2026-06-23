@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { ShieldCheck } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -95,19 +96,27 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-bg px-4">
-      <div className="absolute right-4 top-4">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-bg px-4">
+      {/* Ambient background glow — single subtle accent */}
+      <div aria-hidden className="ambient-glow -top-32 left-1/2 h-96 w-96 -translate-x-1/2" />
+
+      <div className="absolute right-4 top-4 z-10">
         <ThemeSwitcher />
       </div>
 
-      <div className="w-full max-w-[360px] animate-fade-in">
-        {/* Logo */}
+      <div className="relative z-10 w-full max-w-[360px] animate-fade-in">
+        {/* Brand */}
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--border)] bg-bg-raised text-accent">
-            <span className="text-sm font-bold tracking-tight">R</span>
+          <div className="brand-mark mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl text-white">
+            <ShieldCheck className="h-6 w-6" strokeWidth={2.2} />
           </div>
-          <h1 className="text-xl font-semibold tracking-tight text-fg">Вход в кабинет</h1>
-          <p className="mt-1.5 text-sm text-fg-muted">
+          <div className="flex items-baseline justify-center gap-1.5">
+            <span className="brand-wordmark text-2xl font-bold tracking-tight">Begemot</span>
+            <span className="text-xs font-semibold uppercase tracking-[0.2em] text-fg-subtle">
+              VPN
+            </span>
+          </div>
+          <p className="mt-2 text-sm text-fg-muted">
             Управляйте подпиской и устройствами
           </p>
         </div>

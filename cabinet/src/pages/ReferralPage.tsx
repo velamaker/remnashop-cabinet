@@ -151,7 +151,7 @@ export default function ReferralPage() {
       setProgram(data);
     } catch (e) {
       if (e instanceof ApiError && e.status === 403) {
-        if (!user?.is_email_verified && user?.auth_type !== "TELEGRAM") {
+        if (!user?.is_email_verified && user?.auth_type?.toUpperCase() !== "TELEGRAM") {
           setUnavailableReason("email");
         } else if (e.detail.toLowerCase().includes("subscription")) {
           setUnavailableReason("subscription");

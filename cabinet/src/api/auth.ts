@@ -13,6 +13,10 @@ import type {
 
 export const authApi = {
   me: () => api.get<MeResponse>("/auth/me"),
+  whoami: () =>
+    api.get<{ role: number | null; is_admin: boolean; has_password: boolean }>("/auth/whoami"),
+  setPassword: (password: string) =>
+    api.post<{ success: boolean; has_password: boolean }>("/auth/password/set", { password }),
 
   login: (data: LoginRequest) =>
     api.post<AuthResponse>("/auth/login", data, { skipAuthRetry: true }),

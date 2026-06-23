@@ -14,6 +14,10 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:5002:80"
+    volumes:
+      # nginx.conf авторитетен из исходника — правки конфига не требуют пересборки
+      # образа и переживают пересоздание контейнера.
+      - ./cabinet/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
       - default
 

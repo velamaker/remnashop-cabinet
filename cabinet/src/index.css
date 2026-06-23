@@ -10,50 +10,53 @@
 /* ---------- Dark theme (default) ---------- */
 :root,
 .theme-dark {
-  --bg: #08080b;
-  --bg-subtle: #0e0e12;
-  --bg-raised: #141418;
-  --bg-overlay: #1c1c22;
+  /* Глубже и контрастнее — лучше читается */
+  --bg: #0a0d15;
+  --bg-subtle: #111722;
+  --bg-raised: #18202e;
+  --bg-overlay: #222c3d;
 
-  --border: rgba(255, 255, 255, 0.07);
-  --border-subtle: rgba(255, 255, 255, 0.04);
+  --border: rgba(150, 170, 205, 0.16);
+  --border-subtle: rgba(150, 170, 205, 0.09);
 
-  --fg: #eeeef0;
-  --fg-muted: #888896;
-  --fg-subtle: #50505e;
+  --fg: #eef3fb;
+  --fg-muted: #9aa7bd;
+  --fg-subtle: #65728a;
 
-  --accent: #6366f1;
-  --accent-hover: #7375f3;
+  --accent: #4d8bff;
+  --accent-hover: #6aa0ff;
+  --accent-2: #2bd4ee;
   --accent-fg: #ffffff;
-  --accent-subtle: rgba(99, 102, 241, 0.1);
-  --accent-glow: rgba(99, 102, 241, 0.18);
+  --accent-subtle: rgba(77, 139, 255, 0.14);
+  --accent-glow: rgba(77, 139, 255, 0.30);
 
-  --success: #22c55e;
-  --warning: #f59e0b;
-  --danger: #ef4444;
+  --success: #2ee06a;
+  --warning: #f5a623;
+  --danger: #f2545b;
 
   color-scheme: dark;
 }
 
-/* ---------- Light theme ---------- */
+/* ---------- Light theme (мягкий кремовый, не чисто-белый) ---------- */
 .theme-light {
-  --bg: #ffffff;
-  --bg-subtle: #f7f7f8;
-  --bg-raised: #ffffff;
-  --bg-overlay: #ffffff;
+  --bg: #f6f4ee;
+  --bg-subtle: #efece3;
+  --bg-raised: #fffdfa;
+  --bg-overlay: #fffdfa;
 
-  --border: rgba(0, 0, 0, 0.08);
-  --border-subtle: rgba(0, 0, 0, 0.05);
+  --border: rgba(60, 55, 40, 0.12);
+  --border-subtle: rgba(60, 55, 40, 0.07);
 
-  --fg: #09090b;
-  --fg-muted: #71717a;
-  --fg-subtle: #a1a1aa;
+  --fg: #1c1b17;
+  --fg-muted: #6c685e;
+  --fg-subtle: #9a958a;
 
-  --accent: #6366f1;
-  --accent-hover: #5355e8;
+  --accent: #2f6bf0;
+  --accent-hover: #2057d6;
+  --accent-2: #0aa5c2;
   --accent-fg: #ffffff;
-  --accent-subtle: rgba(99, 102, 241, 0.08);
-  --accent-glow: rgba(99, 102, 241, 0.14);
+  --accent-subtle: rgba(47, 107, 240, 0.10);
+  --accent-glow: rgba(47, 107, 240, 0.20);
 
   --success: #16a34a;
   --warning: #d97706;
@@ -128,4 +131,118 @@ body {
 
 .theme-dark .input {
   border-color: rgba(255, 255, 255, 0.07);
+}
+
+/* ---------- Brand & ambient effects (single-accent, restrained) ---------- */
+
+/* Логотип-марка: один акцентный тон → соседний (синий → циан), мягкая тень */
+.brand-mark {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+  box-shadow:
+    0 6px 18px var(--accent-glow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+/* Вордмарк — чистый текст, без кричащего градиента */
+.brand-wordmark {
+  color: var(--fg);
+  letter-spacing: -0.02em;
+}
+
+/* Тонкое монохромное свечение фона (как радиальный glow у референсов) */
+.ambient-glow {
+  position: absolute;
+  border-radius: 9999px;
+  pointer-events: none;
+  z-index: 0;
+  background: radial-gradient(
+    circle at center,
+    var(--accent-glow) 0%,
+    transparent 70%
+  );
+  filter: blur(40px);
+  opacity: 0.6;
+}
+.theme-light .ambient-glow {
+  opacity: 0.35;
+}
+
+/* Активный пункт навигации — мягкая подложка + акцентная полоса слева */
+.nav-active-glow {
+  background: var(--accent-subtle);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* ---------- Premium surfaces ---------- */
+
+/* Базовая поверхность карточки — мягкая глубина, не плоский прямоугольник */
+.surface {
+  background: linear-gradient(180deg, var(--bg-raised), var(--bg-subtle));
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.03),
+    0 12px 32px -18px rgba(0, 0, 0, 0.6);
+}
+.theme-light .surface {
+  background: #ffffff;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 14px 34px -22px rgba(15, 23, 42, 0.14);
+}
+
+/* Hero-карта подписки — «подпись» страницы: акцентная кромка + мягкое свечение */
+.card-hero {
+  position: relative;
+  border-radius: 22px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  background:
+    radial-gradient(130% 130% at 100% 0%, var(--accent-subtle) 0%, transparent 46%),
+    linear-gradient(180deg, var(--bg-raised), var(--bg-subtle));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 0 1px var(--accent-subtle),
+    0 0 40px -6px var(--accent-glow),
+    0 30px 70px -28px var(--accent-glow),
+    0 14px 36px -22px rgba(0, 0, 0, 0.55);
+}
+.theme-light .card-hero {
+  background:
+    radial-gradient(130% 130% at 100% 0%, var(--accent-subtle) 0%, transparent 46%),
+    var(--bg-raised);
+  box-shadow:
+    0 0 0 1px var(--accent-subtle),
+    0 0 32px -8px var(--accent-glow),
+    0 28px 60px -32px var(--accent-glow),
+    0 14px 32px -26px rgba(60, 55, 40, 0.18);
+}
+/* тонкая акцентная кромка сверху */
+.card-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), var(--accent-2), transparent);
+  opacity: 0.8;
+}
+
+/* Градиентная главная кнопка */
+.btn-gradient {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #fff;
+  box-shadow: 0 8px 20px -8px var(--accent-glow);
+  transition: box-shadow 0.2s ease, filter 0.2s ease, transform 0.15s ease;
+}
+.btn-gradient:hover {
+  box-shadow: 0 12px 28px -6px var(--accent-glow);
+  filter: brightness(1.06);
+}
+
+/* Технический моноширинный + табличные цифры */
+.font-mono-tech {
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+.tabular {
+  font-variant-numeric: tabular-nums;
 }

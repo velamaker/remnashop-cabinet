@@ -1,9 +1,23 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Copy, RefreshCw, Check, Gift, ArrowRight, QrCode, X } from "lucide-react";
+import {
+  Copy,
+  RefreshCw,
+  Check,
+  Gift,
+  ArrowRight,
+  QrCode,
+  X,
+  Wallet,
+  TrendingUp,
+  ShoppingBag,
+  ChevronRight,
+} from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
+import { useAuth } from "@/contexts/AuthContext";
 import { useSubscription } from "@/hooks/useSubscription";
 import { subscriptionApi } from "@/api/subscription";
+import { balanceApi, type BalanceResponse } from "@/api/balance";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { ProgressBar } from "@/components/ui/ProgressBar";
@@ -50,26 +64,30 @@ function EmptySubscription() {
   };
 
   return (
-    <Card className="bg-grain text-center">
-      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-subtle">
-        <Gift className="h-6 w-6 text-accent" />
+    <div className="card-hero p-7 text-center sm:p-9">
+      <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-2)] text-white shadow-[0_10px_24px_-8px_var(--accent-glow)]">
+        <Gift className="h-7 w-7" />
       </div>
-      <h2 className="text-base font-semibold text-fg">У вас пока нет подписки</h2>
-      <p className="mt-1 text-sm text-fg-subtle">
-        Попробуйте бесплатный пробный период или выберите тариф
+      <h2 className="text-lg font-bold tracking-tight text-fg">У вас пока нет подписки</h2>
+      <p className="mx-auto mt-1.5 max-w-sm text-sm text-fg-muted">
+        Попробуйте бесплатный пробный период или сразу выберите подходящий тариф
       </p>
       {error && <p className="mt-3 text-sm text-danger">{error}</p>}
-      <div className="mt-5 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
-        <Button onClick={handleTrial} isLoading={isActivating}>
-          Активировать пробный период
-        </Button>
+      <div className="mt-6 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
+        <button
+          onClick={handleTrial}
+          disabled={isActivating}
+          className="btn-gradient inline-flex h-10 items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold transition-all active:scale-[0.98] disabled:opacity-60"
+        >
+          {isActivating ? "Активируем…" : "Активировать пробный период"}
+        </button>
         <Link to="/billing">
-          <Button variant="secondary">
+          <Button variant="secondary" size="lg" className="rounded-xl">
             Выбрать тариф <ArrowRight className="h-4 w-4" />
           </Button>
         </Link>
       </div>
-    </Card>
+    </div>
   );
 }
 
@@ -84,10 +102,10 @@ function ConnectionUrlCard({ url }: { url: string }) {
   };
 
   return (
-    <Card variant="bordered">
-      <CardHeader title="Ссылка для подключения" />
-      <div className="flex items-center gap-2 rounded-xl bg-bg-subtle p-2">
-        <code className="flex-1 truncate px-2 text-xs text-fg-muted">{url}</code>
+    <div className="surface p-5">
+      <CardHeader title="Ссылка для подключения" subtitle="Импортируйте её в приложение или отсканируйте QR" />
+      <div className="flex items-center gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-subtle)] p-2">
+        <code className="font-mono-tech flex-1 truncate px-2 text-xs text-fg-muted">{url}</code>
         <Button size="sm" variant="secondary" onClick={() => setShowQr((v) => !v)}>
           {showQr ? <X className="h-4 w-4" /> : <QrCode className="h-4 w-4" />}
         </Button>
@@ -102,19 +120,25 @@ function ConnectionUrlCard({ url }: { url: string }) {
       </div>
       {showQr && (
         <div className="mt-4 flex justify-center">
-          <div className="rounded-2xl bg-white p-4 shadow-soft">
+          <div className="rounded-2xl bg-white p-4 shadow-raised">
             <QRCodeSVG value={url} size={180} />
           </div>
         </div>
       )}
-    </Card>
+    </div>
   );
 }
 
 export default function DashboardPage() {
+  const { user } = useAuth();
   const { subscription, isLoading, reload } = useSubscription();
   const [isReissuing, setIsReissuing] = useState(false);
   const [reissueError, setReissueError] = useState<string | null>(null);
+  const [balance, setBalance] = useState<BalanceResponse | null>(null);
+
+  useEffect(() => {
+    balanceApi.get().then(setBalance).catch(() => {});
+  }, []);
 
   const handleReissue = async () => {
     setIsReissuing(true);
@@ -134,7 +158,7 @@ export default function DashboardPage() {
   if (isLoading) {
     return (
       <div className="flex flex-col gap-5">
-        <h1 className="text-xl font-semibold text-fg">Подписка</h1>
+        <Skeleton className="h-8 w-64" />
         <SubscriptionSkeleton />
       </div>
     );
@@ -143,7 +167,9 @@ export default function DashboardPage() {
   if (!subscription) {
     return (
       <div className="flex flex-col gap-5">
-        <h1 className="text-xl font-semibold text-fg">Подписка</h1>
+        <h1 className="text-2xl font-bold tracking-tight text-fg">
+          Добро пожаловать{user?.name ? `, ${user.name.trim().split(/\s+/)[0]}` : ""}!
+        </h1>
         <EmptySubscription />
       </div>
     );
@@ -154,62 +180,85 @@ export default function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex items-center justify-between">
+      {/* Заголовок */}
+      <div className="flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-fg">Подписка</h1>
         <StatusBadge status={subscription.status} />
       </div>
 
-      <Card className="bg-grain">
-        <div className="flex items-start justify-between">
-          <div>
-            <p className="text-xs text-fg-subtle">Текущий тариф</p>
-            <h2 className="mt-1 text-lg font-semibold text-fg">
-              {subscription.plan_name}
-              {subscription.is_trial && (
-                <span className="ml-2 rounded-full bg-accent-subtle px-2 py-0.5 text-xs font-medium text-accent">
-                  Пробный
-                </span>
-              )}
-            </h2>
-          </div>
+      <div className="card-hero p-6 sm:p-7">
+        {/* Тариф */}
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fg-subtle">
+          Текущий тариф
+        </p>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <h2 className="text-2xl font-bold tracking-tight text-fg">{subscription.plan_name}</h2>
+          {subscription.is_trial && (
+            <span className="rounded-full border border-accent/30 bg-accent-subtle px-2.5 py-0.5 text-xs font-medium text-accent">
+              Пробный период
+            </span>
+          )}
         </div>
 
-        <div className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-3">
-          <div>
-            <p className="text-xs text-fg-subtle">Действует до</p>
-            <p className="mt-1 text-sm font-medium text-fg">
+        {/* Технические данные с хайрлайн-разделителями */}
+        <div className="mt-6 grid grid-cols-2 gap-y-5 sm:grid-cols-3 sm:gap-0">
+          <div className="sm:pr-4">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-fg-subtle">
+              Действует до
+            </p>
+            <p className="tabular mt-1.5 text-[15px] font-semibold text-fg">
               {formatDate(subscription.expire_at)}
             </p>
-            <p className="text-xs text-fg-subtle">
+            <p className="tabular mt-0.5 text-xs text-fg-muted">
               {remainingDays > 0 ? `${remainingDays} дн. осталось` : "истекла"}
             </p>
           </div>
-          <div>
-            <p className="text-xs text-fg-subtle">Устройства</p>
-            <p className="mt-1 text-sm font-medium text-fg">
-              лимит {subscription.device_limit}
+          <div className="sm:border-l sm:border-[var(--border)] sm:pl-4 sm:pr-4">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-fg-subtle">
+              Устройства
             </p>
+            <p className="tabular mt-1.5 text-[15px] font-semibold text-fg">
+              до {subscription.device_limit}
+            </p>
+            <p className="mt-0.5 text-xs text-fg-muted">одновременных</p>
           </div>
-          <div>
-            <p className="text-xs text-fg-subtle">Последняя активность</p>
-            <p className="mt-1 text-sm font-medium text-fg">
+          <div className="sm:border-l sm:border-[var(--border)] sm:pl-4">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-fg-subtle">
+              Активность
+            </p>
+            <p className="mt-1.5 text-[15px] font-semibold text-fg">
               {formatRelativeOnline(subscription.online_at)}
             </p>
+            <p className="mt-0.5 text-xs text-fg-muted">последний сеанс</p>
           </div>
         </div>
 
-        <div className="mt-5">
-          <div className="mb-1.5 flex items-center justify-between text-xs text-fg-subtle">
-            <span>Трафик</span>
-            <span>
-              {isUnlimited
-                ? `${formatBytes(subscription.used_traffic_bytes)} · безлимит`
-                : `${formatBytes(subscription.used_traffic_bytes)} из ${formatTrafficLimit(
-                    subscription.traffic_limit,
-                  )}`}
+        {/* Трафик */}
+        <div className="mt-6 border-t border-[var(--border-subtle)] pt-5">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-[11px] font-medium uppercase tracking-wide text-fg-subtle">
+              Трафик
             </span>
+            {isUnlimited ? (
+              <span className="tabular inline-flex items-center gap-1.5 text-sm font-medium text-fg">
+                {formatBytes(subscription.used_traffic_bytes)}
+                <span className="text-fg-subtle">·</span>
+                <span className="text-accent">безлимит</span>
+              </span>
+            ) : (
+              <span className="tabular text-sm font-medium text-fg">
+                {formatBytes(subscription.used_traffic_bytes)}{" "}
+                <span className="text-fg-subtle">
+                  из {formatTrafficLimit(subscription.traffic_limit)}
+                </span>
+              </span>
+            )}
           </div>
-          {!isUnlimited && (
+          {isUnlimited ? (
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--border-subtle)]">
+              <div className="h-full w-full rounded-full bg-gradient-to-r from-[var(--accent)] to-[var(--accent-2)] opacity-60" />
+            </div>
+          ) : (
             <ProgressBar
               value={subscription.used_traffic_bytes || 0}
               max={subscription.traffic_limit}
@@ -217,20 +266,66 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {reissueError && (
-          <p className="mt-4 text-sm text-danger">{reissueError}</p>
-        )}
+        {reissueError && <p className="mt-4 text-sm text-danger">{reissueError}</p>}
 
-        <div className="mt-5 flex flex-wrap gap-3">
-          <Link to="/billing">
-            <Button>Продлить / сменить тариф</Button>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Link
+            to="/billing"
+            className="btn-gradient inline-flex h-10 items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold transition-all active:scale-[0.98]"
+          >
+            Продлить / сменить тариф
           </Link>
-          <Button variant="secondary" onClick={handleReissue} isLoading={isReissuing}>
+          <Button
+            variant="secondary"
+            size="lg"
+            className="rounded-xl"
+            onClick={handleReissue}
+            isLoading={isReissuing}
+          >
             <RefreshCw className="h-4 w-4" />
             Перевыпустить ссылку
           </Button>
         </div>
-      </Card>
+      </div>
+
+      {/* Баланс */}
+      <div className="surface p-5">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
+            <Wallet className="h-4 w-4 text-accent" />
+            Баланс
+          </h3>
+          <Link
+            to="/balance"
+            className="inline-flex items-center gap-1 text-xs font-medium text-accent transition-opacity hover:opacity-80"
+          >
+            История <ChevronRight className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-bg-subtle/60 p-3">
+            <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-fg-subtle">
+              <Wallet className="h-3.5 w-3.5" /> Баллы
+            </p>
+            <p className="tabular mt-1 text-lg font-bold text-accent">{balance?.points ?? 0}</p>
+          </div>
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-bg-subtle/60 p-3">
+            <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-fg-subtle">
+              <TrendingUp className="h-3.5 w-3.5" /> Потрачено
+            </p>
+            <p className="tabular mt-1 text-lg font-bold text-fg">
+              {(balance?.total_spent ?? 0).toLocaleString("ru-RU", { maximumFractionDigits: 0 })}{" "}
+              <span className="text-xs font-medium text-fg-subtle">₽</span>
+            </p>
+          </div>
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-bg-subtle/60 p-3">
+            <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-fg-subtle">
+              <ShoppingBag className="h-3.5 w-3.5" /> Покупок
+            </p>
+            <p className="tabular mt-1 text-lg font-bold text-fg">{balance?.total_purchases ?? 0}</p>
+          </div>
+        </div>
+      </div>
 
       <ConnectionUrlCard url={subscription.url} />
 
@@ -267,7 +362,7 @@ function PromocodeCard({ onActivated }: { onActivated: () => void }) {
   };
 
   return (
-    <Card variant="bordered">
+    <div className="surface p-5">
       <CardHeader title="Промокод" subtitle="Есть код от друга или из рекламной акции?" />
       <form onSubmit={handleSubmit} className="flex gap-2">
         <Input
@@ -290,6 +385,6 @@ function PromocodeCard({ onActivated }: { onActivated: () => void }) {
           {message.text}
         </p>
       )}
-    </Card>
+    </div>
   );
 }

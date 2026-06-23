@@ -11,6 +11,7 @@ from .remnawave import router as remnawave_router
 from .settings import router as settings_router
 from .statistics import router as statistics_router
 from .subscriptions import router as subscriptions_router
+from .support import router as support_router
 from .transactions import router as transactions_router
 from .users import router as users_router
 
@@ -26,5 +27,6 @@ router.include_router(settings_router)
 router.include_router(gateways_router)
 router.include_router(ad_links_router)
 router.include_router(remnawave_router)
+router.include_router(support_router)
 
 __all__ = ["router"]

@@ -8,25 +8,25 @@ import {
   Gift,
   Settings,
   LogOut,
-  Wallet,
   Info,
   ShieldCheck,
+  LifeBuoy,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
 import { getTelegramWebApp } from "@/hooks/useTelegramWebApp";
 
 const navItems = [
-  { to: "/", icon: LayoutDashboard, label: "Подписка", fullLabel: "Подписка" },
+  { to: "/", icon: LayoutDashboard, label: "Главная", fullLabel: "Главная" },
+  { to: "/subscription", icon: CreditCard, label: "Подписка", fullLabel: "Подписка" },
   { to: "/devices", icon: Smartphone, label: "Устройства", fullLabel: "Устройства" },
-  { to: "/billing", icon: CreditCard, label: "Тарифы", fullLabel: "Тарифы" },
-  { to: "/balance", icon: Wallet, label: "Баланс", fullLabel: "Баланс" },
   { to: "/referral", icon: Gift, label: "Рефералка", fullLabel: "Рефералка" },
+  { to: "/support", icon: LifeBuoy, label: "Поддержка", fullLabel: "Поддержка" },
   { to: "/settings", icon: Settings, label: "Настройки", fullLabel: "Настройки" },
 ];
 
 export function AppLayout({ children }: { children: ReactNode }) {
-  const { user, logout } = useAuth();
+  const { user, isAdmin, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -62,16 +62,24 @@ export function AppLayout({ children }: { children: ReactNode }) {
     : user?.email || user?.name || "Профиль";
 
   return (
-    <div className="flex w-full min-h-[100dvh] overflow-x-hidden bg-bg">
+    <div className="relative flex w-full min-h-[100dvh] overflow-x-hidden bg-bg">
+      {/* Ambient background glow — single subtle accent glow (top-left) */}
+      <div aria-hidden className="ambient-glow -left-32 -top-40 h-96 w-96" />
+
       {/* Sidebar — fixed to viewport height */}
-      <aside className="hidden w-52 flex-shrink-0 flex-col border-r border-[var(--border)] bg-bg px-2 py-5 md:flex sticky top-0 h-screen overflow-hidden">
-        {/* Logo */}
-        <div className="mb-6 flex items-center gap-2 px-2.5">
-          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-accent/10 text-accent">
-            <span className="text-[11px] font-bold tracking-tight">R</span>
+      <aside className="relative z-10 hidden w-52 flex-shrink-0 flex-col border-r border-[var(--border)] bg-bg/70 px-2 py-5 backdrop-blur-xl md:flex sticky top-0 h-screen overflow-hidden">
+        {/* Brand — клик возвращает на главную */}
+        <NavLink to="/" end className="mb-7 flex items-center gap-2.5 rounded-xl px-2 py-1 transition-opacity hover:opacity-80">
+          <div className="brand-mark flex h-8 w-8 items-center justify-center rounded-xl text-white">
+            <ShieldCheck className="h-[18px] w-[18px]" strokeWidth={2.2} />
           </div>
-          <span className="text-sm font-semibold tracking-tight text-fg">Кабинет</span>
-        </div>
+          <div className="flex flex-col leading-none">
+            <span className="brand-wordmark text-[15px] font-bold tracking-tight">Begemot</span>
+            <span className="mt-0.5 text-[9px] font-semibold uppercase tracking-[0.22em] text-fg-subtle">
+              VPN
+            </span>
+          </div>
+        </NavLink>
 
         {/* Nav */}
         <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto min-h-0">
@@ -82,14 +90,17 @@ export function AppLayout({ children }: { children: ReactNode }) {
               end={to === "/"}
               className={({ isActive }) =>
                 clsx(
-                  "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors duration-150",
+                  "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-all duration-150",
                   isActive
-                    ? "bg-bg-raised font-medium text-fg"
+                    ? "nav-active-glow font-medium text-fg"
                     : "font-normal text-fg-muted hover:bg-bg-subtle hover:text-fg",
                 )
               }
             >
-              <Icon className="h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
+              <Icon
+                className={clsx("h-4 w-4 flex-shrink-0 transition-colors")}
+                strokeWidth={1.75}
+              />
               {fullLabel}
             </NavLink>
           ))}
@@ -97,8 +108,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
         {/* Footer */}
         <div className="mt-4 flex flex-col gap-0.5 border-t border-[var(--border)] pt-4">
-          {/* Admin link — shown when role >= 1 (admin/owner) */}
-          {(user?.role == null || user.role >= 1) && (
+          {/* Admin link — только для админов (ADMIN/DEV/OWNER), fail-closed */}
+          {isAdmin && (
             <NavLink
               to="/admin"
               className={({ isActive }) =>
@@ -145,18 +156,23 @@ export function AppLayout({ children }: { children: ReactNode }) {
       </aside>
 
       {/* Mobile top bar */}
-      <div className="fixed inset-x-0 top-0 z-20 flex items-center justify-between border-b border-[var(--border)] bg-bg/90 px-4 py-3 backdrop-blur-md md:hidden">
-        <div className="flex items-center gap-2">
-          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-accent/10 text-accent">
-            <span className="text-[11px] font-bold">R</span>
+      <div className="fixed inset-x-0 top-0 z-20 flex items-center justify-between border-b border-[var(--border)] bg-bg/80 px-4 py-3 backdrop-blur-xl md:hidden">
+        <NavLink to="/" end className="flex items-center gap-2 transition-opacity active:opacity-70">
+          <div className="brand-mark flex h-7 w-7 items-center justify-center rounded-lg text-white">
+            <ShieldCheck className="h-4 w-4" strokeWidth={2.2} />
           </div>
-          <span className="text-sm font-semibold tracking-tight text-fg">Кабинет</span>
-        </div>
+          <div className="flex items-baseline gap-1">
+            <span className="brand-wordmark text-sm font-bold tracking-tight">Begemot</span>
+            <span className="text-[9px] font-semibold uppercase tracking-[0.18em] text-fg-subtle">
+              VPN
+            </span>
+          </div>
+        </NavLink>
         <ThemeSwitcher />
       </div>
 
       {/* Main content */}
-      <main className="flex-1 min-w-0 px-5 pb-28 pt-20 md:px-8 md:pb-8 md:pt-8">
+      <main className="relative z-10 flex-1 min-w-0 px-5 pb-28 pt-20 md:px-8 md:pb-8 md:pt-8">
         <div className="mx-auto max-w-4xl animate-fade-in">{children}</div>
       </main>
 

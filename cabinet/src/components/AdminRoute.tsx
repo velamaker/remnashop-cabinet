@@ -12,12 +12,12 @@ function FullScreenLoader() {
 }
 
 export function AdminRoute({ children }: { children: ReactNode }) {
-  const { user, isLoading } = useAuth();
+  const { user, isAdmin, isLoading } = useAuth();
 
   if (isLoading) return <FullScreenLoader />;
   if (!user) return <Navigate to="/login" replace />;
-  // Allow if role is undefined (backend may not return it) or >= 1 (admin/owner)
-  if (user.role !== undefined && user.role < 1) return <Navigate to="/" replace />;
+  // fail-closed: пускаем только подтверждённых админов (ADMIN/DEV/OWNER)
+  if (!isAdmin) return <Navigate to="/" replace />;
 
   return <AdminLayout>{children}</AdminLayout>;
 }

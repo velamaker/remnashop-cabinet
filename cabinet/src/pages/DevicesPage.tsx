@@ -4,6 +4,7 @@ import { subscriptionApi } from "@/api/subscription";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { ConnectGuide } from "@/components/ConnectGuide";
 import type { DeviceResponse, DevicesResponse } from "@/types/api";
 import { ApiError } from "@/types/api";
 
@@ -62,9 +63,17 @@ function DeviceRow({
 
 export default function DevicesPage() {
   const [data, setData] = useState<DevicesResponse | null>(null);
+  const [subUrl, setSubUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isClearingAll, setIsClearingAll] = useState(false);
+
+  useEffect(() => {
+    subscriptionApi
+      .current()
+      .then((s) => setSubUrl(s?.url ?? null))
+      .catch(() => {});
+  }, []);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -110,6 +119,8 @@ export default function DevicesPage() {
   return (
     <div className="flex flex-col gap-5">
       <h1 className="text-xl font-semibold text-fg">Устройства</h1>
+
+      {subUrl && <ConnectGuide subUrl={subUrl} />}
 
       <Card>
         <CardHeader

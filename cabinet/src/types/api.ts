@@ -1,6 +1,7 @@
 // Точное отражение src/web/schemas/* из remnashop backend.
 
-export type AuthType = "TELEGRAM" | "EMAIL";
+// Бэкенд отдаёт значения строчными ('telegram', 'email', ...).
+export type AuthType = "telegram" | "email" | "google" | "yandex" | "vk";
 
 export interface MeResponse {
   telegram_id: number | null;

@@ -13,6 +13,12 @@ export const subscriptionApi = {
   current: () =>
     api.get<SubscriptionInfoResponse | null>("/subscription/current"),
 
+  serverStats: () =>
+    api.get<{
+      favorite: { name: string; country_code: string; total: number } | null;
+      nodes: { name: string; country_code: string; total: number }[];
+    }>("/subscription/server-stats"),
+
   devices: () => api.get<DevicesResponse>("/subscription/devices"),
 
   deleteDevice: (hwid: string) =>

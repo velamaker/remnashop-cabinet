@@ -24,6 +24,9 @@ import AdminAdLinksPage from "@/pages/admin/AdminAdLinksPage";
 import AdminBroadcastsPage from "@/pages/admin/AdminBroadcastsPage";
 import AdminSettingsPage from "@/pages/admin/AdminSettingsPage";
 import AdminRemnaWavePage from "@/pages/admin/AdminRemnaWavePage";
+import AdminSupportPage from "@/pages/admin/AdminSupportPage";
+import SupportPage from "@/pages/SupportPage";
+import HomePage from "@/pages/HomePage";
 
 export default function App() {
   return (
@@ -50,6 +53,14 @@ export default function App() {
 
             <Route
               path="/"
+              element={
+                <ProtectedRoute>
+                  <HomePage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/subscription"
               element={
                 <ProtectedRoute>
                   <DashboardPage />
@@ -93,6 +104,14 @@ export default function App() {
               element={
                 <ProtectedRoute>
                   <BalancePage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/support"
+              element={
+                <ProtectedRoute>
+                  <SupportPage />
                 </ProtectedRoute>
               }
             />
@@ -183,6 +202,14 @@ export default function App() {
               element={
                 <AdminRoute>
                   <AdminRemnaWavePage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/support"
+              element={
+                <AdminRoute>
+                  <AdminSupportPage />
                 </AdminRoute>
               }
             />
