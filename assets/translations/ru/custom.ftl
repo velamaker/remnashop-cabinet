@@ -15,3 +15,23 @@ custom-menu-link2 = 2️⃣ Вторая кнопка
 
 custom-plan-name1 = 1️⃣ Первый план
 custom-plan-name2 = 2️⃣ Второй план
+
+# --- Кастомные эмодзи кнопок меню (набор «Премиум»). Перебивает дефолт. ---
+btn-menu =
+    .trial = 🎁 ПОПРОБОВАТЬ БЕСПЛАТНО
+    .trial-paid = ⚡ ПОПРОБОВАТЬ ЗА { $trial_price }
+    .connect = ⚡ Подключиться
+    .connect-reserve = 🔁 Подключиться (резерв)
+    .devices = 📱 Устройства
+    .subscription = 🪪 Подписка
+    .invite = 🎁 Пригласить
+    .support = 💬 Поддержка
+    .web-cabinet = 👤 Личный кабинет
+    .dashboard = ⚙️ Панель управления
+
+    .connect-not-available =
+    ⚠️ { $status ->
+    [LIMITED] ПРЕВЫШЕН ЛИМИТ ТРАФИКА
+    [EXPIRED] СРОК ДЕЙСТВИЯ ИСТЕК
+    *[OTHER] ВАША ПОДПИСКА НЕ РАБОТАЕТ
+    } ⚠️

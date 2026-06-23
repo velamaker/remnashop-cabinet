@@ -1,19 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { Smartphone, Trash2, Laptop, Tablet } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { subscriptionApi } from "@/api/subscription";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ConnectGuide } from "@/components/ConnectGuide";
+import { PlatformIcon } from "@/components/PlatformIcon";
 import type { DeviceResponse, DevicesResponse } from "@/types/api";
 import { ApiError } from "@/types/api";
-
-function getDeviceIcon(platform: string | null) {
-  const p = (platform || "").toLowerCase();
-  if (p.includes("ios") || p.includes("android")) return Smartphone;
-  if (p.includes("ipad") || p.includes("tablet")) return Tablet;
-  return Laptop;
-}
 
 function DeviceRow({
   device,
@@ -23,7 +17,6 @@ function DeviceRow({
   onDelete: (hwid: string) => void;
 }) {
   const [isDeleting, setIsDeleting] = useState(false);
-  const Icon = getDeviceIcon(device.platform);
 
   const handleDelete = async () => {
     setIsDeleting(true);
@@ -37,8 +30,14 @@ function DeviceRow({
 
   return (
     <div className="flex items-center gap-3 rounded-xl border border-border-subtle bg-bg-subtle p-3">
-      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-bg-raised text-fg-muted">
-        <Icon className="h-4 w-4" />
+      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-bg-raised">
+        <PlatformIcon
+          platform={device.platform}
+          model={device.device_model}
+          os={device.os_version}
+          userAgent={device.user_agent}
+          className="h-5 w-5 text-fg-muted"
+        />
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-fg">
