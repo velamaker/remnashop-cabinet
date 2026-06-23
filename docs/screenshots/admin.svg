@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 560" font-family="Segoe UI, system-ui, sans-serif">
+  <rect width="920" height="560" rx="14" fill="#0a0d15"/>
+
+  <!-- Sidebar -->
+  <rect x="0" y="0" width="200" height="560" rx="14" fill="#0c1019"/>
+  <rect x="200" y="0" width="1" height="560" fill="#1b2230"/>
+  <rect x="22" y="26" width="26" height="26" rx="7" fill="#2a1518"/>
+  <text x="31" y="44" fill="#f2545b" font-size="13" font-weight="700">A</text>
+  <text x="58" y="44" fill="#eef3fb" font-size="14" font-weight="600">Админ</text>
+  <rect x="14" y="72" width="172" height="32" rx="9" fill="#172033"/>
+  <text x="40" y="93" fill="#eef3fb" font-size="13" font-weight="600">Обзор</text>
+  <text x="40" y="128" fill="#9aa7bd" font-size="13">Пользователи</text>
+  <text x="40" y="160" fill="#9aa7bd" font-size="13">Транзакции</text>
+  <text x="40" y="192" fill="#9aa7bd" font-size="13">Тарифы</text>
+  <text x="40" y="224" fill="#9aa7bd" font-size="13">Рассылки</text>
+  <text x="40" y="256" fill="#9aa7bd" font-size="13">RemnaWave</text>
+  <text x="40" y="288" fill="#9aa7bd" font-size="13">Оформление</text>
+
+  <text x="236" y="54" fill="#eef3fb" font-size="24" font-weight="700">Обзор</text>
+
+  <!-- Stat tiles -->
+  <rect x="236" y="84" width="318" height="100" rx="16" fill="#111722" stroke="#1f2a3d"/>
+  <text x="258" y="114" fill="#9aa7bd" font-size="12">Пользователи</text>
+  <text x="258" y="152" fill="#eef3fb" font-size="28" font-weight="800">1 248</text>
+  <text x="258" y="172" fill="#2ee06a" font-size="11">+34 за неделю</text>
+
+  <rect x="570" y="84" width="318" height="100" rx="16" fill="#111722" stroke="#1f2a3d"/>
+  <text x="592" y="114" fill="#9aa7bd" font-size="12">Активные подписки</text>
+  <text x="592" y="152" fill="#eef3fb" font-size="28" font-weight="800">842</text>
+  <text x="592" y="172" fill="#9aa7bd" font-size="11">68% платящих</text>
+
+  <rect x="236" y="200" width="318" height="100" rx="16" fill="#111722" stroke="#1f2a3d"/>
+  <text x="258" y="230" fill="#9aa7bd" font-size="12">Доход за месяц</text>
+  <text x="258" y="268" fill="#eef3fb" font-size="28" font-weight="800">84 600 ₽</text>
+  <text x="258" y="288" fill="#2ee06a" font-size="11">+12% к прошлому</text>
+
+  <rect x="570" y="200" width="318" height="100" rx="16" fill="#111722" stroke="#1f2a3d"/>
+  <text x="592" y="230" fill="#9aa7bd" font-size="12">Ноды Remnawave</text>
+  <text x="592" y="268" fill="#eef3fb" font-size="28" font-weight="800">4 / 4 <tspan fill="#2ee06a" font-size="13">online</tspan></text>
+  <text x="592" y="288" fill="#9aa7bd" font-size="11">обновление каждые 30 сек</text>
+
+  <!-- Table -->
+  <rect x="236" y="316" width="652" height="208" rx="16" fill="#111722" stroke="#1f2a3d"/>
+  <text x="258" y="346" fill="#eef3fb" font-size="14" font-weight="600">Последние транзакции</text>
+  <line x1="258" y1="362" x2="866" y2="362" stroke="#1f2a3d"/>
+  <text x="258" y="388" fill="#9aa7bd" font-size="12">#10241 · СБП</text>
+  <text x="866" y="388" fill="#2ee06a" font-size="12" text-anchor="end">+399 ₽</text>
+  <text x="258" y="420" fill="#9aa7bd" font-size="12">#10240 · Карта</text>
+  <text x="866" y="420" fill="#2ee06a" font-size="12" text-anchor="end">+149 ₽</text>
+  <text x="258" y="452" fill="#9aa7bd" font-size="12">#10239 · Крипто</text>
+  <text x="866" y="452" fill="#2ee06a" font-size="12" text-anchor="end">+1290 ₽</text>
+  <text x="258" y="484" fill="#9aa7bd" font-size="12">#10238 · СБП</text>
+  <text x="866" y="484" fill="#2ee06a" font-size="12" text-anchor="end">+399 ₽</text>
+</svg>

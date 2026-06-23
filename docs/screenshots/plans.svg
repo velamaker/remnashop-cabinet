@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 560" font-family="Segoe UI, system-ui, sans-serif">
+  <defs>
+    <linearGradient id="acc2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4d8bff"/><stop offset="1" stop-color="#2bd4ee"/>
+    </linearGradient>
+  </defs>
+  <rect width="920" height="560" rx="14" fill="#0a0d15"/>
+
+  <text x="40" y="58" fill="#eef3fb" font-size="24" font-weight="700">Тарифы</text>
+  <text x="40" y="82" fill="#9aa7bd" font-size="13">Выберите подходящий план — оплата картой, СБП или криптовалютой</text>
+
+  <!-- Plan 1 -->
+  <rect x="40" y="110" width="266" height="380" rx="18" fill="#111722" stroke="#1f2a3d"/>
+  <text x="64" y="150" fill="#eef3fb" font-size="16" font-weight="700">1 месяц</text>
+  <text x="64" y="196" fill="#eef3fb" font-size="30" font-weight="800">149 <tspan font-size="16" fill="#9aa7bd">₽</tspan></text>
+  <text x="64" y="240" fill="#9aa7bd" font-size="12">✓ Безлимитный трафик</text>
+  <text x="64" y="268" fill="#9aa7bd" font-size="12">✓ До 5 устройств</text>
+  <text x="64" y="296" fill="#9aa7bd" font-size="12">✓ Все локации</text>
+  <rect x="64" y="430" width="218" height="38" rx="11" fill="#1a2436"/>
+  <text x="173" y="454" fill="#9aa7bd" font-size="13" font-weight="600" text-anchor="middle">Выбрать</text>
+
+  <!-- Plan 2 (highlighted) -->
+  <rect x="327" y="98" width="266" height="404" rx="18" fill="#13233f" stroke="#4d8bff" stroke-width="1.5"/>
+  <rect x="453" y="86" width="86" height="22" rx="11" fill="url(#acc2)"/>
+  <text x="496" y="101" fill="#06121f" font-size="11" font-weight="700" text-anchor="middle">ВЫГОДНО</text>
+  <text x="351" y="150" fill="#eef3fb" font-size="16" font-weight="700">3 месяца</text>
+  <text x="351" y="196" fill="#eef3fb" font-size="30" font-weight="800">399 <tspan font-size="16" fill="#9aa7bd">₽</tspan></text>
+  <text x="351" y="218" fill="#65728a" font-size="11">133 ₽ / месяц</text>
+  <text x="351" y="252" fill="#cfe0ff" font-size="12">✓ Безлимитный трафик</text>
+  <text x="351" y="280" fill="#cfe0ff" font-size="12">✓ До 10 устройств</text>
+  <text x="351" y="308" fill="#cfe0ff" font-size="12">✓ Приоритетная поддержка</text>
+  <rect x="351" y="442" width="218" height="40" rx="11" fill="url(#acc2)"/>
+  <text x="460" y="467" fill="#06121f" font-size="13" font-weight="700" text-anchor="middle">Выбрать</text>
+
+  <!-- Plan 3 -->
+  <rect x="614" y="110" width="266" height="380" rx="18" fill="#111722" stroke="#1f2a3d"/>
+  <text x="638" y="150" fill="#eef3fb" font-size="16" font-weight="700">1 год</text>
+  <text x="638" y="196" fill="#eef3fb" font-size="30" font-weight="800">1290 <tspan font-size="16" fill="#9aa7bd">₽</tspan></text>
+  <text x="638" y="218" fill="#65728a" font-size="11">107 ₽ / месяц</text>
+  <text x="638" y="252" fill="#9aa7bd" font-size="12">✓ Безлимитный трафик</text>
+  <text x="638" y="280" fill="#9aa7bd" font-size="12">✓ До 10 устройств</text>
+  <text x="638" y="308" fill="#9aa7bd" font-size="12">✓ Максимальная выгода</text>
+  <rect x="638" y="430" width="218" height="38" rx="11" fill="#1a2436"/>
+  <text x="747" y="454" fill="#9aa7bd" font-size="13" font-weight="600" text-anchor="middle">Выбрать</text>
+</svg>
