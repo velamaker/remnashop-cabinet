@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Save, CheckCircle2, RotateCcw, Palette } from "lucide-react";
-import { appearanceAdminApi, type Appearance } from "@/api/appearance";
+import { appearanceAdminApi, type AdminAppearance } from "@/api/appearance";
 import { useBranding, applyAccent, applyBackground } from "@/contexts/BrandingContext";
 import { normalizeHex } from "@/lib/color";
 import { ApiError } from "@/types/api";
@@ -74,7 +74,7 @@ function ColorField({
 
 export default function AdminAppearancePage() {
   const { refresh } = useBranding();
-  const [form, setForm] = useState<Appearance | null>(null);
+  const [form, setForm] = useState<AdminAppearance | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -109,7 +109,7 @@ export default function AdminAppearancePage() {
     setError(null);
     try {
       await appearanceAdminApi.update({
-        brand_name: form.brand_name,
+        brand_name: form.brand_name ?? "", // пусто → авто-подхват из конфигурации
         accent: form.accent ?? "",
         background: form.background ?? "",
       });
@@ -156,13 +156,15 @@ export default function AdminAppearancePage() {
         <h2 className="text-sm font-semibold text-fg">Название сервиса</h2>
         <p className="mt-0.5 text-xs text-fg-muted">
           Отображается в шапке кабинета, на экране входа и в заголовке вкладки.
+          Оставьте пустым — подхватится автоматически (имя бота):{" "}
+          <span className="text-fg">{form.brand_name_resolved}</span>.
         </p>
         <input
           type="text"
           maxLength={40}
-          value={form.brand_name}
+          value={form.brand_name ?? ""}
           onChange={(e) => setForm({ ...form, brand_name: e.target.value })}
-          placeholder="Например: Begemot VPN"
+          placeholder={`Авто: ${form.brand_name_resolved}`}
           className="input mt-3"
         />
       </section>
@@ -188,7 +190,7 @@ export default function AdminAppearancePage() {
         <h2 className="mb-3 text-sm font-semibold text-fg">Предпросмотр</h2>
         <div className="surface flex flex-col gap-3 p-5">
           <span className="brand-wordmark text-xl font-bold tracking-tight">
-            {form.brand_name || "RemnaShop"}
+            {form.brand_name || form.brand_name_resolved}
           </span>
           <div className="flex flex-wrap items-center gap-2">
             <span className="btn-gradient inline-flex h-9 items-center rounded-xl px-4 text-sm font-semibold text-white">

@@ -7,7 +7,11 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
-from src.web.endpoints.public.appearance import BRANDING_PATH, load_branding
+from src.web.endpoints.public.appearance import (
+    BRANDING_PATH,
+    load_branding,
+    resolve_brand_name,
+)
 
 from ._common import AdminUser
 
@@ -28,7 +32,11 @@ class AppearanceUpdate(BaseModel):
 
 @router.get("")
 async def get_appearance(_admin: AdminUser) -> dict[str, Any]:
-    return load_branding()
+    # brand_name «как есть» (None = авто); brand_name_resolved — что показывается,
+    # если поле оставить пустым (для подсказки/placeholder в админке).
+    data = load_branding()
+    data["brand_name_resolved"] = resolve_brand_name()
+    return data
 
 
 @router.put("")
@@ -37,12 +45,15 @@ async def update_appearance(body: AppearanceUpdate, _admin: AdminUser) -> dict[s
 
     if body.brand_name is not None:
         name = body.brand_name.strip()
-        if not (1 <= len(name) <= 40):
+        if name == "":
+            data["brand_name"] = None  # пусто → авто-подхват из конфигурации
+        elif len(name) > 40:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Название должно быть от 1 до 40 символов",
+                detail="Название должно быть не длиннее 40 символов",
             )
-        data["brand_name"] = name
+        else:
+            data["brand_name"] = name
 
     for field in ("accent", "background"):
         value = getattr(body, field)
