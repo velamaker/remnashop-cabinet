@@ -136,9 +136,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
             Информация
           </NavLink>
 
-          <div className="mt-2 flex items-center justify-between px-2.5">
-            <span className="truncate text-xs text-fg-subtle">{displayName}</span>
-            <ThemeSwitcher />
+          <div className="mt-2 px-2.5">
+            <span className="block break-all text-xs leading-snug text-fg-subtle">{displayName}</span>
           </div>
 
           <button
@@ -159,6 +158,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
           </div>
           <BrandWordmark className="text-sm" />
         </NavLink>
+        <ThemeSwitcher />
+      </div>
+
+      {/* Переключатель темы — вверху справа (десктоп) */}
+      <div className="fixed right-6 top-5 z-30 hidden md:block">
         <ThemeSwitcher />
       </div>
 
