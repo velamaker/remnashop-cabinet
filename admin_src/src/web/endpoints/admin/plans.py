@@ -6,6 +6,7 @@ from dishka.integrations.fastapi import inject
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from remnapy.enums.users import TrafficLimitStrategy
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common.dao import PlanDao
 from src.application.dto import PlanDto, PlanDurationDto, PlanPriceDto
@@ -129,6 +130,7 @@ async def create_plan(
     body: CreatePlanRequest,
     _admin: AdminUser,
     plan_dao: FromDishka[PlanDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     try:
         plan_type = PlanType(body.type.upper())
@@ -154,6 +156,7 @@ async def create_plan(
         durations=_build_durations(body.durations),
     )
     created = await plan_dao.create(plan)
+    await session.commit()
     return _plan_to_dict(created)
 
 
@@ -164,6 +167,7 @@ async def update_plan(
     body: UpdatePlanRequest,
     _admin: AdminUser,
     plan_dao: FromDishka[PlanDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     plan = await plan_dao.get_by_id(plan_id)
     if not plan:
@@ -197,6 +201,7 @@ async def update_plan(
     updated = await plan_dao.update(plan)
     if not updated:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Update failed")
+    await session.commit()
     return _plan_to_dict(updated)
 
 
@@ -206,6 +211,7 @@ async def toggle_plan(
     plan_id: int,
     _admin: AdminUser,
     plan_dao: FromDishka[PlanDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     plan = await plan_dao.get_by_id(plan_id)
     if not plan:
@@ -213,6 +219,7 @@ async def toggle_plan(
     updated = await plan_dao.update_status(plan_id, not plan.is_active)
     if not updated:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Update failed")
+    await session.commit()
     return {"id": plan_id, "is_active": updated.is_active}
 
 
@@ -222,8 +229,10 @@ async def delete_plan(
     plan_id: int,
     _admin: AdminUser,
     plan_dao: FromDishka[PlanDao],
+    session: FromDishka[AsyncSession],
 ) -> None:
     plan = await plan_dao.get_by_id(plan_id)
     if not plan:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found")
     await plan_dao.delete(plan_id)
+    await session.commit()

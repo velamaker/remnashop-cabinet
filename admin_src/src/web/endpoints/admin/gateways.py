@@ -4,6 +4,7 @@ from dishka import FromDishka
 from dishka.integrations.fastapi import inject
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common.dao import PaymentGatewayDao
 
@@ -48,6 +49,7 @@ async def toggle_gateway(
     body: ToggleGatewayRequest,
     _admin: AdminUser,
     gateway_dao: FromDishka[PaymentGatewayDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     gateway = await gateway_dao.get_by_id(gateway_id)
     if not gateway:
@@ -60,4 +62,5 @@ async def toggle_gateway(
         )
 
     await gateway_dao.set_active_status(gateway.type, body.is_active)
+    await session.commit()
     return {"id": gateway_id, "is_active": body.is_active}

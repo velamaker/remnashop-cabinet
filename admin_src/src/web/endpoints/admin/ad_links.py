@@ -4,6 +4,7 @@ from dishka import FromDishka
 from dishka.integrations.fastapi import inject
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common.dao import AdLinkDao
 from src.application.dto import AdLinkDto
@@ -74,12 +75,14 @@ async def create_ad_link(
     body: CreateAdLinkRequest,
     _admin: AdminUser,
     ad_link_dao: FromDishka[AdLinkDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     existing = await ad_link_dao.get_by_code(body.code)
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Code already exists")
     link = AdLinkDto(id=0, name=body.name, code=body.code, is_active=True)
     created = await ad_link_dao.create(link)
+    await session.commit()
     return _link_to_dict(created)
 
 
@@ -90,6 +93,7 @@ async def update_ad_link(
     body: UpdateAdLinkRequest,
     _admin: AdminUser,
     ad_link_dao: FromDishka[AdLinkDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     link = await ad_link_dao.get_by_id(link_id)
     if not link:
@@ -101,6 +105,7 @@ async def update_ad_link(
     updated = await ad_link_dao.update(link)
     if not updated:
         raise HTTPException(status_code=500, detail="Update failed")
+    await session.commit()
     return _link_to_dict(updated)
 
 
@@ -110,8 +115,10 @@ async def delete_ad_link(
     link_id: int,
     _admin: AdminUser,
     ad_link_dao: FromDishka[AdLinkDao],
+    session: FromDishka[AsyncSession],
 ) -> None:
     link = await ad_link_dao.get_by_id(link_id)
     if not link:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ad link not found")
     await ad_link_dao.delete(link_id)
+    await session.commit()

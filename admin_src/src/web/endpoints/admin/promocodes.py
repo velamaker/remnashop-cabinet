@@ -5,6 +5,7 @@ from dishka import FromDishka
 from dishka.integrations.fastapi import inject
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common.dao import PromocodeDao
 from src.application.dto import PromocodeDto
@@ -66,6 +67,7 @@ async def create_promocode(
     body: CreatePromocodeRequest,
     _admin: AdminUser,
     promocode_dao: FromDishka[PromocodeDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     existing = await promocode_dao.get_by_code(body.code.upper())
     if existing:
@@ -100,6 +102,7 @@ async def create_promocode(
     )
 
     created = await promocode_dao.create(promo)
+    await session.commit()
     return _promo_to_dict(created)
 
 
@@ -135,11 +138,13 @@ async def delete_promocode(
     promocode_id: int,
     _admin: AdminUser,
     promocode_dao: FromDishka[PromocodeDao],
+    session: FromDishka[AsyncSession],
 ) -> None:
     promo = await promocode_dao.get_by_id(promocode_id)
     if not promo:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Promocode not found")
     await promocode_dao.delete(promocode_id)
+    await session.commit()
 
 
 class TogglePromocodeRequest(BaseModel):
@@ -153,6 +158,7 @@ async def toggle_promocode(
     body: TogglePromocodeRequest,
     _admin: AdminUser,
     promocode_dao: FromDishka[PromocodeDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     promo = await promocode_dao.get_by_id(promocode_id)
     if not promo:
@@ -161,4 +167,5 @@ async def toggle_promocode(
     updated = await promocode_dao.update(promo)
     if not updated:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Update failed")
+    await session.commit()
     return _promo_to_dict(updated)

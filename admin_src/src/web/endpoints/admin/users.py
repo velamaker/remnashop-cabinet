@@ -4,6 +4,7 @@ from dishka import FromDishka
 from dishka.integrations.fastapi import inject
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common.dao import SubscriptionDao, TransactionDao, UserDao
 from src.application.dto import UserDto
@@ -121,6 +122,7 @@ async def toggle_block_user(
     body: ToggleBlockRequest,
     admin: AdminUser,
     user_dao: FromDishka[UserDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     user = await user_dao.get_by_id(user_id)
     if not user:
@@ -136,6 +138,7 @@ async def toggle_block_user(
     updated = await user_dao.update(user)
     if not updated:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Update failed")
+    await session.commit()
     return {"success": True, "is_blocked": updated.is_blocked}
 
 
@@ -150,6 +153,7 @@ async def change_user_role(
     body: ChangeRoleRequest,
     admin: AdminUser,
     user_dao: FromDishka[UserDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     if admin.role < Role.OWNER:
         raise HTTPException(
@@ -171,6 +175,7 @@ async def change_user_role(
     updated = await user_dao.update(user)
     if not updated:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Update failed")
+    await session.commit()
     return {"success": True, "role": updated.role}
 
 
@@ -186,6 +191,7 @@ async def set_user_discount(
     body: SetDiscountRequest,
     admin: AdminUser,
     user_dao: FromDishka[UserDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     user = await user_dao.get_by_id(user_id)
     if not user:
@@ -196,6 +202,7 @@ async def set_user_discount(
     updated = await user_dao.update(user)
     if not updated:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Update failed")
+    await session.commit()
     return {
         "success": True,
         "personal_discount": updated.personal_discount,

@@ -4,6 +4,7 @@ from dishka import FromDishka
 from dishka.integrations.fastapi import inject
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common.dao import SettingsDao
 from src.core.enums import AccessMode, ReferralAccrualStrategy, ReferralLevel, ReferralRewardStrategy, ReferralRewardType
@@ -121,6 +122,7 @@ async def update_settings(
     body: SettingsUpdateRequest,
     _admin: AdminUser,
     settings_dao: FromDishka[SettingsDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     from pydantic import SecretStr
 
@@ -188,4 +190,5 @@ async def update_settings(
     updated = await settings_dao.update(s)
     if not updated:
         raise HTTPException(status_code=500, detail="Update failed")
+    await session.commit()
     return _settings_to_dict(updated)

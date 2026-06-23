@@ -6,6 +6,7 @@ from dishka import FromDishka
 from dishka.integrations.fastapi import inject
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common.dao import PlanDao, SubscriptionDao, UserDao
 from src.application.dto import PlanSnapshotDto, SubscriptionDto
@@ -64,6 +65,7 @@ async def extend_subscription(
     body: ExtendRequest,
     _admin: AdminUser,
     subscription_dao: FromDishka[SubscriptionDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     if body.days <= 0 or body.days > 3650:
         raise HTTPException(status_code=400, detail="days must be between 1 and 3650")
@@ -79,6 +81,7 @@ async def extend_subscription(
     updated = await subscription_dao.update(sub)
     if not updated:
         raise HTTPException(status_code=500, detail="Failed to update subscription")
+    await session.commit()
     return {"success": True, "subscription": _sub_to_dict(updated)}
 
 
@@ -90,6 +93,7 @@ async def disable_subscription(
     user_id: int,
     _admin: AdminUser,
     subscription_dao: FromDishka[SubscriptionDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     sub = await subscription_dao.get_current(user_id)
     if not sub:
@@ -98,6 +102,7 @@ async def disable_subscription(
     updated = await subscription_dao.update_status(sub.id, SubscriptionStatus.DISABLED)
     if not updated:
         raise HTTPException(status_code=500, detail="Failed to update subscription")
+    await session.commit()
     return {"success": True, "subscription": _sub_to_dict(updated)}
 
 
@@ -109,6 +114,7 @@ async def delete_subscription(
     user_id: int,
     _admin: AdminUser,
     subscription_dao: FromDishka[SubscriptionDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     sub = await subscription_dao.get_current(user_id)
     if not sub:
@@ -117,6 +123,7 @@ async def delete_subscription(
     updated = await subscription_dao.update_status(sub.id, SubscriptionStatus.DELETED)
     if not updated:
         raise HTTPException(status_code=500, detail="Failed to delete subscription")
+    await session.commit()
     return {"success": True}
 
 
@@ -137,6 +144,7 @@ async def grant_subscription(
     user_dao: FromDishka[UserDao],
     plan_dao: FromDishka[PlanDao],
     subscription_dao: FromDishka[SubscriptionDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     if body.days <= 0 or body.days > 3650:
         raise HTTPException(status_code=400, detail="days must be between 1 and 3650")
@@ -163,6 +171,7 @@ async def grant_subscription(
         updated = await subscription_dao.update(existing)
         if not updated:
             raise HTTPException(status_code=500, detail="Failed to update subscription")
+        await session.commit()
         return {"success": True, "subscription": _sub_to_dict(updated), "action": "extended"}
 
     # Create new subscription
@@ -182,6 +191,7 @@ async def grant_subscription(
     created = await subscription_dao.create(new_sub, user_id)
     if not created:
         raise HTTPException(status_code=500, detail="Failed to create subscription")
+    await session.commit()
     return {"success": True, "subscription": _sub_to_dict(created), "action": "created"}
 
 
@@ -193,6 +203,7 @@ async def reset_trial(
     user_id: int,
     _admin: AdminUser,
     user_dao: FromDishka[UserDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     user = await user_dao.get_by_id(user_id)
     if not user:
@@ -202,6 +213,7 @@ async def reset_trial(
     updated = await user_dao.update(user)
     if not updated:
         raise HTTPException(status_code=500, detail="Failed to update user")
+    await session.commit()
     return {"success": True, "is_trial_available": True}
 
 
@@ -218,6 +230,7 @@ async def add_points(
     body: AddPointsRequest,
     _admin: AdminUser,
     user_dao: FromDishka[UserDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     user = await user_dao.get_by_id(user_id)
     if not user:
@@ -227,4 +240,5 @@ async def add_points(
     updated = await user_dao.update(user)
     if not updated:
         raise HTTPException(status_code=500, detail="Failed to update user")
+    await session.commit()
     return {"success": True, "points": updated.points}
