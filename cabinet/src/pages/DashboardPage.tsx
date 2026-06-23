@@ -12,12 +12,16 @@ import {
   TrendingUp,
   ShoppingBag,
   ChevronRight,
+  Smartphone,
+  Users,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSubscription } from "@/hooks/useSubscription";
 import { subscriptionApi } from "@/api/subscription";
+import { referralApi } from "@/api/referral";
 import { balanceApi, type BalanceResponse } from "@/api/balance";
+import { ConnectGuide } from "@/components/ConnectGuide";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { ProgressBar } from "@/components/ui/ProgressBar";
@@ -135,9 +139,13 @@ export default function DashboardPage() {
   const [isReissuing, setIsReissuing] = useState(false);
   const [reissueError, setReissueError] = useState<string | null>(null);
   const [balance, setBalance] = useState<BalanceResponse | null>(null);
+  const [devices, setDevices] = useState<{ current: number; max: number } | null>(null);
+  const [referrals, setReferrals] = useState<number | null>(null);
 
   useEffect(() => {
     balanceApi.get().then(setBalance).catch(() => {});
+    subscriptionApi.devices().then((d) => setDevices({ current: d.current_count, max: d.max_count })).catch(() => {});
+    referralApi.program().then((p) => setReferrals(p.invited_count)).catch(() => {});
   }, []);
 
   const handleReissue = async () => {
@@ -326,6 +334,38 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* Устройства + Рефералы */}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Link to="/devices" className="surface group flex items-center gap-3 p-4 transition-all hover:-translate-y-0.5 hover:border-[var(--accent)]">
+          <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-accent-subtle text-accent">
+            <Smartphone className="h-5 w-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-fg">Устройства</p>
+            <p className="tabular text-xs text-fg-muted">
+              {devices ? `${devices.current} из ${devices.max} · управление` : `до ${subscription.device_limit} · управление`}
+            </p>
+          </div>
+          <ChevronRight className="h-4 w-4 flex-shrink-0 text-fg-subtle transition-colors group-hover:text-accent" />
+        </Link>
+
+        <Link to="/referral" className="surface group flex items-center gap-3 p-4 transition-all hover:-translate-y-0.5 hover:border-[var(--accent)]">
+          <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-accent-subtle text-accent">
+            <Users className="h-5 w-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-fg">Рефералы</p>
+            <p className="tabular text-xs text-fg-muted">
+              {referrals ?? 0} приглашено · пригласить
+            </p>
+          </div>
+          <ChevronRight className="h-4 w-4 flex-shrink-0 text-fg-subtle transition-colors group-hover:text-accent" />
+        </Link>
+      </div>
+
+      {/* Подключить устройство — прямо здесь */}
+      <ConnectGuide subUrl={subscription.url} />
 
       <ConnectionUrlCard url={subscription.url} />
 

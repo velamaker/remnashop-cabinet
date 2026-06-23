@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { CheckCircle2, AlertCircle } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { CheckCircle2, AlertCircle, LogOut } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { authApi } from "@/api/auth";
 import { Card, CardHeader } from "@/components/ui/Card";
@@ -379,7 +380,13 @@ function TelegramLinkBlock() {
 }
 
 export default function SettingsPage() {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogout = async () => {
+    await logout();
+    navigate("/login");
+  };
 
   return (
     <div className="flex flex-col gap-5">
@@ -430,6 +437,19 @@ export default function SettingsPage() {
 
       {user?.auth_type?.toUpperCase() === "EMAIL" && <ChangePasswordBlock />}
       {user?.auth_type?.toUpperCase() === "EMAIL" && <TelegramLinkBlock />}
+
+      {/* Выход — для смены аккаунта (особенно на мобильном, где нет сайдбара) */}
+      <Card variant="bordered">
+        <CardHeader title="Аккаунт" subtitle="Выйти, чтобы войти под другим аккаунтом" />
+        <Button
+          variant="danger"
+          onClick={handleLogout}
+          className="w-full sm:w-auto"
+        >
+          <LogOut className="h-4 w-4" />
+          Выйти из аккаунта
+        </Button>
+      </Card>
     </div>
   );
 }

@@ -11,6 +11,7 @@ import {
   Info,
   ShieldCheck,
   LifeBuoy,
+  ChevronLeft,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { BrandWordmark } from "@/components/BrandWordmark";
@@ -151,7 +152,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
       </aside>
 
       {/* Mobile top bar */}
-      <div className="fixed inset-x-0 top-0 z-20 flex items-center justify-between border-b border-[var(--border)] bg-bg/80 px-4 py-3 backdrop-blur-xl md:hidden">
+      <div className="fixed inset-x-0 top-0 z-30 flex items-center justify-between border-b border-[var(--border)] bg-bg px-4 py-3 md:hidden">
         <NavLink to="/" end className="flex items-center gap-2 transition-opacity active:opacity-70">
           <div className="brand-mark flex h-7 w-7 items-center justify-center rounded-lg text-white">
             <ShieldCheck className="h-4 w-4" strokeWidth={2.2} />
@@ -171,9 +172,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
         <div className="mx-auto max-w-4xl animate-fade-in">{children}</div>
       </main>
 
-      {/* Mobile bottom nav */}
-      <nav className="fixed inset-x-0 bottom-0 z-20 flex items-center justify-around border-t border-[var(--border)] bg-bg/90 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur-md md:hidden">
-        {navItems.map(({ to, icon: Icon, label }) => (
+      {/* Mobile bottom nav — без «Устройства» и «Рефералка» (доступны с Главной/Подписки) */}
+      <nav className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-around border-t border-[var(--border)] bg-bg px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 shadow-[0_-4px_16px_-8px_rgba(0,0,0,0.3)] md:hidden">
+        {navItems
+          .filter(({ to }) => to !== "/devices" && to !== "/referral")
+          .map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={to}
@@ -189,6 +192,15 @@ export function AppLayout({ children }: { children: ReactNode }) {
             {label}
           </NavLink>
         ))}
+
+        {/* Кнопка «Назад» */}
+        <button
+          onClick={() => navigate(-1)}
+          className="flex flex-1 flex-col items-center gap-1 rounded-lg py-1.5 text-[10px] font-medium text-fg-subtle transition-colors active:text-accent"
+        >
+          <ChevronLeft className="h-5 w-5" strokeWidth={1.75} />
+          Назад
+        </button>
       </nav>
     </div>
   );
