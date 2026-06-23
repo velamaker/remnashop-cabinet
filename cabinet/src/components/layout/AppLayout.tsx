@@ -69,13 +69,13 @@ export function AppLayout({ children }: { children: ReactNode }) {
       {/* Sidebar — fixed to viewport height */}
       <aside className="relative z-10 hidden w-52 flex-shrink-0 flex-col border-r border-[var(--border)] bg-bg/70 px-2 py-5 backdrop-blur-xl md:flex sticky top-0 h-screen overflow-hidden">
         {/* Brand — клик возвращает на главную */}
-        <NavLink to="/" end className="mb-7 flex items-center gap-2.5 rounded-xl px-2 py-1 transition-opacity hover:opacity-80">
-          <div className="brand-mark flex h-8 w-8 items-center justify-center rounded-xl text-white">
-            <ShieldCheck className="h-[18px] w-[18px]" strokeWidth={2.2} />
+        <NavLink to="/" end className="mb-7 flex items-center gap-3 rounded-xl px-2 py-1 transition-opacity hover:opacity-80">
+          <div className="brand-mark flex h-[42px] w-[42px] items-center justify-center rounded-2xl text-white">
+            <ShieldCheck className="h-[23px] w-[23px]" strokeWidth={2.2} />
           </div>
           <div className="flex flex-col leading-none">
-            <span className="brand-wordmark text-[15px] font-bold tracking-tight">Begemot</span>
-            <span className="mt-0.5 text-[9px] font-semibold uppercase tracking-[0.22em] text-fg-subtle">
+            <span className="brand-wordmark text-[20px] font-bold tracking-tight">Begemot</span>
+            <span className="mt-0.5 text-[11px] font-semibold uppercase tracking-[0.22em] text-fg-subtle">
               VPN
             </span>
           </div>

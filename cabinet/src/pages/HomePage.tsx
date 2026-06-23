@@ -22,10 +22,21 @@ import { ApiError } from "@/types/api";
 
 const REFRESH_SECONDS = 30;
 
-function countryFlag(code: string): string {
-  const cc = (code || "").trim().toUpperCase();
-  if (cc.length !== 2 || !/^[A-Z]{2}$/.test(cc)) return "🌍";
-  return String.fromCodePoint(...[...cc].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
+/** Флаг страны картинкой (emoji-флаги не рендерятся на Windows). */
+function CountryFlag({ code }: { code: string }) {
+  const cc = (code || "").trim().toLowerCase();
+  if (!/^[a-z]{2}$/.test(cc)) {
+    return <span className="text-xl leading-none">🌍</span>;
+  }
+  return (
+    <img
+      src={`https://flagcdn.com/h24/${cc}.png`}
+      srcSet={`https://flagcdn.com/h48/${cc}.png 2x`}
+      alt={cc.toUpperCase()}
+      className="h-5 w-auto rounded-[3px] shadow-sm"
+      loading="lazy"
+    />
+  );
 }
 
 export default function HomePage() {
@@ -236,7 +247,7 @@ export default function HomePage() {
             {favServer ? (
               <>
                 <p className="mt-2 flex items-center gap-2 text-xl font-bold text-fg">
-                  <span className="text-2xl leading-none">{countryFlag(favServer.country_code)}</span>
+                  <CountryFlag code={favServer.country_code} />
                   <span className="truncate">{favServer.name}</span>
                 </p>
                 <p className="tabular mt-0.5 text-xs text-fg-subtle">
