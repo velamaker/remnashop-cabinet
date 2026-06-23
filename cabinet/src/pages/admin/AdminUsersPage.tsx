@@ -113,19 +113,21 @@ function SubscriptionPanel({ userId, onUpdated }: { userId: number; onUpdated: (
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {/* Extend */}
         <div className="rounded-xl border border-[var(--border)] p-4">
-          <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-fg"><CalendarPlus className="h-3.5 w-3.5 text-success" />Продлить</p>
+          <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-fg"><CalendarPlus className="h-3.5 w-3.5 text-success" />Изменить срок</p>
           <div className="flex gap-2">
-            <input type="number" min={1} max={3650} value={extendDays} onChange={e => setExtendDays(e.target.value)}
+            <input type="number" min={-3650} max={3650} value={extendDays} onChange={e => setExtendDays(e.target.value)}
+              placeholder="+30 или -7"
               className="h-8 w-20 rounded-lg border border-[var(--border)] bg-bg px-2 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent" />
             <span className="self-center text-xs text-fg-muted">дней</span>
             <button
               onClick={() => run(() => subscriptionsAdminApi.extend(userId, Number(extendDays)), "extend")}
-              disabled={action !== null || !sub}
+              disabled={action !== null || !sub || !extendDays || Number(extendDays) === 0}
               className="ml-auto rounded-lg bg-success/10 px-3 py-1.5 text-xs font-medium text-success hover:bg-success/20 disabled:opacity-40 transition-colors"
             >
-              {action === "extend" ? "…" : "Продлить"}
+              {action === "extend" ? "…" : "Применить"}
             </button>
           </div>
+          <p className="mt-1.5 text-[11px] text-fg-subtle">Плюс — продлить, минус — убавить.</p>
         </div>
 
         {/* Grant */}
@@ -332,14 +334,16 @@ function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClo
                     <p className="mb-3 text-xs font-semibold text-fg">Скидки</p>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="mb-1 block text-xs text-fg-muted">Персональная %</label>
+                        <label className="mb-1 block text-xs text-fg-muted">Постоянная %</label>
                         <input type="number" min={0} max={100} value={discountPersonal} onChange={e => setDiscountPersonal(e.target.value)}
                           className="h-8 w-full rounded-lg border border-[var(--border)] bg-bg px-3 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent" />
+                        <p className="mt-1 text-[11px] text-fg-subtle">Действует на все покупки</p>
                       </div>
                       <div>
-                        <label className="mb-1 block text-xs text-fg-muted">На покупку %</label>
+                        <label className="mb-1 block text-xs text-fg-muted">На след. покупку %</label>
                         <input type="number" min={0} max={100} value={discountPurchase} onChange={e => setDiscountPurchase(e.target.value)}
                           className="h-8 w-full rounded-lg border border-[var(--border)] bg-bg px-3 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent" />
+                        <p className="mt-1 text-[11px] text-fg-subtle">Разовая, сгорает после покупки</p>
                       </div>
                     </div>
                     <button onClick={saveDiscount} disabled={saving}

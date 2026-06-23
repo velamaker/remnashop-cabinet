@@ -67,16 +67,22 @@ async def extend_subscription(
     subscription_dao: FromDishka[SubscriptionDao],
     session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
-    if body.days <= 0 or body.days > 3650:
-        raise HTTPException(status_code=400, detail="days must be between 1 and 3650")
+    if body.days == 0 or abs(body.days) > 3650:
+        raise HTTPException(status_code=400, detail="days must be between -3650 and 3650 (not 0)")
 
     sub = await subscription_dao.get_current(user_id)
     if not sub:
         raise HTTPException(status_code=404, detail="No active subscription found")
 
     now = datetime.now(timezone.utc)
-    base = sub.expire_at if sub.expire_at > now else now
-    sub.expire_at = base + timedelta(days=body.days)
+    # Продление (+): считаем от текущего срока или от now, если уже истёк.
+    # Убавление (−): считаем строго от текущего срока, не опускаем ниже now.
+    if body.days >= 0:
+        base = sub.expire_at if sub.expire_at > now else now
+        sub.expire_at = base + timedelta(days=body.days)
+    else:
+        new_expire = sub.expire_at + timedelta(days=body.days)
+        sub.expire_at = new_expire if new_expire > now else now
 
     updated = await subscription_dao.update(sub)
     if not updated:
