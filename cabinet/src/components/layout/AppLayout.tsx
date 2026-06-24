@@ -11,7 +11,6 @@ import {
   Info,
   ShieldCheck,
   LifeBuoy,
-  ChevronLeft,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { BrandWordmark } from "@/components/BrandWordmark";
@@ -192,15 +191,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
             {label}
           </NavLink>
         ))}
-
-        {/* Кнопка «Назад» */}
-        <button
-          onClick={() => navigate(-1)}
-          className="flex flex-1 flex-col items-center gap-1 rounded-lg py-1.5 text-[10px] font-medium text-fg-subtle transition-colors active:text-accent"
-        >
-          <ChevronLeft className="h-5 w-5" strokeWidth={1.75} />
-          Назад
-        </button>
       </nav>
     </div>
   );
