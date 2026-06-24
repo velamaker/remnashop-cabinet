@@ -2,20 +2,31 @@
 #
 # RemnaShop (кабинет + админка) — установка-дополнение поверх готового бота.
 #
-#   ./install.sh
+# Два режима:
 #
-# Предполагается, что бот RemnaShop уже настроен и .env заполнен.
-# Скрипт НЕ трогает существующие переменные — он только ДОПИСЫВАЕТ те, что
-# добавляет это дополнение (кабинет / web / email):
-#   • секреты (APP_API_KEY, APP_JWT_SECRET) генерирует сам;
-#   • спрашивает только то, что нельзя сгенерировать (username бота, URL кабинета);
-#   • email — по желанию.
-# Затем собирает overlay-образ бота и веб-кабинет и поднимает всё.
+#   ./install.sh           — сервер С БОТОМ (co-located). Ставит overlay-бота,
+#                            воркеры и кабинет рядом с уже настроенным ботом.
+#                            Допишет только недостающие переменные дополнения
+#                            (web/email), секреты web-части сгенерирует сам.
+#                            Требует уже заполненный .env бота.
+#
+#   ./install.sh site      — ОТДЕЛЬНЫЙ сервер сайта. Ставит ТОЛЬКО кабинет
+#                            (nginx + React), который проксирует /api/ на бота
+#                            по приватному каналу (API_UPSTREAM). Секреты здесь
+#                            не нужны — их держит бот. Спросит только username
+#                            бота, адрес API бота и URL кабинета. Предпосылка —
+#                            поднятый WG/VPN-туннель и API_BIND_HOST на боте.
 #
 # Уже заданные (непустые) переменные остаются как есть. Повторный запуск безопасен.
 
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"
+
+MODE="${1:-bot}"
+case "$MODE" in
+  bot|site) ;;
+  *) printf 'Неизвестный режим: %s. Используйте: ./install.sh [site]\n' "$MODE" >&2; exit 2 ;;
+esac
 
 # ── оформление ─────────────────────────────────────────────────────────────
 if [ -t 1 ]; then
@@ -27,24 +38,12 @@ ok()   { printf '%s✓%s %s\n' "$GRN" "$RST" "$*"; }
 warn() { printf '%s!%s %s\n' "$YLW" "$RST" "$*"; }
 die()  { printf '%s✗ %s%s\n' "$RED" "$*" "$RST" >&2; exit 1; }
 
-say "${BOLD}RemnaShop — установка кабинета и админки${RST}"
-
 # ── зависимости ──────────────────────────────────────────────────────────────
 command -v docker  >/dev/null 2>&1 || die "Не найден docker: https://docs.docker.com/engine/install/"
 command -v openssl >/dev/null 2>&1 || die "Не найден openssl."
 if docker compose version >/dev/null 2>&1; then DC="docker compose"
 elif command -v docker-compose >/dev/null 2>&1; then DC="docker-compose"
 else die "Не найден 'docker compose'."; fi
-ok "Зависимости на месте"
-
-# ── проверяем существующий .env бота ──────────────────────────────────────────
-if [ ! -f .env ]; then
-  warn ".env не найден."
-  warn "Это дополнение ставится поверх уже настроенного бота RemnaShop."
-  warn "Сначала настройте бота (cp .env.example .env и заполните), затем запустите снова."
-  die "Нет .env — нечего дополнять."
-fi
-ok "Найден существующий .env — дополняю недостающим"
 
 # ── утилиты работы с .env ────────────────────────────────────────────────────
 getval() { grep -E "^$1=" .env | tail -1 | cut -d= -f2- || true; }
@@ -68,11 +67,25 @@ ensure() {
     ADD_LINES+=("$var=$val")
   fi
 }
+# flush_env "заголовок блока" — дописать накопленные ADD_LINES одним блоком
+flush_env() {
+  if [ "${#ADD_LINES[@]}" -gt 0 ]; then
+    {
+      printf '\n# ── %s — %s ──\n' "$1" "$(date +%F)"
+      printf '%s\n' "${ADD_LINES[@]}"
+    } >> .env
+    ok "Добавлено новых строк в .env: ${#ADD_LINES[@]}"
+    ADD_LINES=()
+  else
+    ok ".env уже содержит все нужные ключи — добавлять нечего"
+  fi
+}
 
 # ── ввод (только если значение ещё не задано) ─────────────────────────────────
+ASKED=""
 ask() { # ask VAR "Подсказка" ["default"]
   local var="$1" prompt="$2" def="${3:-}" input
-  need_value "$var" || { ok "  $var уже задан — пропускаю"; return; }
+  need_value "$var" || { ok "  $var уже задан — пропускаю"; ASKED=""; return; }
   if [ -n "$def" ]; then
     read -r -p "$(printf '%s%s%s [%s]: ' "$BOLD" "$prompt" "$RST" "$def")" input </dev/tty || true
     ASKED="${input:-$def}"
@@ -87,6 +100,75 @@ ask() { # ask VAR "Подсказка" ["default"]
 ask_yn() { local input; read -r -p "$(printf '%s%s%s [y/N]: ' "$BOLD" "$1" "$RST")" input </dev/tty || true; [[ "${input:-n}" =~ ^[YyДд] ]]; }
 
 gen_hex() { openssl rand -hex "${1:-32}" | tr -d '\n'; }
+
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  Режим SITE — только кабинет на отдельном сервере                         ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+if [ "$MODE" = "site" ]; then
+  say "${BOLD}RemnaShop — установка кабинета на ОТДЕЛЬНОМ сервере${RST}"
+  ok "Зависимости на месте"
+  [ -f .env ] || { : > .env; ok "Создан пустой .env для кабинета"; }
+
+  say ""
+  say "${BOLD}Недостающие данные${RST} ${DIM}(секреты на сайт-сервере не нужны — их держит бот)${RST}"
+
+  # username бота — вшивается в бандл кабинета на сборке (Telegram-вход)
+  ask TELEGRAM_BOT_USERNAME "  Username бота без @ (для входа в кабинет)"
+  [ -n "${ASKED:-}" ] && ensure TELEGRAM_BOT_USERNAME "$ASKED"; ASKED=""
+
+  # адрес API бота host:port — куда nginx кабинета проксирует /api/
+  if need_value API_UPSTREAM; then
+    while :; do
+      ask API_UPSTREAM "  Приватный адрес API бота host:port (напр. 10.8.0.1:5000)"
+      UP="${ASKED:-}"; ASKED=""
+      # без порта — подставим :5000
+      [[ "$UP" == *:* ]] || UP="$UP:5000"
+      if [[ "$UP" =~ ^[A-Za-z0-9._-]+:[0-9]+$ ]]; then ensure API_UPSTREAM "$UP"; break; fi
+      warn "Нужен формат host:port, напр. 10.8.0.1:5000"
+    done
+  else
+    ok "  API_UPSTREAM уже задан — пропускаю"
+  fi
+
+  # публичный URL кабинета — для подсказки про reverse-proxy
+  ask WEB_CABINET_URL "  Публичный URL кабинета (с https://)"
+  [ -n "${ASKED:-}" ] && ensure WEB_CABINET_URL "$ASKED"; ASKED=""
+
+  flush_env "Добавлено RemnaShop (кабинет, отдельный сервер)"
+
+  CAB_URL="$(getval WEB_CABINET_URL)"
+  UP="$(getval API_UPSTREAM)"
+
+  say ""
+  info "Собираю и поднимаю кабинет (проксирует /api/ → ${UP})…"
+  $DC -f cabinet/docker-compose.site.yml up -d --build
+
+  say ""
+  ok "${BOLD}Готово!${RST}"
+  say "  Кабинет: ${DIM}127.0.0.1:5002${RST}  → проксируйте на ${BOLD}${CAB_URL:-ваш домен кабинета}${RST}"
+  say ""
+  say "  Логи:   ${DIM}$DC -f cabinet/docker-compose.site.yml logs -f${RST}"
+  say "  ${YLW}Проверьте:${RST}"
+  say "   • на сервере БОТА в .env задан ${BOLD}API_BIND_HOST${RST}=приватный IP (тот, что в ${UP}) и бот перезапущен;"
+  say "   • приватный канал (WireGuard/VPN) между серверами поднят;"
+  say "   • reverse-proxy с TLS на домен кабинета → 127.0.0.1:5002."
+  exit 0
+fi
+
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  Режим BOT (по умолчанию) — бот + кабинет на одном сервере                ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+say "${BOLD}RemnaShop — установка кабинета и админки${RST}"
+ok "Зависимости на месте"
+
+# ── проверяем существующий .env бота ──────────────────────────────────────────
+if [ ! -f .env ]; then
+  warn ".env не найден."
+  warn "Это дополнение ставится поверх уже настроенного бота RemnaShop."
+  warn "Сначала настройте бота (cp .env.example .env и заполните), затем запустите снова."
+  die "Нет .env — нечего дополнять."
+fi
+ok "Найден существующий .env — дополняю недостающим"
 
 say ""
 say "${BOLD}Недостающие данные${RST} ${DIM}(остальное — автоматически)${RST}"
@@ -143,15 +225,7 @@ ensure EMAIL_FROM_NAME "RemnaShop"
 ensure EMAIL_BREVO_API_KEY ""
 
 # ── дописываем отсутствовавшие ключи одним блоком ─────────────────────────────
-if [ "${#ADD_LINES[@]}" -gt 0 ]; then
-  {
-    printf '\n# ── Добавлено RemnaShop (кабинет/web/email) — %s ──\n' "$(date +%F)"
-    printf '%s\n' "${ADD_LINES[@]}"
-  } >> .env
-  ok "Добавлено новых строк в .env: ${#ADD_LINES[@]}"
-else
-  ok ".env уже содержит все нужные ключи — добавлять нечего"
-fi
+flush_env "Добавлено RemnaShop (кабинет/web/email)"
 
 # ── docker-сеть ──────────────────────────────────────────────────────────────
 docker network inspect remnawave-network >/dev/null 2>&1 || {

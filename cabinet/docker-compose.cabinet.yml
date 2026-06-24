@@ -12,15 +12,20 @@ services:
         VITE_TELEGRAM_BOT_USERNAME: "${TELEGRAM_BOT_USERNAME}"
     container_name: remnashop-cabinet
     restart: unless-stopped
+    environment:
+      # Адрес бэкенда бота host:port. На одном сервере с ботом — имя контейнера
+      # remnashop в общей сети remnawave-network. Подставляется в nginx (envsubst).
+      API_UPSTREAM: "${API_UPSTREAM:-remnashop:5000}"
     ports:
       - "127.0.0.1:5002:80"
     volumes:
-      # nginx.conf авторитетен из исходника — правки конфига не требуют пересборки
-      # образа. ВАЖНО: редактор пересоздаёт инод файла → bind-mount продолжает
+      # nginx.conf — envsubst-шаблон, авторитетен из исходника (правки не требуют
+      # пересборки образа). Монтируется в templates/, entrypoint подставит ${API_*}
+      # при старте. ВАЖНО: редактор пересоздаёт инод файла → bind-mount продолжает
       # указывать на старый инод, контейнер видит СТАРЫЙ конфиг. После правки:
       #   docker compose ... up -d --no-deps --force-recreate cabinet
-      # (только reload/restart недостаточно — нужен пере-bind инода).
-      - ./cabinet/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # (только reload/restart недостаточно — нужен пере-bind инода + ре-envsubst).
+      - ./cabinet/nginx.conf:/etc/nginx/templates/default.conf.template:ro
     networks:
       - default
 

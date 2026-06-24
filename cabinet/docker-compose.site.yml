@@ -1,0 +1,42 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Запуск САЙТА (кабинета) на ОТДЕЛЬНОМ сервере от бота.
+#
+# Здесь нет ни бота, ни БД, ни Remnawave — только статика кабинета + nginx,
+# который проксирует /api/ на бэкенд бота по приватному адресу (API_UPSTREAM).
+#
+# Предпосылки:
+#   1. Между этим сервером и сервером бота поднят приватный канал (WireGuard/VPN),
+#      и API бота слушает на его приватном IP. На сервере бота для этого задайте
+#      в .env:  API_BIND_HOST=<WG-IP бота>   (по умолчанию 127.0.0.1 — только локально).
+#   2. На этом сервере в .env заданы:
+#        API_UPSTREAM=<WG-IP бота>:5000        # куда nginx шлёт /api/
+#        TELEGRAM_BOT_USERNAME=<имя_бота>      # вшивается в бандл на сборке
+#
+# Запуск:
+#   docker compose -f cabinet/docker-compose.site.yml up -d --build
+#
+# Перед кабинетом ставится свой reverse-proxy (Caddy/nginx) с TLS на домен
+# cabinet.<домен>, проксирующий на 127.0.0.1:5002.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  cabinet:
+    build:
+      context: .
+      args:
+        VITE_TELEGRAM_BOT_USERNAME: "${TELEGRAM_BOT_USERNAME}"
+    container_name: remnashop-cabinet
+    restart: unless-stopped
+    environment:
+      # ОБЯЗАТЕЛЬНО: приватный адрес бэкенда бота, host:port (напр. 10.8.0.1:5000).
+      # Без значения старт упадёт — это защита от случайного дефолта remnashop:5000,
+      # которого на отдельном сервере нет.
+      API_UPSTREAM: "${API_UPSTREAM:?set API_UPSTREAM to bot API host:port, e.g. 10.8.0.1:5000}"
+    ports:
+      - "127.0.0.1:5002:80"
+    volumes:
+      # Тот же envsubst-шаблон, что и в одно-серверной установке. Правки конфига
+      # без пересборки образа; после правки — up -d --force-recreate cabinet.
+      - ./nginx.conf:/etc/nginx/templates/default.conf.template:ro
+    # Сеть НЕ указываем — compose создаёт свою (user-defined bridge), в ней доступен
+    # встроенный DNS 127.0.0.11 для resolver в nginx. remnawave-network тут нет.
