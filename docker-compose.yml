@@ -2,6 +2,9 @@ x-build: &build
   build:
     context: .
     dockerfile: Dockerfile
+    args:
+      # Тег базового образа бота. Дефолт — текущий пин; меняется через ./update.sh --base.
+      BASE_TAG: "${BASE_TAG:-v0.8.2}"
 
   volumes:
       - ./logs:/opt/remnashop/logs

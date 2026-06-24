@@ -1,7 +1,10 @@
 # Базовый образ ЗАПИННЕН на точную версию ради воспроизводимости прод-сборок:
 # новый релиз base не «прилетит» на rebuild и не сломает overlay молча.
-# Обновление — только осознанно: поменять тег ниже и прогнать ./check-update.sh.
-FROM ghcr.io/snoups/remnashop:v0.8.2
+# Тег базы вынесен в ARG BASE_TAG (дефолт — пин ниже). Обновление базы — осознанно:
+#   ./update.sh --base <тег>   (прогонит ./check-update.sh и пересоберёт overlay)
+# что выставляет BASE_TAG в .env; Dockerfile/git при этом НЕ меняются.
+ARG BASE_TAG=v0.8.2
+FROM ghcr.io/snoups/remnashop:${BASE_TAG}
 
 # Overlay admin API files on top of the base image
 COPY admin_src/src/ /opt/remnashop/src/

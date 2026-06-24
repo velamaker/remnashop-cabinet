@@ -215,6 +215,9 @@ ensure APP_JWT_SECRET "$(gen_hex 32)"
 # дефолты
 ensure WEB_ENABLED true
 ensure BOT_MINI_APP_RESERVE true
+# Чтобы обычный `docker compose ...` (без -f) охватывал и кабинет (logs/ps/restart,
+# а также down/up) — задаём список compose-файлов через COMPOSE_FILE.
+ensure COMPOSE_FILE "docker-compose.yml:cabinet/docker-compose.cabinet.yml"
 
 # ── email (необязательно) ─────────────────────────────────────────────────────
 if need_value EMAIL_ENABLED; then
