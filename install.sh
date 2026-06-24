@@ -146,6 +146,17 @@ if [ "$MODE" = "site" ]; then
   export TELEGRAM_BOT_USERNAME="$(getval TELEGRAM_BOT_USERNAME)"
   export API_UPSTREAM="$UP"
 
+  # Пред-проверка связи с ботом — самая частая ошибка установки на отдельном
+  # сервере: не поднят WG/VPN-туннель или на боте не задан API_BIND_HOST.
+  UP_HOST="${UP%:*}"; UP_PORT="${UP##*:}"
+  if timeout 4 bash -c "exec 3<>/dev/tcp/${UP_HOST}/${UP_PORT}" 2>/dev/null; then
+    ok "  Связь с API бота ${UP} есть"
+  else
+    warn "  ${UP} сейчас НЕдоступен."
+    warn "  Проверьте: поднят ли WG/VPN-туннель и задан ли на боте API_BIND_HOST=${UP_HOST}."
+    warn "  Кабинет соберу, но /api/ будет отдавать 502, пока канал не поднимется."
+  fi
+
   say ""
   info "Собираю и поднимаю кабинет (проксирует /api/ → ${UP})…"
   $DC --env-file .env -f cabinet/docker-compose.site.yml up -d --build
