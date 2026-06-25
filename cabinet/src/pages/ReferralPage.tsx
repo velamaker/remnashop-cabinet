@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Copy, Check, Users, Gift, Mail, CreditCard, ArrowRight } from "lucide-react";
+import { Copy, Check, Users, Gift, Mail, CreditCard, ArrowRight, QrCode, X } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { referralApi } from "@/api/referral";
 import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardHeader } from "@/components/ui/Card";
@@ -69,6 +70,7 @@ function ReferralUnavailable({
 
 function ReferralCodeCard({ code }: { code: string }) {
   const [copied, setCopied] = useState(false);
+  const [showQr, setShowQr] = useState(false);
   const referralLink = `${window.location.origin}/register?ref=${code}`;
 
   const handleCopy = async () => {
@@ -87,6 +89,26 @@ function ReferralCodeCard({ code }: { code: string }) {
           {copied ? "Скопировано" : "Копировать"}
         </Button>
       </div>
+
+      {/* QR реферальной ссылки — показать другу для сканирования */}
+      <button
+        type="button"
+        onClick={() => setShowQr((v) => !v)}
+        className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-fg-muted transition-colors hover:text-fg"
+      >
+        {showQr ? <X className="h-4 w-4" /> : <QrCode className="h-4 w-4" />}
+        {showQr ? "Скрыть QR-код" : "Показать QR-код"}
+      </button>
+      {showQr && (
+        <div className="mt-3 flex flex-col items-center gap-2">
+          <div className="rounded-2xl bg-white p-3">
+            <QRCodeSVG value={referralLink} size={180} />
+          </div>
+          <p className="max-w-xs text-center text-xs text-fg-subtle">
+            Покажите другу — он отсканирует и перейдёт по вашей ссылке
+          </p>
+        </div>
+      )}
     </Card>
   );
 }
