@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { AlertCircle, CheckCircle, XCircle } from "lucide-react";
+import { AlertCircle, KeyRound } from "lucide-react";
 import { gatewaysAdminApi, type AdminGateway } from "@/api/admin";
 import { ApiError } from "@/types/api";
 
@@ -86,9 +86,9 @@ export default function AdminGatewaysPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     {g.is_configured ? (
-                      <span title="Настроен" className="text-success"><CheckCircle className="h-4 w-4" /></span>
+                      <span title="Ключи настроены" className="text-success"><KeyRound className="h-4 w-4" /></span>
                     ) : (
-                      <span title="Не настроен" className="text-fg-muted"><XCircle className="h-4 w-4" /></span>
+                      <span title="Ключи не настроены" className="text-fg-subtle/70"><KeyRound className="h-4 w-4" /></span>
                     )}
                   </div>
                 </div>
@@ -100,9 +100,9 @@ export default function AdminGatewaysPage() {
                   <button
                     onClick={() => toggle(g)}
                     disabled={toggling === g.id}
-                    className={`relative h-6 w-11 rounded-full transition-colors disabled:opacity-50 ${g.is_active ? "bg-success" : "bg-border"}`}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${g.is_active ? "bg-success" : "bg-border"}`}
                   >
-                    <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${g.is_active ? "translate-x-5" : "translate-x-0.5"}`} />
+                    <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${g.is_active ? "translate-x-[22px]" : "translate-x-0.5"}`} />
                   </button>
                 </div>
 
