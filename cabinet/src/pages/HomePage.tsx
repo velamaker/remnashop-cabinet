@@ -18,6 +18,7 @@ import { referralApi } from "@/api/referral";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { TelegramLinkPrompt } from "@/components/TelegramLinkPrompt";
+import { RenewalBanner } from "@/components/RenewalBanner";
 import { formatBytes, formatTrafficLimit, formatDate, daysUntil } from "@/lib/format";
 import { ApiError } from "@/types/api";
 
@@ -117,6 +118,9 @@ export default function HomePage() {
           )}
         </div>
       </div>
+
+      {/* Напоминание продлить подписку (скоро кончится / истекла) */}
+      <RenewalBanner subscription={subscription} />
 
       {/* Ненавязчивое предложение привязать Telegram (только email-пользователям) */}
       <TelegramLinkPrompt />
