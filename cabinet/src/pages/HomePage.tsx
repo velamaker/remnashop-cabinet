@@ -47,6 +47,7 @@ export default function HomePage() {
   const [devices, setDevices] = useState<{ current: number; max: number } | null>(null);
   const [referrals, setReferrals] = useState<number | null>(null);
   const [favServer, setFavServer] = useState<{ name: string; country_code: string; total: number } | null>(null);
+  const [servers, setServers] = useState<{ name: string; country_code: string; total: number }[]>([]);
   const [trialError, setTrialError] = useState<string | null>(null);
   const [activating, setActivating] = useState(false);
   const [countdown, setCountdown] = useState(REFRESH_SECONDS);
@@ -54,7 +55,7 @@ export default function HomePage() {
   const loadExtras = useCallback(() => {
     subscriptionApi.devices().then((d) => setDevices({ current: d.current_count, max: d.max_count })).catch(() => {});
     referralApi.program().then((p) => setReferrals(p.invited_count)).catch(() => {});
-    subscriptionApi.serverStats().then((s) => setFavServer(s.favorite)).catch(() => {});
+    subscriptionApi.serverStats().then((s) => { setFavServer(s.favorite); setServers(s.nodes); }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -283,6 +284,40 @@ export default function HomePage() {
           <ChevronRight className="h-4 w-4 text-fg-subtle transition-colors group-hover:text-accent" />
         </Link>
       </div>
+
+      {/* Наши серверы — список нод с относительной загрузкой по трафику за 30 дней */}
+      {servers.length > 0 && (
+        <div className="surface p-5">
+          <div className="mb-3 flex items-center justify-between">
+            <p className="flex items-center gap-2 text-sm font-medium text-fg-muted">
+              <Server className="h-4 w-4" />
+              Наши серверы
+            </p>
+            <span className="text-xs text-fg-subtle">{servers.length} активных</span>
+          </div>
+          <div className="flex flex-col gap-3">
+            {servers.map((n, i) => {
+              const max = Math.max(...servers.map((s) => s.total), 1);
+              const pct = Math.round((n.total / max) * 100);
+              return (
+                <div key={i} className="flex items-center gap-3">
+                  <CountryFlag code={n.country_code} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-sm font-medium text-fg">{n.name}</span>
+                      <span className="tabular shrink-0 text-xs text-fg-subtle">{formatBytes(n.total)}</span>
+                    </div>
+                    <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-bg-raised">
+                      <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <p className="mt-3 text-xs text-fg-subtle">Загрузка — по трафику за 30 дней</p>
+        </div>
+      )}
     </div>
   );
 }
