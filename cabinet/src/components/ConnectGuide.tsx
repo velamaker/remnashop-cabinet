@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { Download, Zap, Check, Star } from "lucide-react";
+import { Download, Zap, Check, Star, QrCode, X } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 
 type Platform = "ios" | "android" | "windows" | "macos" | "androidtv";
 
@@ -136,6 +137,7 @@ function AppCard({ app, platform, sub }: { app: AppEntry; platform: Platform; su
 
 export function ConnectGuide({ subUrl }: { subUrl: string }) {
   const [platform, setPlatform] = useState<Platform>(detectPlatform);
+  const [showQr, setShowQr] = useState(false);
 
   const apps = useMemo(() => APPS.filter((a) => a.platforms.includes(platform)), [platform]);
 
@@ -174,6 +176,30 @@ export function ConnectGuide({ subUrl }: { subUrl: string }) {
           <p className="py-4 text-center text-sm text-fg-subtle">
             Для этой платформы пока нет рекомендованных приложений
           </p>
+        )}
+      </div>
+
+      {/* QR — подключить другое устройство (ТВ, второй телефон): отсканировать
+          камерой приложения. Генерируется локально (qrcode.react), подписка
+          наружу не уходит. */}
+      <div className="mt-4 border-t border-[var(--border)] pt-4">
+        <button
+          type="button"
+          onClick={() => setShowQr((v) => !v)}
+          className="inline-flex items-center gap-2 text-sm font-medium text-fg-muted transition-colors hover:text-fg"
+        >
+          {showQr ? <X className="h-4 w-4" /> : <QrCode className="h-4 w-4" />}
+          {showQr ? "Скрыть QR-код" : "QR для другого устройства"}
+        </button>
+        {showQr && (
+          <div className="mt-3 flex flex-col items-center gap-2">
+            <div className="rounded-2xl bg-white p-3">
+              <QRCodeSVG value={subUrl} size={180} />
+            </div>
+            <p className="max-w-xs text-center text-xs text-fg-subtle">
+              Отсканируйте камерой приложения на другом устройстве, чтобы добавить подписку
+            </p>
+          </div>
         )}
       </div>
     </div>
