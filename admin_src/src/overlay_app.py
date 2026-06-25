@@ -33,6 +33,7 @@ from src.web.endpoints.public.appearance import router as appearance_router
 from src.web.endpoints.public.balance import router as balance_router
 from src.web.endpoints.public.me_role import router as me_role_router
 from src.web.endpoints.public.server_stats import router as server_stats_router
+from src.web.endpoints.public.traffic_history import router as traffic_history_router
 from src.web.endpoints.public.set_password import router as set_password_router
 from src.web.endpoints.public.support import router as support_router
 
@@ -74,6 +75,7 @@ def _overlay_public_router() -> APIRouter:
     router.include_router(set_password_router)
     router.include_router(support_router)
     router.include_router(server_stats_router)
+    router.include_router(traffic_history_router)
     router.include_router(appearance_router)
     return router
 

@@ -19,6 +19,11 @@ export const subscriptionApi = {
       nodes: { name: string; country_code: string; total: number }[];
     }>("/subscription/server-stats"),
 
+  trafficHistory: () =>
+    api.get<{ days: { date: string; total: number }[] }>(
+      "/subscription/traffic-history",
+    ),
+
   devices: () => api.get<DevicesResponse>("/subscription/devices"),
 
   deleteDevice: (hwid: string) =>

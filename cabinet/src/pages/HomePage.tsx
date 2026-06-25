@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { TelegramLinkPrompt } from "@/components/TelegramLinkPrompt";
 import { RenewalBanner } from "@/components/RenewalBanner";
+import { TrafficChart } from "@/components/TrafficChart";
 import { formatBytes, formatTrafficLimit, formatDate, daysUntil } from "@/lib/format";
 import { ApiError } from "@/types/api";
 
@@ -318,6 +319,9 @@ export default function HomePage() {
           <p className="mt-3 text-xs text-fg-subtle">Загрузка — по трафику за 30 дней</p>
         </div>
       )}
+
+      {/* График расхода трафика по дням */}
+      <TrafficChart />
     </div>
   );
 }
