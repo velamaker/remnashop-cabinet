@@ -158,7 +158,19 @@ export function AppLayout({ children }: { children: ReactNode }) {
           </div>
           <BrandWordmark className="text-sm" />
         </NavLink>
-        <ThemeSwitcher />
+        <div className="flex items-center gap-1">
+          {/* Вход в админку — только для админов (на мобиле другого входа нет) */}
+          {isAdmin && (
+            <NavLink
+              to="/admin"
+              aria-label="Админ панель"
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-danger transition-colors hover:bg-danger/10 active:opacity-70"
+            >
+              <ShieldCheck className="h-5 w-5" strokeWidth={2} />
+            </NavLink>
+          )}
+          <ThemeSwitcher />
+        </div>
       </div>
 
       {/* Переключатель темы — вверху справа (десктоп) */}
