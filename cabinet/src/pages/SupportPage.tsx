@@ -7,6 +7,7 @@ import {
   type TicketDetail,
   type TicketStatus,
 } from "@/api/support";
+import { useBranding } from "@/contexts/BrandingContext";
 import { TicketThread } from "@/components/TicketThread";
 import { Button } from "@/components/ui/Button";
 import { ApiError } from "@/types/api";
@@ -82,6 +83,8 @@ function NewTicketModal({ onClose, onCreated }: { onClose: () => void; onCreated
 }
 
 export default function SupportPage() {
+  const { supportUsername } = useBranding();
+  const support = supportUsername || SUPPORT_TELEGRAM; // из конфига бота, иначе дефолт
   const [tickets, setTickets] = useState<TicketListItem[]>([]);
   const [active, setActive] = useState<TicketDetail | null>(null);
   const [loadingList, setLoadingList] = useState(true);
@@ -131,11 +134,11 @@ export default function SupportPage() {
           </div>
           <div>
             <p className="text-sm font-medium text-fg">Связаться в Telegram</p>
-            <p className="text-xs text-fg-muted">@{SUPPORT_TELEGRAM}</p>
+            <p className="text-xs text-fg-muted">@{support}</p>
           </div>
         </div>
         <a
-          href={`https://t.me/${SUPPORT_TELEGRAM}`}
+          href={`https://t.me/${support}`}
           target="_blank"
           rel="noreferrer"
           className="inline-flex h-9 items-center justify-center rounded-lg border border-[var(--border)] bg-bg-raised px-4 text-sm font-medium text-fg transition-colors hover:bg-bg-overlay"

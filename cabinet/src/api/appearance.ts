@@ -6,6 +6,7 @@ export interface Appearance {
   brand_name: string;
   accent: string | null;
   background: string | null;
+  support_username: string | null; // username ТП из конфигурации бота (BOT_SUPPORT_USERNAME)
 }
 
 // Админское: brand_name может быть null (= авто-подхват),

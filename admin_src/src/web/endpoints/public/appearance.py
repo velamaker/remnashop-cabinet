@@ -63,6 +63,12 @@ def _bot_brand_name() -> Optional[str]:
     return None
 
 
+def _support_username() -> Optional[str]:
+    """Username поддержки из конфигурации бота (BOT_SUPPORT_USERNAME), без @."""
+    u = (os.environ.get("BOT_SUPPORT_USERNAME") or "").strip().lstrip("@")
+    return u or None
+
+
 def resolve_brand_name() -> str:
     env = (os.environ.get("BRAND_NAME") or "").strip()
     if env:
@@ -96,4 +102,5 @@ async def get_appearance() -> dict[str, Any]:
     data = load_branding()
     if not data.get("brand_name"):
         data["brand_name"] = resolve_brand_name()
+    data["support_username"] = _support_username()
     return data

@@ -14,6 +14,8 @@ const DEFAULT_BRAND = "RemnaShop";
 
 interface BrandingValue {
   brandName: string;
+  /** Username поддержки (без @) из конфигурации бота; null — если не задан. */
+  supportUsername: string | null;
   appearance: Appearance | null;
   /** Перечитать оформление с сервера и применить (после сохранения в админке). */
   refresh: () => Promise<void>;
@@ -90,7 +92,7 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const value = useMemo(
-    () => ({ brandName: appearance?.brand_name || DEFAULT_BRAND, appearance, refresh }),
+    () => ({ brandName: appearance?.brand_name || DEFAULT_BRAND, supportUsername: appearance?.support_username ?? null, appearance, refresh }),
     [appearance, refresh],
   );
 
