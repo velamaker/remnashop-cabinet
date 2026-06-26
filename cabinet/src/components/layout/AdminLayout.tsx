@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { clsx } from "clsx";
 import {
@@ -16,6 +16,8 @@ import {
   Waves,
   LifeBuoy,
   Palette,
+  Menu,
+  X,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
@@ -38,6 +40,7 @@ const navItems = [
 export function AdminLayout({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const handleLogout = async () => {
     await logout();
@@ -103,6 +106,13 @@ export function AdminLayout({ children }: { children: ReactNode }) {
       {/* Mobile top bar */}
       <div className="fixed inset-x-0 top-0 z-20 flex items-center justify-between border-b border-[var(--border)] bg-bg/90 px-4 py-3 backdrop-blur-md md:hidden">
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setMenuOpen(true)}
+            aria-label="Меню админки"
+            className="-ml-1 flex h-8 w-8 items-center justify-center rounded-lg text-fg-muted transition-colors hover:bg-bg-subtle hover:text-fg"
+          >
+            <Menu className="h-5 w-5" strokeWidth={1.75} />
+          </button>
           <div className="flex h-6 w-6 items-center justify-center rounded-md bg-danger/10 text-danger">
             <span className="text-[11px] font-bold">A</span>
           </div>
@@ -110,6 +120,73 @@ export function AdminLayout({ children }: { children: ReactNode }) {
         </div>
         <ThemeSwitcher />
       </div>
+
+      {/* Mobile menu drawer — все разделы (не помещаются в нижний навбар) */}
+      {menuOpen && (
+        <div className="fixed inset-0 z-40 md:hidden">
+          <div
+            className="absolute inset-0 bg-black/40 animate-fade-in"
+            onClick={() => setMenuOpen(false)}
+          />
+          <aside className="absolute left-0 top-0 flex h-full w-72 max-w-[82%] flex-col overflow-y-auto border-r border-[var(--border)] bg-bg px-2 py-4">
+            <div className="mb-4 flex items-center justify-between px-2.5">
+              <div className="flex items-center gap-2">
+                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-danger/10 text-danger">
+                  <span className="text-[11px] font-bold">A</span>
+                </div>
+                <span className="text-sm font-semibold tracking-tight text-fg">Админ</span>
+              </div>
+              <button
+                onClick={() => setMenuOpen(false)}
+                aria-label="Закрыть"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-fg-muted hover:bg-bg-subtle hover:text-fg"
+              >
+                <X className="h-5 w-5" strokeWidth={1.75} />
+              </button>
+            </div>
+
+            <nav className="flex flex-1 flex-col gap-0.5">
+              {navItems.map(({ to, icon: Icon, label, end }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={end}
+                  onClick={() => setMenuOpen(false)}
+                  className={({ isActive }) =>
+                    clsx(
+                      "flex items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-sm transition-colors",
+                      isActive
+                        ? "bg-bg-raised font-medium text-fg"
+                        : "font-normal text-fg-muted hover:bg-bg-subtle hover:text-fg",
+                    )
+                  }
+                >
+                  <Icon className="h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
+                  {label}
+                </NavLink>
+              ))}
+            </nav>
+
+            <div className="mt-4 flex flex-col gap-0.5 border-t border-[var(--border)] pt-4">
+              <NavLink
+                to="/"
+                onClick={() => setMenuOpen(false)}
+                className="flex items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-sm font-normal text-fg-muted hover:bg-bg-subtle hover:text-fg"
+              >
+                <ChevronLeft className="h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
+                Кабинет
+              </NavLink>
+              <button
+                onClick={handleLogout}
+                className="flex items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-sm font-normal text-fg-muted hover:bg-danger/8 hover:text-danger"
+              >
+                <LogOut className="h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
+                Выйти
+              </button>
+            </div>
+          </aside>
+        </div>
+      )}
 
       {/* Main */}
       <main className="flex-1 min-w-0 px-5 pb-24 pt-20 md:px-8 md:pb-8 md:pt-8">
