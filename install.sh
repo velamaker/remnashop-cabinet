@@ -348,6 +348,9 @@ if [ "$WITH_CABINET" = yes ]; then
     say "  (Caddy панели Remnawave не найден — настройте прокси вручную.)"
   fi
   say ""
+  say "  ${YLW}Не забудьте (для входа через Telegram в браузере):${RST}"
+  say "    @BotFather → /setdomain → ваш бот → ${BOLD}${CAB_DOM:-домен кабинета}${RST} (без https://)"
+  say ""
   say "  Логи:   ${DIM}$DC -f docker-compose.yml -f cabinet/docker-compose.cabinet.yml logs -f${RST}"
 else
   info "Собираю и поднимаю бота (overlay) и воркеры — БЕЗ локального кабинета…"
