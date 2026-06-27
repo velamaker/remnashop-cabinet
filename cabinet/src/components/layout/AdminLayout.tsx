@@ -48,7 +48,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   };
 
   return (
-    <div className="flex w-full min-h-[100dvh] bg-bg">
+    <div className="relative flex w-full min-h-[100dvh] overflow-x-hidden bg-bg">
       {/* Sidebar */}
       <aside className="hidden w-52 flex-shrink-0 flex-col border-r border-[var(--border)] bg-bg px-2 py-5 md:flex sticky top-0 h-screen overflow-hidden">
         <div className="mb-6 flex items-center gap-2 px-2.5">

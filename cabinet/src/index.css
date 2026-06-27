@@ -92,6 +92,16 @@ body {
   width: 100%;
 }
 
+/* На мобиле поля ввода ≥16px — иначе iOS авто-зумит при фокусе и страница
+   остаётся «приближённой»/сдвинутой. */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
 /* ---------- Utilities ---------- */
 .scrollbar-hide {
   scrollbar-width: none;
