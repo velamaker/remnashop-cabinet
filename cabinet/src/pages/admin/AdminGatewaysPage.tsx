@@ -122,7 +122,7 @@ function ConfigModal({
                   autoComplete="off"
                   value={values[f.name] ?? ""}
                   onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))}
-                  placeholder={f.is_set ? "•••••••• (задано)" : "не задано"}
+                  placeholder={f.is_set ? `задано: ${f.hint ?? "••••"}` : "не задано"}
                   className="w-full rounded-xl border border-[var(--border)] bg-bg-subtle px-3 py-2 text-sm text-fg outline-none focus:border-accent"
                 />
               </label>

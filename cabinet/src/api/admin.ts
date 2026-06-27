@@ -303,6 +303,7 @@ export interface GatewayField {
   name: string;
   secret: boolean;
   is_set: boolean;
+  hint: string | null; // последние 4 символа заданного значения (или само значение, если короткое)
 }
 
 export const gatewaysAdminApi = {

@@ -26,11 +26,19 @@ def _gateway_fields(g: Any) -> list[dict[str, Any]]:
     for name, typ in get_type_hints(type(st)).items():
         if name in _NON_CRED_FIELDS:
             continue
+        val = getattr(st, name, None)
+        # Подсказка «что введено»: последние 4 символа (для секретов — тоже только
+        # хвост, остальное скрыто). Короткие значения (≤4) показываем целиком.
+        hint = None
+        if val is not None:
+            s = val.get_secret_value() if hasattr(val, "get_secret_value") else str(val)
+            hint = s if len(s) <= 4 else "…" + s[-4:]
         out.append(
             {
                 "name": name,
                 "secret": "SecretStr" in str(typ),
-                "is_set": getattr(st, name, None) is not None,
+                "is_set": val is not None,
+                "hint": hint,
             }
         )
     return out
