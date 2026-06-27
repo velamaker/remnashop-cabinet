@@ -18,6 +18,12 @@ REPO_URL="https://github.com/alexdsndr161rus2015-maker/remnashop-cabinet"
 BRANCH="${BRANCH:-main}"
 DEST="${DEST:-/opt/remnashop}"
 
+# Режим установки для install.sh:
+#   (пусто) — overlay + локальный кабинет (кабинет и бот на одном сервере)
+#   api     — ТОЛЬКО overlay/API (кабинет будет на отдельной машине)
+MODE_ARG="${1:-}"
+case "$MODE_ARG" in ""|api) ;; *) MODE_ARG="" ;; esac
+
 if [ -t 1 ]; then
   BOLD=$'\e[1m'; DIM=$'\e[2m'; GRN=$'\e[32m'; YLW=$'\e[33m'; CYN=$'\e[36m'; RST=$'\e[0m'
 else BOLD=""; DIM=""; GRN=""; YLW=""; CYN=""; RST=""; fi
@@ -27,7 +33,11 @@ warn() { printf '%s!%s %s\n' "$YLW" "$RST" "$*"; }
 die()  { printf '✗ %s\n' "$*" >&2; exit 1; }
 say()  { printf '%s\n' "$*"; }
 
-say "${BOLD}RemnaShop — установка кабинета на сервере с ботом (одной командой)${RST}"
+if [ "$MODE_ARG" = api ]; then
+  say "${BOLD}RemnaShop — установка ТОЛЬКО API на сервере бота (кабинет на др. машине)${RST}"
+else
+  say "${BOLD}RemnaShop — установка кабинета на сервере с ботом (одной командой)${RST}"
+fi
 
 [ "$(id -u)" = 0 ] || die "Запустите от root (или через sudo)."
 command -v curl >/dev/null 2>&1 || die "Нужен curl."
@@ -60,7 +70,7 @@ if [ ! -f .env ]; then
   die  "Заполни .env и запусти снова ту же команду."
 fi
 
-# Всё готово — отдаём управление install.sh (он спросит 2 значения, соберёт стек).
+# Всё готово — отдаём управление install.sh (он спросит пару значений, соберёт стек).
 say ""
-info "Запускаю install.sh…"
-exec bash install.sh
+info "Запускаю install.sh ${MODE_ARG}…"
+exec bash install.sh ${MODE_ARG}

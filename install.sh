@@ -10,6 +10,11 @@
 #                            (web/email), секреты web-части сгенерирует сам.
 #                            Требует уже заполненный .env бота.
 #
+#   ./install.sh api       — сервер С БОТОМ, но кабинет будет на ДРУГОЙ машине.
+#                            Ставит ТОЛЬКО overlay-бота и воркеры (API на :5000),
+#                            локальный кабинет НЕ поднимает. Спросит публичный URL
+#                            удалённого кабинета — пропишет его в CORS (APP_ORIGINS).
+#
 #   ./install.sh site      — ОТДЕЛЬНЫЙ сервер сайта. Ставит ТОЛЬКО кабинет
 #                            (nginx + React), который проксирует /api/ на бота
 #                            по приватному каналу (API_UPSTREAM). Секреты здесь
@@ -24,9 +29,13 @@ cd "$(dirname "$(readlink -f "$0")")"
 
 MODE="${1:-bot}"
 case "$MODE" in
-  bot|site) ;;
-  *) printf 'Неизвестный режим: %s. Используйте: ./install.sh [site]\n' "$MODE" >&2; exit 2 ;;
+  bot|site|api) ;;
+  *) printf 'Неизвестный режим: %s. Используйте: ./install.sh [site|api]\n' "$MODE" >&2; exit 2 ;;
 esac
+# api = на сервере С БОТОМ ставим ТОЛЬКО overlay (API для удалённого кабинета),
+#       сам кабинет тут не поднимаем (он будет на отдельной машине).
+WITH_CABINET=yes
+[ "$MODE" = "api" ] && WITH_CABINET=no
 
 # ── оформление ─────────────────────────────────────────────────────────────
 if [ -t 1 ]; then
@@ -179,9 +188,13 @@ if [ "$MODE" = "site" ]; then
 fi
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  Режим BOT (по умолчанию) — бот + кабинет на одном сервере                ║
+# ║  Режим BOT (overlay + кабинет) и API (overlay без кабинета)               ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
-say "${BOLD}RemnaShop — установка кабинета и админки${RST}"
+if [ "$WITH_CABINET" = yes ]; then
+  say "${BOLD}RemnaShop — установка кабинета и админки${RST}"
+else
+  say "${BOLD}RemnaShop — установка ТОЛЬКО API (кабинет на отдельном сервере)${RST}"
+fi
 ok "Зависимости на месте"
 
 # ── проверяем существующий .env бота ──────────────────────────────────────────
@@ -199,9 +212,14 @@ say "${BOLD}Недостающие данные${RST} ${DIM}(остальное 
 # username бота — нужен кабинету для входа через Telegram
 ask TELEGRAM_BOT_USERNAME "  Username бота без @ (для входа в кабинет)" && [ -n "${ASKED:-}" ] && ensure TELEGRAM_BOT_USERNAME "$ASKED"; ASKED=""
 
-# публичный URL кабинета (дефолт — по APP_DOMAIN из существующего .env)
+# публичный URL кабинета (дефолт — по APP_DOMAIN из существующего .env).
+# В режиме api это URL УДАЛЁННОГО кабинета (на другой машине) — он пойдёт в CORS.
 DOM="$(getval APP_DOMAIN)"
-ask WEB_CABINET_URL "  Публичный URL кабинета" "${DOM:+https://cabinet.$DOM}"
+if [ "$WITH_CABINET" = yes ]; then
+  ask WEB_CABINET_URL "  Публичный URL кабинета" "${DOM:+https://cabinet.$DOM}"
+else
+  ask WEB_CABINET_URL "  Публичный URL кабинета на ДРУГОМ сервере (с https://)"
+fi
 [ -n "${ASKED:-}" ] && ensure WEB_CABINET_URL "$ASKED"
 CAB_URL="$(getval WEB_CABINET_URL)"; CAB_URL="${CAB_URL:-${ASKED:-}}"; ASKED=""
 
@@ -215,9 +233,14 @@ ensure APP_JWT_SECRET "$(gen_hex 32)"
 # дефолты
 ensure WEB_ENABLED true
 ensure BOT_MINI_APP_RESERVE true
-# Чтобы обычный `docker compose ...` (без -f) охватывал и кабинет (logs/ps/restart,
-# а также down/up) — задаём список compose-файлов через COMPOSE_FILE.
-ensure COMPOSE_FILE "docker-compose.yml:cabinet/docker-compose.cabinet.yml"
+# Чтобы обычный `docker compose ...` (без -f) охватывал нужные сервисы
+# (logs/ps/restart, down/up) — задаём список compose-файлов через COMPOSE_FILE.
+# В режиме api кабинет не поднимаем — только бот/воркеры.
+if [ "$WITH_CABINET" = yes ]; then
+  ensure COMPOSE_FILE "docker-compose.yml:cabinet/docker-compose.cabinet.yml"
+else
+  ensure COMPOSE_FILE "docker-compose.yml"
+fi
 
 # ── email (необязательно) ─────────────────────────────────────────────────────
 if need_value EMAIL_ENABLED; then
@@ -259,13 +282,25 @@ docker network inspect remnawave-network >/dev/null 2>&1 || {
 
 # ── сборка и запуск ──────────────────────────────────────────────────────────
 say ""
-info "Собираю и поднимаю бота (overlay), воркеры и кабинет…"
-$DC -f docker-compose.yml -f cabinet/docker-compose.cabinet.yml up -d --build
-
-say ""
-ok "${BOLD}Готово!${RST}"
-say "  Бот и API:  ${DIM}127.0.0.1:5000${RST}"
-say "  Кабинет:    ${DIM}127.0.0.1:5002${RST}  → проксируйте на ${BOLD}${CAB_URL:-ваш домен кабинета}${RST}"
-say ""
-say "  Логи:   ${DIM}$DC -f docker-compose.yml -f cabinet/docker-compose.cabinet.yml logs -f${RST}"
-say "  ${YLW}Дальше:${RST} reverse-proxy с TLS на порты 5000 (API/вебхуки) и 5002 (кабинет)."
+if [ "$WITH_CABINET" = yes ]; then
+  info "Собираю и поднимаю бота (overlay), воркеры и кабинет…"
+  $DC -f docker-compose.yml -f cabinet/docker-compose.cabinet.yml up -d --build
+  say ""
+  ok "${BOLD}Готово!${RST}"
+  say "  Бот и API:  ${DIM}127.0.0.1:5000${RST}"
+  say "  Кабинет:    ${DIM}127.0.0.1:5002${RST}  → проксируйте на ${BOLD}${CAB_URL:-ваш домен кабинета}${RST}"
+  say ""
+  say "  Логи:   ${DIM}$DC -f docker-compose.yml -f cabinet/docker-compose.cabinet.yml logs -f${RST}"
+  say "  ${YLW}Дальше:${RST} reverse-proxy с TLS на порты 5000 (API/вебхуки) и 5002 (кабинет)."
+else
+  info "Собираю и поднимаю бота (overlay) и воркеры — БЕЗ локального кабинета…"
+  $DC -f docker-compose.yml up -d --build
+  say ""
+  ok "${BOLD}Готово! API для удалённого кабинета поднят.${RST}"
+  say "  Бот и API:  ${DIM}127.0.0.1:5000${RST}"
+  say "  CORS открыт для: ${BOLD}${CAB_URL:-URL вашего кабинета}${RST}"
+  say ""
+  say "  Логи:   ${DIM}$DC logs -f${RST}"
+  say "  ${YLW}Дальше:${RST} убедитесь, что API бота доступен по https снаружи (домен → :5000),"
+  say "          затем на ОТДЕЛЬНОМ сервере запустите site-install.sh."
+fi

@@ -6,13 +6,16 @@
 #
 # Делает на чистом сервере ВСЁ:
 #   1. Docker + Compose            (если нет)
-#   2. Caddy                       (если нет)
-#   3. Код проекта                 (тарбол — устойчиво на капризном канале)
-#   4. Сборку кабинета             (install.sh site — спросит 3 значения)
-#   5. TLS-прокси Caddy на 443      (по домену кабинета, авто-сертификат)
+#   2. Код проекта                 (тарбол — устойчиво на капризном канале)
+#   3. Сборку кабинета             (install.sh site — спросит 3 значения)
+#   4. HTTPS-публикацию            (Caddy — ОПЦИОНАЛЬНО, по выбору)
 #
-# Спросит ровно 3 значения: username бота, домен API бота, URL кабинета.
+# Спросит username бота, домен API бота, URL кабинета.
 # Секреты на сайт-сервере не нужны — их держит бот.
+#
+# Caddy не навязывается: если 443 уже занят (свой nginx / Caddy-контейнер панели
+# Remnawave) — скрипт его НЕ трогает и просто покажет блок для вашего прокси.
+# Принудительно: USE_CADDY=no (не ставить) либо USE_CADDY=yes (ставить).
 
 set -euo pipefail
 
@@ -42,8 +45,11 @@ fi
 docker compose version >/dev/null 2>&1 || die "Нет плагина 'docker compose'. Установите Docker заново."
 ok "Docker на месте"
 
-# ── 2. Caddy ──────────────────────────────────────────────────────────────────
-if ! command -v caddy >/dev/null 2>&1; then
+# ── 2. Caddy ставим ПОЗЖЕ и ТОЛЬКО по выбору (см. секцию 5) ────────────────────
+# Caddy НЕ навязываем: если у вас уже есть reverse-proxy (nginx / Caddy-контейнер
+# панели Remnawave / др.), второй Caddy займёт 443 и сломает выдачу webhook'ов.
+install_caddy() {
+  command -v caddy >/dev/null 2>&1 && return 0
   info "Устанавливаю Caddy…"
   export DEBIAN_FRONTEND=noninteractive
   apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https gnupg >/dev/null
@@ -52,8 +58,7 @@ if ! command -v caddy >/dev/null 2>&1; then
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
     > /etc/apt/sources.list.d/caddy-stable.list
   apt-get update -qq && apt-get install -y -qq caddy >/dev/null
-fi
-ok "Caddy на месте"
+}
 
 # ── 3. Код проекта (тарбол устойчивее git на плохом канале) ────────────────────
 # Тянем КАЖДЫЙ раз — поэтому повторный запуск этой команды = ОБНОВЛЕНИЕ кабинета
@@ -68,24 +73,57 @@ ok "Код в $DEST"
 say ""
 bash install.sh site
 
-# ── 5. Caddy на 443 для домена кабинета ────────────────────────────────────────
+# ── 5. Публикация кабинета по HTTPS (Caddy — ОПЦИОНАЛЬНО, по выбору) ────────────
 CAB_URL="$(grep -E '^WEB_CABINET_URL=' .env | tail -1 | cut -d= -f2- || true)"
 CAB_DOM="${CAB_URL#http://}"; CAB_DOM="${CAB_DOM#https://}"; CAB_DOM="${CAB_DOM%%/*}"
-[ -n "$CAB_DOM" ] || die "Не нашёл WEB_CABINET_URL в .env — пропускаю настройку Caddy."
+[ -n "$CAB_DOM" ] || die "Не нашёл WEB_CABINET_URL в .env."
 
+# Блок, который пользователь добавит в СВОЙ reverse-proxy, если Caddy не ставим.
+proxy_hint() {
+  say ""
+  say "  ${BOLD}Кабинет поднят на 127.0.0.1:5002 (без TLS).${RST}"
+  say "  Добавьте в ВАШ reverse-proxy блок для домена кабинета, например (Caddy):"
+  say "    ${DIM}${CAB_DOM} {${RST}"
+  say "    ${DIM}    reverse_proxy 127.0.0.1:5002${RST}"
+  say "    ${DIM}}${RST}"
+  say "  …или эквивалент в nginx (proxy_pass http://127.0.0.1:5002;)."
+}
+
+# Решение: ставить ли свой Caddy.
+#   USE_CADDY=yes|no  — можно задать заранее (неинтерактивно).
+#   Иначе: если 443 занят (свой прокси/панель) — НЕ трогаем; если свободен — спросим.
 say ""
-if ss -ltn 2>/dev/null | grep -q ':443 '; then
-  warn "Порт 443 занят — Caddy на 443 НЕ настраиваю (на этом сервере уже что-то слушает 443)."
-  warn "Освободите 443 или добавьте блок в свой прокси вручную:"
-  say  "    ${DIM}${CAB_DOM} { reverse_proxy 127.0.0.1:5002 }${RST}"
-else
-  cat > /etc/caddy/Caddyfile <<EOF
+DECISION="${USE_CADDY:-}"
+if [ -z "$DECISION" ]; then
+  if ss -ltn 2>/dev/null | grep -q ':443 '; then
+    warn "Порт 443 уже занят — похоже, у вас свой reverse-proxy (nginx / Caddy-панели)."
+    warn "Свой Caddy НЕ ставлю, чтобы не сломать ваш 443 (и webhook'и панели)."
+    DECISION="no"
+  elif [ -e /dev/tty ]; then
+    printf '%sПоставить Caddy и автоматически выпустить TLS на 443? [Y/n]: %s' "$BOLD" "$RST"
+    read -r _ans </dev/tty || _ans=""
+    case "${_ans:-y}" in [Nn]*) DECISION="no";; *) DECISION="yes";; esac
+  else
+    DECISION="yes"   # чистый сервер, неинтерактивно — ставим
+  fi
+fi
+
+if [ "$DECISION" = "yes" ]; then
+  if ss -ltn 2>/dev/null | grep -q ':443 '; then
+    warn "443 занят — пропускаю настройку Caddy, чтобы не конфликтовать."
+    proxy_hint
+  else
+    install_caddy
+    cat > /etc/caddy/Caddyfile <<EOF
 ${CAB_DOM} {
     reverse_proxy 127.0.0.1:5002
 }
 EOF
-  systemctl restart caddy
-  ok "Caddy: ${CAB_DOM} → 127.0.0.1:5002 (TLS авто-сертификат)"
+    systemctl restart caddy
+    ok "Caddy: ${CAB_DOM} → 127.0.0.1:5002 (TLS авто-сертификат)"
+  fi
+else
+  proxy_hint
 fi
 
 # ── Итог ───────────────────────────────────────────────────────────────────────
