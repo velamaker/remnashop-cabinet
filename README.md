@@ -412,7 +412,19 @@ $DC down               # остановить всё
 (проверяет совместимость overlay с новым базовым образом), и только при успехе
 фиксирует `BASE_TAG` и пересобирает.
 
-На отдельном сайт-сервере: `git pull && ./install.sh site`.
+**На отдельном сайт-сервере** обновление — это **повторный запуск той же
+команды** (она тянет свежий код и пересобирает кабинет; `.env` сохраняется):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alexdsndr161rus2015-maker/remnashop-cabinet/main/site-install.sh | sudo bash
+```
+
+Или вручную в каталоге кабинета (`/opt/remnashop-cabinet`):
+
+```bash
+curl -fL https://github.com/alexdsndr161rus2015-maker/remnashop-cabinet/archive/refs/heads/main.tar.gz | tar xz --strip-components=1
+./install.sh site
+```
 
 > ⚠️ Стандартная команда `docker compose pull && down && up` здесь **не
 > применима** и базовый образ не обновит: overlay бота **собирается локально**

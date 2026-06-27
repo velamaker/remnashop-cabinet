@@ -56,11 +56,11 @@ fi
 ok "Caddy на месте"
 
 # ── 3. Код проекта (тарбол устойчивее git на плохом канале) ────────────────────
-if [ ! -f "$DEST/install.sh" ]; then
-  info "Скачиваю код в $DEST…"
-  mkdir -p "$DEST"
-  curl -fL "$REPO_URL/archive/refs/heads/$BRANCH.tar.gz" | tar xz -C "$DEST" --strip-components=1
-fi
+# Тянем КАЖДЫЙ раз — поэтому повторный запуск этой команды = ОБНОВЛЕНИЕ кабинета
+# до последней версии. .env не в архиве, поэтому настройки сохраняются.
+info "Скачиваю/обновляю код в $DEST…"
+mkdir -p "$DEST"
+curl -fL "$REPO_URL/archive/refs/heads/$BRANCH.tar.gz" | tar xz -C "$DEST" --strip-components=1
 cd "$DEST"
 ok "Код в $DEST"
 
