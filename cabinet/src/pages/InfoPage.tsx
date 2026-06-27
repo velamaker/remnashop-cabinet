@@ -22,7 +22,7 @@ function flagEmoji(code: string): string {
 
 function ServiceStatus() {
   const [nodes, setNodes] = useState<
-    { name: string; country_code: string; online: boolean; users_online: number }[]
+    { name: string; country_code: string; online: boolean }[]
   >([]);
   const [allOk, setAllOk] = useState(true);
   const [loaded, setLoaded] = useState(false);
@@ -68,9 +68,6 @@ function ServiceStatus() {
             >
               <span className="text-xl">{flagEmoji(n.country_code)}</span>
               <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">{n.name}</span>
-              {n.online && (
-                <span className="text-xs text-fg-subtle">{n.users_online} онлайн</span>
-              )}
               <span
                 className={`flex items-center gap-1.5 text-xs font-medium ${
                   n.online ? "text-success" : "text-danger"

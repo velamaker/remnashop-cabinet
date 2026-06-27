@@ -43,7 +43,6 @@ async def service_status(
                 "name": getattr(n, "name", "") or "",
                 "country_code": getattr(n, "country_code", "") or "",
                 "online": bool(getattr(n, "is_connected", False)),
-                "users_online": int(getattr(n, "users_online", 0) or 0),
             }
         )
 
