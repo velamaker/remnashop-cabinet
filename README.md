@@ -169,13 +169,13 @@
 **🅰️ Вместе с ботом** — кабинет на том же сервере, что и бот (обычный случай):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/alexdsndr161rus2015-maker/remnashop-cabinet/test/bot-install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/alexdsndr161rus2015-maker/remnashop-cabinet/main/bot-install.sh | sudo bash
 ```
 
 **🅱️ На отдельном сервере** — кабинет на отдельной машине:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/alexdsndr161rus2015-maker/remnashop-cabinet/test/site-install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/alexdsndr161rus2015-maker/remnashop-cabinet/main/site-install.sh | sudo bash
 ```
 
 📦 **Репозиторий:** **https://github.com/alexdsndr161rus2015-maker/remnashop-cabinet**
@@ -200,7 +200,7 @@ cd remnashop-cabinet
 весь стек:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/alexdsndr161rus2015-maker/remnashop-cabinet/test/bot-install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/alexdsndr161rus2015-maker/remnashop-cabinet/main/bot-install.sh | sudo bash
 ```
 
 Затем добавьте домен кабинета в ваш reverse-proxy (TLS → `127.0.0.1:5002`):
@@ -238,7 +238,7 @@ cabinet.example.com {
 кабинет и TLS на 443; запросит 3 значения):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/alexdsndr161rus2015-maker/remnashop-cabinet/test/site-install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/alexdsndr161rus2015-maker/remnashop-cabinet/main/site-install.sh | sudo bash
 ```
 
 > Требуется сервер со **свободным портом 443** и доменом кабинета, направленным
