@@ -109,7 +109,9 @@ cabinet_connect_buttons = (
 menu = Window(
     Banner(BannerName.MENU),
     I18nFormat("msg-main-menu"),
-    *cabinet_connect_buttons,
+    # Кнопки «Подключиться» убраны для разгрузки меню — вход в кабинет один,
+    # через Mini App (см. «Личный кабинет» ниже). cabinet_connect_buttons оставлен
+    # в коде на случай возврата.
     Row(
         Button(
             text=I18nFormat("btn-menu.connect-not-available"),
@@ -169,17 +171,10 @@ menu = Window(
             url=Format("{support_url}"),
         ),
     ),
+    # Единственный вход в кабинет — Mini App (на всякий случай).
     Row(
         WebApp(
             text=I18nFormat("btn-menu.web-cabinet"),
-            url=Format("{web_cabinet_url}"),
-        ),
-        when=F["web_enabled"],
-    ),
-    # Резервный вход в кабинет через браузер (на случай проблем с Mini App).
-    Row(
-        Url(
-            text=Format("🌐 Кабинет в браузере"),
             url=Format("{web_cabinet_url}"),
         ),
         when=F["web_enabled"],

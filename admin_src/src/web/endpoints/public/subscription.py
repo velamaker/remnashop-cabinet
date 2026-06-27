@@ -275,12 +275,15 @@ async def activate_trial_web(
     if not plan or not plan.durations:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active trial plan")
 
-    plan_snapshot = PlanSnapshotDto.from_plan(plan, plan.durations[0].days)
+    duration_days = plan.durations[0].days
+    plan_snapshot = PlanSnapshotDto.from_plan(plan, duration_days)
     try:
         await activate_trial.system(ActivateTrialSubscriptionDto(user=user, plan=plan_snapshot))
     except TrialNotAvailableError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
-    return TrialActivateResponse(success=True)
+    # Схема TrialActivateResponse требует is_free/activated/duration_days
+    # (поля success у неё нет). Триал тут выдаётся бесплатно.
+    return TrialActivateResponse(is_free=True, activated=True, duration_days=duration_days)
 
 
 @router.post("/purchase", response_model=PaymentInitResponse)
