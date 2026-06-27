@@ -26,7 +26,7 @@ export const subscriptionApi = {
 
   serviceStatus: () =>
     api.get<{
-      nodes: { name: string; country_code: string; online: boolean; users_online: number }[];
+      nodes: { name: string; country_code: string; online: boolean }[];
       all_operational: boolean;
     }>("/subscription/service-status"),
 
