@@ -438,8 +438,8 @@ export default function AdminRemnaWavePage() {
             hosts.length === 0 ? (
               <p className="py-8 text-center text-sm text-fg-muted">Хосты не найдены</p>
             ) : (
-              <div className="overflow-hidden rounded-xl border border-[var(--border)]">
-                <table className="w-full text-sm">
+              <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+                <table className="w-full min-w-[560px] text-sm">
                   <thead>
                     <tr className="border-b border-[var(--border)] bg-bg-subtle">
                       {["Название", "Адрес", "Порт", "Инбаунд", "Статус"].map(h => (
@@ -476,8 +476,8 @@ export default function AdminRemnaWavePage() {
             inbounds.length === 0 ? (
               <p className="py-8 text-center text-sm text-fg-muted">Инбаунды не найдены</p>
             ) : (
-              <div className="overflow-hidden rounded-xl border border-[var(--border)]">
-                <table className="w-full text-sm">
+              <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+                <table className="w-full min-w-[560px] text-sm">
                   <thead>
                     <tr className="border-b border-[var(--border)] bg-bg-subtle">
                       {["Тег", "Тип", "Сеть", "Безопасность", "Порт"].map(h => (

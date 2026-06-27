@@ -191,7 +191,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
       )}
 
       {/* Main */}
-      <main className="flex-1 min-w-0 px-5 pb-24 pt-20 md:px-8 md:pb-8 md:pt-8">
+      <main className="flex-1 min-w-0 overflow-x-hidden px-5 pb-24 pt-20 md:px-8 md:pb-8 md:pt-8">
         <div className="mx-auto max-w-6xl animate-fade-in">{children}</div>
       </main>
 

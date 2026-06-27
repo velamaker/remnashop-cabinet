@@ -433,8 +433,8 @@ export default function AdminUsersPage() {
         <div className="flex justify-center py-16"><div className="h-6 w-6 animate-spin rounded-full border-2 border-border border-t-accent" /></div>
       ) : (
         <>
-          <div className="overflow-hidden rounded-xl border border-[var(--border)]">
-            <table className="w-full text-sm">
+          <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+            <table className="w-full min-w-[640px] text-sm">
               <thead>
                 <tr className="border-b border-[var(--border)] bg-bg-subtle">
                   {["Пользователь", "Email", "Роль", "Статус", "Подписок", "Дата"].map(h => (
