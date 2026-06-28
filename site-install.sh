@@ -4,18 +4,18 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/alexdsndr161rus2015-maker/remnashop-cabinet/main/site-install.sh | bash
 #
-# Делает на чистом сервере ВСЁ:
+# Делает на чистом сервере ВСЁ сам:
 #   1. Docker + Compose            (если нет)
 #   2. Код проекта                 (тарбол — устойчиво на капризном канале)
 #   3. Сборку кабинета             (install.sh site — спросит 3 значения)
-#   4. HTTPS-публикацию            (Caddy — ОПЦИОНАЛЬНО, по выбору)
+#   4. HTTPS на 443                 (Caddy ИЛИ nginx — оба с авто-сертификатом)
 #
-# Спросит username бота, домен API бота, URL кабинета.
-# Секреты на сайт-сервере не нужны — их держит бот.
+# Спросит username бота, домен API бота, URL кабинета — и один выбор: чем поднять
+# HTTPS (Caddy / nginx). Секреты на сайт-сервере не нужны — их держит бот.
 #
-# Caddy не навязывается: если 443 уже занят (свой nginx / Caddy-контейнер панели
-# Remnawave) — скрипт его НЕ трогает и просто покажет блок для вашего прокси.
-# Принудительно: USE_CADDY=no (не ставить) либо USE_CADDY=yes (ставить).
+# Если 443 УЖЕ занят (свой reverse-proxy / Caddy панели) — скрипт его НЕ трогает,
+# а просто покажет готовые блоки (Caddy и nginx) для вставки в ваш прокси.
+# Переопределить без вопроса: HTTPS=caddy | nginx | none.
 
 set -euo pipefail
 
@@ -103,18 +103,8 @@ proxy_hint() {
   say "    ${DIM}}${RST}"
 }
 
-# БЕЗ вопросов — решаем сами по факту занятости 443:
-#   • 443 свободен  → ставим Caddy и выпускаем сертификат автоматически;
-#   • 443 занят     → значит у вас уже есть свой reverse-proxy (Caddy панели и т.п.),
-#                     не трогаем его и просто показываем готовый блок для вставки.
-# (USE_CADDY=yes|no можно задать заранее, если очень нужно переопределить.)
-say ""
-DECISION="${USE_CADDY:-}"
-if [ -z "$DECISION" ]; then
-  if ss -ltn 2>/dev/null | grep -q ':443 '; then DECISION="no"; else DECISION="yes"; fi
-fi
-
-if [ "$DECISION" = "yes" ] && ! ss -ltn 2>/dev/null | grep -q ':443 '; then
+# Caddy: поставить + настроить, сертификат выпустится сам.
+setup_caddy() {
   install_caddy
   cat > /etc/caddy/Caddyfile <<EOF
 ${CAB_DOM} {
@@ -122,10 +112,65 @@ ${CAB_DOM} {
 }
 EOF
   systemctl restart caddy
-  ok "443 свободен → Caddy настроен сам: ${CAB_DOM} → 127.0.0.1:5002 (TLS авто)"
-else
-  warn "443 уже занят — у вас есть свой reverse-proxy. Caddy не трогаю."
+  ok "Caddy настроен сам: ${CAB_DOM} → 127.0.0.1:5002 (TLS авто-сертификат)"
+}
+
+# nginx + certbot: поставить, настроить vhost и ВЫПУСТИТЬ СЕРТИФИКАТ автоматически.
+setup_nginx() {
+  info "Устанавливаю nginx и certbot…"
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq
+  apt-get install -y -qq nginx certbot python3-certbot-nginx >/dev/null
+  cat > /etc/nginx/sites-available/cabinet.conf <<EOF
+server {
+    listen 80;
+    server_name ${CAB_DOM};
+    location / {
+        proxy_pass http://127.0.0.1:5002;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+  ln -sf /etc/nginx/sites-available/cabinet.conf /etc/nginx/sites-enabled/cabinet.conf
+  rm -f /etc/nginx/sites-enabled/default
+  nginx -t >/dev/null 2>&1 && systemctl reload nginx
+  # Сертификат: нужна A-запись на этот сервер и открытый 80. certbot сам пропишет
+  # 443 в конфиг nginx и включит редирект.
+  if certbot --nginx -d "${CAB_DOM}" --non-interactive --agree-tos \
+       --register-unsafely-without-email --redirect >/dev/null 2>&1; then
+    ok "nginx + TLS настроены сами: ${CAB_DOM} → 127.0.0.1:5002"
+  else
+    warn "nginx поднят на http, но сертификат пока не выпустился"
+    warn "(обычно — A-запись ещё не указывает на сервер). После настройки DNS:"
+    say  "    ${DIM}certbot --nginx -d ${CAB_DOM} --redirect${RST}"
+  fi
+}
+
+# Решаем сами, минимум вопросов:
+#   • 443 ЗАНЯТ    → у вас уже есть свой reverse-proxy — не трогаем, показываем блоки;
+#   • 443 СВОБОДЕН → ставим и настраиваем всё сами. Один выбор: Caddy или nginx
+#     (оба выпускают сертификат автоматически). По умолчанию Caddy.
+# Переопределить без вопроса: HTTPS=caddy | nginx | none (none = свой прокси).
+say ""
+if ss -ltn 2>/dev/null | grep -q ':443 '; then
+  warn "Порт 443 уже занят — у вас свой reverse-proxy. Не трогаю его."
   proxy_hint
+else
+  CHOICE="${HTTPS:-}"
+  if [ -z "$CHOICE" ] && [ -e /dev/tty ]; then
+    say "  ${BOLD}Чем поднять HTTPS на 443?${RST} (оба настроятся и выпустят сертификат сами)"
+    printf '    %s[1]%s Caddy (по умолчанию)   %s[2]%s nginx   %s[3]%s ничего (свой прокси): ' \
+      "$BOLD" "$RST" "$BOLD" "$RST" "$BOLD" "$RST"
+    read -r _a </dev/tty || _a=""
+    case "${_a}" in 2) CHOICE=nginx ;; 3) CHOICE=none ;; *) CHOICE=caddy ;; esac
+  fi
+  case "${CHOICE:-caddy}" in
+    nginx) setup_nginx ;;
+    none)  proxy_hint ;;
+    *)     setup_caddy ;;
+  esac
 fi
 
 # ── Итог ───────────────────────────────────────────────────────────────────────
