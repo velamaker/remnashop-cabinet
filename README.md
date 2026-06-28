@@ -506,7 +506,7 @@ $DC down               # остановить всё
 
 | Сеть | Адрес (USDT) |
 |------|--------------|
-| **TON** | `UQDg8ZMFH_ei_Dr42Qrrh20mYruaU6wOvfj134ArjWwN9lpr` |
+| **TON** | `UQDg8ZMFH_ei_Dr42Qrrh20mYruaU6wOvfjl34ArjWwN9lpr` |
 | **Tron (TRC20)** | `TCEDU7h8MQ4a16R2WD26ne7wFBmV2pXPse` |
 | **Ethereum (ERC20)** | `0x1d28281644140CA0ef0309757cE247430ed9B6A7` |
 | **Solana (SOL)** | `BnJAvjJNXcDGozYbu29vmCzvWrFMpgvXEmgKRxCV3SMG` |
