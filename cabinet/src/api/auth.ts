@@ -52,4 +52,7 @@ export const authApi = {
 
   confirmEmailVerification: (data: ConfirmEmailVerificationRequest) =>
     api.post<{ success: boolean; email: string }>("/auth/email/confirm", data),
+
+  // Удалить привязанную почту (доступно только при наличии Telegram-входа).
+  deleteEmail: () => api.delete<{ success: boolean }>("/auth/email"),
 };

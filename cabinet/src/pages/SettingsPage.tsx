@@ -273,6 +273,139 @@ function BackupAccessBlock() {
   );
 }
 
+// Управление уже привязанной и подтверждённой почтой: сменить или удалить.
+function ManageEmailBlock() {
+  const { user, refreshMe } = useAuth();
+  const [mode, setMode] = useState<"idle" | "change">("idle");
+  const [newEmail, setNewEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  // Показываем только когда почта есть и подтверждена.
+  if (!user || !user.email || !user.is_email_verified) return null;
+
+  const canDelete = Boolean(user.telegram_id); // есть запасной вход — удалять безопасно
+  const notify = (e: unknown, fallback: string) =>
+    setMessage({ type: "error", text: e instanceof ApiError ? e.detail : fallback });
+
+  const reset = () => {
+    setMode("idle");
+    setNewEmail("");
+    setCode("");
+    setCodeSent(false);
+  };
+
+  const handleSendCode = async () => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await authApi.requestEmailVerification(newEmail);
+      setCodeSent(true);
+      setMessage({ type: "success", text: "Код отправлен на новый адрес" });
+    } catch (e) {
+      notify(e, "Не удалось отправить код");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleConfirm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setMessage(null);
+    try {
+      await authApi.confirmEmailVerification({ code });
+      await refreshMe();
+      reset();
+      setMessage({ type: "success", text: "Email изменён" });
+    } catch (e) {
+      notify(e, "Неверный код");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!window.confirm(`Удалить почту ${user.email}? Вход останется через Telegram.`)) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      await authApi.deleteEmail();
+      await refreshMe();
+      reset();
+      setMessage({ type: "success", text: "Email удалён" });
+    } catch (e) {
+      notify(e, "Не удалось удалить почту");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card variant="bordered">
+      <CardHeader title="Почта" subtitle={`Текущая: ${user.email}`} />
+
+      {mode === "idle" ? (
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="secondary" onClick={() => setMode("change")}>
+            Изменить email
+          </Button>
+          {canDelete && (
+            <Button size="sm" variant="danger" onClick={handleDelete} isLoading={busy}>
+              Удалить email
+            </Button>
+          )}
+        </div>
+      ) : !codeSent ? (
+        <div className="flex gap-2">
+          <Input
+            type="email"
+            placeholder="new@example.com"
+            value={newEmail}
+            onChange={(e) => setNewEmail(e.target.value)}
+            className="flex-1"
+          />
+          <Button size="sm" variant="secondary" onClick={handleSendCode} isLoading={busy} disabled={!newEmail}>
+            Отправить код
+          </Button>
+          <Button size="sm" variant="ghost" onClick={reset}>
+            Отмена
+          </Button>
+        </div>
+      ) : (
+        <form onSubmit={handleConfirm} className="flex gap-2">
+          <Input
+            placeholder="123456"
+            maxLength={6}
+            value={code}
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+            className="flex-1"
+          />
+          <Button type="submit" size="sm" isLoading={busy}>
+            Подтвердить
+          </Button>
+          <Button size="sm" variant="ghost" onClick={reset}>
+            Отмена
+          </Button>
+        </form>
+      )}
+
+      {!canDelete && mode === "idle" && (
+        <p className="mt-2 text-xs text-fg-subtle">
+          Удаление недоступно: email — единственный способ входа. Привяжите Telegram, чтобы удалить почту.
+        </p>
+      )}
+      {message && (
+        <p className={`mt-2 text-sm ${message.type === "success" ? "text-success" : "text-danger"}`}>
+          {message.text}
+        </p>
+      )}
+    </Card>
+  );
+}
+
 function ChangePasswordBlock() {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -429,6 +562,7 @@ export default function SettingsPage() {
 
       <EmailVerificationBlock />
       <BackupAccessBlock />
+      <ManageEmailBlock />
 
       <Card variant="bordered">
         <CardHeader title="Тема оформления" subtitle="Выберите, как должен выглядеть кабинет" />
