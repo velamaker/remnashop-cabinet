@@ -7,6 +7,9 @@ export interface Appearance {
   accent: string | null;
   background: string | null;
   support_username: string | null; // username ТП из конфигурации бота (BOT_SUPPORT_USERNAME)
+  // Вход через Telegram по OIDC (новый флоу). true — только если на боте заданы
+  // TELEGRAM_OIDC_CLIENT_ID/SECRET; иначе кабинет показывает классический виджет.
+  telegram_oidc_enabled?: boolean;
 }
 
 // Админское: brand_name может быть null (= авто-подхват),

@@ -10,6 +10,7 @@ import { TelegramLoginButton } from "@/components/TelegramLoginButton";
 import { ApiError, type TelegramAuthRequest } from "@/types/api";
 import { getTelegramWebApp, whenTelegramReady } from "@/hooks/useTelegramWebApp";
 import { BrandWordmark } from "@/components/BrandWordmark";
+import { useBranding } from "@/contexts/BrandingContext";
 
 const TELEGRAM_BOT_USERNAME = import.meta.env.VITE_TELEGRAM_BOT_USERNAME || "";
 
@@ -19,6 +20,7 @@ function getTelegramInitData(): string | null {
 
 export default function LoginPage() {
   const { login, loginWithTelegram, loginWithTelegramWebApp } = useAuth();
+  const { telegramOidcEnabled } = useBranding();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   // Куда вернуть после входа (напр. /devices из кнопки «Подключиться» в боте).
@@ -27,7 +29,12 @@ export default function LoginPage() {
   const next = rawNext && rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  // ?error=telegram прилетает с OIDC-callback при сбое обмена/проверки токена.
+  const [error, setError] = useState<string | null>(
+    searchParams.get("error") === "telegram"
+      ? "Не удалось войти через Telegram. Попробуйте ещё раз."
+      : null,
+  );
   const [isLoading, setIsLoading] = useState(false);
   // Mini App ожидается, пока асинхронно грузится Telegram SDK (см. index.html).
   // Держим экран загрузки до окончания загрузки, чтобы не мелькала форма входа.
@@ -143,12 +150,30 @@ export default function LoginPage() {
 
         {/* Card */}
         <div className="rounded-xl border border-[var(--border)] bg-bg-raised p-6">
-          {TELEGRAM_BOT_USERNAME && (
+          {(telegramOidcEnabled || TELEGRAM_BOT_USERNAME) && (
             <>
-              <TelegramLoginButton
-                botUsername={TELEGRAM_BOT_USERNAME}
-                onAuth={handleTelegramAuth}
-              />
+              {telegramOidcEnabled ? (
+                // Новый флоу Telegram (OpenID Connect): редирект на oauth.telegram.org.
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.location.href = "/api/auth/telegram/oidc/start";
+                  }}
+                  className="flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-[#2aabee] text-sm font-medium text-white transition-colors hover:bg-[#1f97d4]"
+                >
+                  <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current" aria-hidden>
+                    <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z" />
+                  </svg>
+                  Войти через Telegram
+                </button>
+              ) : (
+                TELEGRAM_BOT_USERNAME && (
+                  <TelegramLoginButton
+                    botUsername={TELEGRAM_BOT_USERNAME}
+                    onAuth={handleTelegramAuth}
+                  />
+                )
+              )}
               <div className="my-5 flex items-center gap-3">
                 <div className="h-px flex-1 bg-[var(--border)]" />
                 <span className="text-xs text-fg-subtle">или</span>

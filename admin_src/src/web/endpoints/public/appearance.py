@@ -103,4 +103,10 @@ async def get_appearance() -> dict[str, Any]:
     if not data.get("brand_name"):
         data["brand_name"] = resolve_brand_name()
     data["support_username"] = _support_username()
+    # Вход через Telegram по OIDC доступен, только если заданы client_id/secret
+    # (BotFather → Web Login). Иначе кабинет покажет классический Login Widget.
+    data["telegram_oidc_enabled"] = bool(
+        (os.environ.get("TELEGRAM_OIDC_CLIENT_ID") or "").strip()
+        and (os.environ.get("TELEGRAM_OIDC_CLIENT_SECRET") or "").strip()
+    )
     return data
