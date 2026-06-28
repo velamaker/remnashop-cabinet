@@ -109,9 +109,11 @@ cabinet_connect_buttons = (
 menu = Window(
     Banner(BannerName.MENU),
     I18nFormat("msg-main-menu"),
-    # Кнопки «Подключиться» убраны для разгрузки меню — вход в кабинет один,
-    # через Mini App (см. «Личный кабинет» ниже). cabinet_connect_buttons оставлен
-    # в коде на случай возврата.
+    # Кнопки «Подключиться»:
+    #   1) «Подключиться»       — Mini App → кабинет /devices (синяя, основная);
+    #   2) «Подключиться резерв» — тот же /devices прямой ссылкой в браузере
+    #      (на случай, если Mini App не открывается).
+    *cabinet_connect_buttons,
     Row(
         Button(
             text=I18nFormat("btn-menu.connect-not-available"),
