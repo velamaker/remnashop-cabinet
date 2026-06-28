@@ -11,6 +11,7 @@ from src.application.common.email_sender import EmailSender
 from src.core.config import AppConfig
 from src.core.constants import EMAIL_VERIFICATION_SUBJECT
 from src.core.exceptions import EmailDeliveryError
+from src.infrastructure.services.email_template_config import fill, load_email_template
 
 # На этом хостинге исходящие SMTP-порты (25/465/587) заблокированы провайдером,
 # поэтому письма уходят через HTTP API Brevo (порт 443, всегда открыт).
@@ -45,23 +46,30 @@ def _text_to_html(body: str) -> str:
 def _render_verification(body: str, from_name: str) -> tuple[str, str, str]:
     """
     Письмо с кодом приходит из use-case на английском. Здесь подменяем тему/тело
-    на русские и рисуем аккуратный HTML с кодом в рамке.
-    Возвращает (subject, text, html).
+    на русские (тексты редактируются в админке — см. email_template_config) и
+    рисуем аккуратный HTML с кодом в рамке. Возвращает (subject, text, html).
     """
     code_match = re.search(r"\b(\d{4,8})\b", body)
     code = code_match.group(1) if code_match else ""
     minutes_match = re.search(r"(\d+)\s*minutes", body)
     minutes = minutes_match.group(1) if minutes_match else "15"
 
-    text = (
-        f"Ваш код подтверждения: {code}\n\n"
-        f"Код действителен {minutes} минут.\n"
-        "Если вы не запрашивали подтверждение, просто проигнорируйте это письмо."
-    )
+    brand = from_name or "Begemot VPN"
+    t = load_email_template()
+    subject = fill(t["subject"], brand=brand, code=code, minutes=minutes)
+    heading = fill(t["heading"], brand=brand, code=code, minutes=minutes)
+    intro = fill(t["intro"], brand=brand, code=code, minutes=minutes)
+    expire_note = fill(t["expire_note"], brand=brand, code=code, minutes=minutes)
+    ignore_note = fill(t["ignore_note"], brand=brand, code=code, minutes=minutes)
+
+    text = f"{intro}\n\nКод: {code}\n\n{expire_note}\n{ignore_note}"
 
     safe_code = _escape(code)
-    safe_minutes = _escape(minutes)
-    safe_brand = _escape(from_name or "Begemot VPN")
+    safe_brand = _escape(brand)
+    safe_heading = _escape(heading)
+    safe_intro = _escape(intro)
+    safe_expire = _escape(expire_note)
+    safe_ignore = _escape(ignore_note)
     html = f"""\
 <div style="font-family:'Segoe UI',Arial,Helvetica,sans-serif;background:#f4f5f7;padding:32px 16px;">
   <div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:16px;
@@ -72,9 +80,9 @@ def _render_verification(body: str, from_name: str) -> tuple[str, str, str]:
       </span>
     </div>
     <div style="padding:28px;">
-      <h1 style="margin:0 0 8px;font-size:20px;color:#16181d;">Подтверждение почты</h1>
+      <h1 style="margin:0 0 8px;font-size:20px;color:#16181d;">{safe_heading}</h1>
       <p style="margin:0 0 20px;font-size:15px;line-height:1.6;color:#454a52;">
-        Используйте этот код, чтобы подтвердить ваш email:
+        {safe_intro}
       </p>
       <div style="text-align:center;margin:0 0 20px;">
         <div style="display:inline-block;background:#f0f0fb;border:1px solid #d9d9f5;
@@ -84,10 +92,10 @@ def _render_verification(body: str, from_name: str) -> tuple[str, str, str]:
         </div>
       </div>
       <p style="margin:0 0 6px;font-size:14px;color:#6b7280;">
-        Код действителен {safe_minutes} минут.
+        {safe_expire}
       </p>
       <p style="margin:0;font-size:13px;color:#9aa1ab;">
-        Если вы не запрашивали подтверждение, просто проигнорируйте это письмо.
+        {safe_ignore}
       </p>
     </div>
     <div style="background:#fafbfc;padding:14px 28px;border-top:1px solid #eef0f2;">
@@ -95,7 +103,7 @@ def _render_verification(body: str, from_name: str) -> tuple[str, str, str]:
     </div>
   </div>
 </div>"""
-    return RU_VERIFICATION_SUBJECT, text, html
+    return subject, text, html
 
 
 class SmtpEmailSender(EmailSender):

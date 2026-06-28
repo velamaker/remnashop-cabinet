@@ -19,6 +19,7 @@ import {
   ShieldAlert,
   Smartphone,
   SquareMenu,
+  Mail,
   Menu,
   X,
 } from "lucide-react";
@@ -38,6 +39,7 @@ const navItems = [
   { to: "/admin/support", icon: LifeBuoy, label: "Поддержка" },
   { to: "/admin/apps", icon: Smartphone, label: "Приложения" },
   { to: "/admin/menu", icon: SquareMenu, label: "Меню" },
+  { to: "/admin/email", icon: Mail, label: "Письмо" },
   { to: "/admin/appearance", icon: Palette, label: "Оформление" },
   { to: "/admin/audit", icon: ShieldAlert, label: "Аудит" },
   { to: "/admin/settings", icon: Settings, label: "Настройки" },
