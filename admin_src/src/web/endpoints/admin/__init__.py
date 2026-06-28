@@ -8,6 +8,7 @@ from .apps import router as apps_router
 from .audit import router as audit_router
 from .broadcasts import router as broadcasts_router
 from .gateways import router as gateways_router
+from .menu import router as menu_router
 from .plans import router as plans_router
 from .promocodes import router as promocodes_router
 from .remnawave import router as remnawave_router
@@ -33,6 +34,7 @@ router.include_router(remnawave_router)
 router.include_router(support_router)
 router.include_router(appearance_router)
 router.include_router(apps_router)
+router.include_router(menu_router)
 router.include_router(audit_router)
 
 __all__ = ["router"]

@@ -1,5 +1,3 @@
-import os
-
 from aiogram.enums import ButtonStyle
 from aiogram_dialog import Dialog, StartMode
 from aiogram_dialog.widgets.input import MessageInput
@@ -33,8 +31,9 @@ from .getters import (
     devices_getter,
     invite_about_getter,
     invite_getter,
-    menu_getter,
+    menu_getter as _base_menu_getter,
 )
+from .menu_config import load_menu_config
 from .handlers import (
     on_device_delete_all_confirm,
     on_device_delete_confirm,
@@ -55,109 +54,75 @@ custom_buttons = (
     build_buttons_row(3, text_on_click=on_text_button_click),
 )
 
-# ── Кнопки доступа в меню (вкл/выкл через env) ────────────────────────────────
-# Каждую кнопку можно включить/выключить переменной окружения. Дефолты дают
-# раскладку: «Личный кабинет» (Mini App) + «Кабинет в браузере» + «Подписка»
-# (стандартная сабка Remnawave как резерв). Кнопки «Подключиться» (→ /devices)
-# по умолчанию выключены — включаются при желании.
-#
-#   BOT_MENU_CABINET_MINIAPP  Личный кабинет через Mini App          (умолч. ON)
-#   BOT_MENU_CABINET_URL      Личный кабинет прямой ссылкой (браузер) (умолч. ON)
-#   BOT_MENU_CONNECT_MINIAPP  Подключиться → кабинет /devices (Mini App)  (OFF)
-#   BOT_MENU_CONNECT_URL      Подключиться → кабинет /devices (ссылка)    (OFF)
-#   BOT_MENU_REMNA_SUB        Стандартная сабка Remnawave (резерв сайта)  (ON)
-def _menu_flag(name: str, default: bool) -> bool:
-    v = os.environ.get(name)
-    if v is None or not v.strip():
-        return default
-    return v.strip().lower() in ("1", "true", "yes", "on", "да")
+# ── Геттер меню с флагами кнопок ──────────────────────────────────────────────
+# Оборачиваем базовый menu_getter и добавляем флаги состава кнопок из конфига
+# (assets/menu.json, см. menu_config). Читается на КАЖДЫЙ рендер — поэтому
+# изменения из админки применяются сразу, без перезапуска бота.
+async def menu_getter(**kwargs):
+    data = await _base_menu_getter(**kwargs)
+    for key, value in load_menu_config().items():
+        data[f"menu_{key}"] = value  # menu_cabinet_miniapp, menu_cabinet_url, …
+    return data
 
 
-_CABINET_MINIAPP = _menu_flag("BOT_MENU_CABINET_MINIAPP", True)
-_CABINET_URL = _menu_flag("BOT_MENU_CABINET_URL", True)
-_CONNECT_MINIAPP = _menu_flag("BOT_MENU_CONNECT_MINIAPP", False)
-_CONNECT_URL = _menu_flag("BOT_MENU_CONNECT_URL", False)
-_REMNA_SUB = _menu_flag("BOT_MENU_REMNA_SUB", True)
-
-
-def _build_menu_links() -> tuple:
-    items: list = []
-    # ── web ВКЛ ──
-    if _CABINET_MINIAPP:
-        items.append(
-            WebApp(
-                text=I18nFormat("btn-menu.web-cabinet"),
-                url=Format("{web_cabinet_url}"),
-                id="cab_miniapp",
-                when=F["web_enabled"],
-                style=Style(ButtonStyle.PRIMARY),
-            )
-        )
-    if _CABINET_URL:
-        items.append(
-            Url(
-                text=Format("🌐 Кабинет в браузере"),
-                url=Format("{web_cabinet_url}"),
-                id="cab_url",
-                when=F["web_enabled"],
-            )
-        )
-    if _CONNECT_MINIAPP:
-        items.append(
-            WebApp(
-                text=I18nFormat("btn-menu.connect"),
-                url=Format("{web_cabinet_url}/devices"),
-                id="connect_cab_miniapp",
-                when=F["web_enabled"] & F["connectable"],
-                style=Style(ButtonStyle.PRIMARY),
-            )
-        )
-    if _CONNECT_URL:
-        items.append(
-            Url(
-                text=I18nFormat("btn-menu.connect-reserve"),
-                url=Format("{web_cabinet_url}/devices"),
-                id="connect_cab_url",
-                when=F["web_enabled"] & F["connectable"],
-            )
-        )
-    if _REMNA_SUB:
-        items.append(
-            Url(
-                text=Format("📲 Подписка (резерв)"),
-                url=Format("{subscription_url}"),
-                id="remna_sub",
-                when=F["web_enabled"] & F["connectable"],
-            )
-        )
-    # ── web ВЫКЛ — стандартное поведение базового бота (сабка Remnawave) ──
-    items.append(
-        WebApp(
-            text=I18nFormat("btn-menu.connect"),
-            url=Format("{connection_url}"),
-            id="connect_miniapp_base",
-            when=~F["web_enabled"] & F["is_mini_app"] & F["connectable"],
-            style=Style(ButtonStyle.PRIMARY),
-        )
-    )
-    items.append(
-        Url(
-            text=I18nFormat("btn-menu.connect-reserve"),
-            url=Format("{subscription_url}"),
-            id="connect_reserve_base",
-            when=~F["web_enabled"] & F["connectable"],
-        )
-    )
-    return tuple(items)
-
-
-cabinet_connect_buttons = _build_menu_links()
+# Кнопки доступа в меню. Видимость каждой управляется флагом из getter'а
+# (F["menu_*"]) — состав редактируется в админке кабинета (страница «Меню»).
+# web ВКЛ: Личный кабинет (Mini App / браузер), Подключиться (→ /devices),
+#          Подписка (сабка Remnawave). web ВЫКЛ: стандартное поведение базы.
+cabinet_connect_buttons = (
+    WebApp(
+        text=I18nFormat("btn-menu.web-cabinet"),
+        url=Format("{web_cabinet_url}"),
+        id="cab_miniapp",
+        when=F["web_enabled"] & F["menu_cabinet_miniapp"],
+        style=Style(ButtonStyle.PRIMARY),
+    ),
+    Url(
+        text=Format("🌐 Кабинет в браузере"),
+        url=Format("{web_cabinet_url}"),
+        id="cab_url",
+        when=F["web_enabled"] & F["menu_cabinet_url"],
+    ),
+    WebApp(
+        text=I18nFormat("btn-menu.connect"),
+        url=Format("{web_cabinet_url}/devices"),
+        id="connect_cab_miniapp",
+        when=F["web_enabled"] & F["connectable"] & F["menu_connect_miniapp"],
+        style=Style(ButtonStyle.PRIMARY),
+    ),
+    Url(
+        text=I18nFormat("btn-menu.connect-reserve"),
+        url=Format("{web_cabinet_url}/devices"),
+        id="connect_cab_url",
+        when=F["web_enabled"] & F["connectable"] & F["menu_connect_url"],
+    ),
+    Url(
+        text=Format("📲 Подписка (резерв)"),
+        url=Format("{subscription_url}"),
+        id="remna_sub",
+        when=F["web_enabled"] & F["connectable"] & F["menu_remna_sub"],
+    ),
+    # web ВЫКЛ — стандартное поведение базового бота (сабка Remnawave)
+    WebApp(
+        text=I18nFormat("btn-menu.connect"),
+        url=Format("{connection_url}"),
+        id="connect_miniapp_base",
+        when=~F["web_enabled"] & F["is_mini_app"] & F["connectable"],
+        style=Style(ButtonStyle.PRIMARY),
+    ),
+    Url(
+        text=I18nFormat("btn-menu.connect-reserve"),
+        url=Format("{subscription_url}"),
+        id="connect_reserve_base",
+        when=~F["web_enabled"] & F["connectable"],
+    ),
+)
 
 menu = Window(
     Banner(BannerName.MENU),
     I18nFormat("msg-main-menu"),
     # Кнопки доступа (Личный кабинет Mini App/браузер, Подписка, Подключиться) —
-    # состав управляется env-флагами BOT_MENU_* (см. _build_menu_links выше).
+    # состав редактируется в админке кабинета (страница «Меню»), флаги menu_*.
     *cabinet_connect_buttons,
     Row(
         Button(
