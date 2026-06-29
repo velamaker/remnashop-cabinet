@@ -15,13 +15,12 @@
 &nbsp;[![лицензия](https://img.shields.io/badge/лицензия-MIT-22c55e?style=flat-square)](LICENSE)
 &nbsp;[![база](https://img.shields.io/badge/база-remnashop%20v0.8.2-4d8bff?style=flat-square)](https://github.com/snoups/remnashop)
 
-<br/>
-
-[![GET STARTED](https://img.shields.io/badge/GET_STARTED_%E2%86%92-2563eb?style=for-the-badge&logo=rocket&logoColor=white)](#-установка)
-
 </div>
 
----
+<details>
+<summary><img alt="GET STARTED — установка и документация" src="https://img.shields.io/badge/GET_STARTED_%E2%86%92-2563eb?style=for-the-badge&logo=rocket&logoColor=white"></summary>
+
+<br/>
 
 ## 📑 Содержание
 
@@ -539,3 +538,5 @@ $DC down               # остановить всё
 | **Solana (SOL)** | `BnJAvjJNXcDGozYbu29vmCzvWrFMpgvXEmgKRxCV3SMG` |
 
 Спасибо за поддержку! 🙏
+
+</details>
