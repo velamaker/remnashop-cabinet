@@ -1,11 +1,23 @@
 <div align="center">
 
-# 🦛 RemnaShop — веб-кабинет и админка
+<img src="docs/banner.svg" alt="RemnaShop — веб-кабинет и админка" width="860"/>
+
+<br/>
+<br/>
 
 **Веб-кабинет пользователя и расширенная админ-панель для Telegram-бота
 [RemnaShop](https://remnashop.mintlify.app/) на базе [Remnawave](https://remna.st/).**
-
 Ставится одной командой поверх уже работающего бота.
+
+<br/>
+
+[![версия](https://img.shields.io/github/v/tag/alexdsndr161rus2015-maker/remnashop-cabinet?sort=semver&label=версия&color=7c5cff&style=flat-square)](https://github.com/alexdsndr161rus2015-maker/remnashop-cabinet/tags)
+&nbsp;[![лицензия](https://img.shields.io/badge/лицензия-MIT-22c55e?style=flat-square)](LICENSE)
+&nbsp;[![база](https://img.shields.io/badge/база-remnashop%20v0.8.2-4d8bff?style=flat-square)](https://github.com/snoups/remnashop)
+
+<br/>
+
+[![GET STARTED](https://img.shields.io/badge/GET_STARTED_%E2%86%92-2563eb?style=for-the-badge&logo=rocket&logoColor=white)](#-установка)
 
 </div>
 

@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { CheckCircle2, AlertCircle, LogOut } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useBranding } from "@/contexts/BrandingContext";
 import { authApi } from "@/api/auth";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -301,6 +302,10 @@ function ManageEmailBlock() {
     setBusy(true);
     setMessage(null);
     try {
+      // Сначала переводим аккаунт в режим смены: changeEmail сбрасывает признак
+      // подтверждения и ставит pending_email. Иначе request-verification для уже
+      // подтверждённой почты отвечает 409 «доступно только без подтверждённого email».
+      await authApi.changeEmail({ email: newEmail });
       await authApi.requestEmailVerification(newEmail);
       setCodeSent(true);
       setMessage({ type: "success", text: "Код отправлен на новый адрес" });
@@ -474,9 +479,39 @@ function ChangePasswordBlock() {
   );
 }
 
+// Сообщения по результату OIDC-привязки (?tg=... в URL после возврата с oauth.telegram.org).
+const TG_LINK_RESULTS: Record<string, { type: "success" | "error"; text: string }> = {
+  linked: { type: "success", text: "Telegram привязан" },
+  already: { type: "error", text: "К аккаунту уже привязан другой Telegram" },
+  conflict: {
+    type: "error",
+    text: "У этого Telegram уже есть отдельный аккаунт с подпиской. Объединение пока недоступно — напишите в поддержку.",
+  },
+  error: { type: "error", text: "Не удалось привязать Telegram" },
+};
+
 function TelegramLinkBlock() {
   const { user, refreshMe } = useAuth();
+  const { telegramOidcEnabled } = useBranding();
   const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  // Разбираем результат возврата с OIDC-привязки и чистим URL, чтобы сообщение
+  // не «залипало» при перезагрузке.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tag = params.get("tg");
+    if (!tag) return;
+    setResult(TG_LINK_RESULTS[tag] ?? null);
+    if (tag === "linked") void refreshMe();
+    params.delete("tg");
+    const qs = params.toString();
+    window.history.replaceState(
+      {},
+      "",
+      window.location.pathname + (qs ? `?${qs}` : ""),
+    );
+  }, [refreshMe]);
 
   if (!user || user.telegram_id) {
     return (
@@ -487,6 +522,11 @@ function TelegramLinkBlock() {
             ? `Аккаунт привязан (ID: ${user.telegram_id})`
             : "Загрузка..."}
         </p>
+        {result && (
+          <p className={`mt-2 text-sm ${result.type === "success" ? "text-success" : "text-danger"}`}>
+            {result.text}
+          </p>
+        )}
       </Card>
     );
   }
@@ -504,10 +544,37 @@ function TelegramLinkBlock() {
   return (
     <Card variant="bordered">
       <CardHeader title="Привязать Telegram" subtitle="Для быстрого входа и уведомлений" />
-      {TELEGRAM_BOT_USERNAME && (
-        <TelegramLoginButton botUsername={TELEGRAM_BOT_USERNAME} onAuth={handleLink} />
+      {/* Оба способа, если доступны: новый OIDC (без «deprecated») + классический
+          виджет как запасной. Включение OIDC не убирает старую привязку. */}
+      <div className="flex flex-col items-start gap-2.5">
+        {telegramOidcEnabled && (
+          // Новый флоу Telegram (OpenID Connect): привязка к текущему аккаунту.
+          <button
+            type="button"
+            onClick={() => {
+              window.location.href = "/api/auth/telegram/oidc/start?mode=link";
+            }}
+            className="flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-[#2aabee] text-sm font-medium text-white transition-colors hover:bg-[#1f97d4] sm:w-auto sm:px-5"
+          >
+            <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current" aria-hidden>
+              <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z" />
+            </svg>
+            Привязать через Telegram
+          </button>
+        )}
+        {TELEGRAM_BOT_USERNAME && (
+          <TelegramLoginButton botUsername={TELEGRAM_BOT_USERNAME} onAuth={handleLink} />
+        )}
+      </div>
+      {(result || error) && (
+        <p
+          className={`mt-2 text-sm ${
+            result?.type === "success" ? "text-success" : "text-danger"
+          }`}
+        >
+          {error ?? result?.text}
+        </p>
       )}
-      {error && <p className="mt-2 text-sm text-danger">{error}</p>}
     </Card>
   );
 }

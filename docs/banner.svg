@@ -1,0 +1,44 @@
+<svg width="1000" height="340" viewBox="0 0 1000 340" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="RemnaShop — веб-кабинет и админка">
+  <defs>
+    <linearGradient id="neon" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="0.5" stop-color="#4d8bff"/>
+      <stop offset="1" stop-color="#a855f7"/>
+    </linearGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7dd3fc"/>
+      <stop offset="0.55" stop-color="#818cf8"/>
+      <stop offset="1" stop-color="#c084fc"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#4d8bff" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#4d8bff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+  </defs>
+
+  <!-- Панель -->
+  <rect x="2" y="2" width="996" height="336" rx="28" fill="#0a0d16" stroke="#1d2433" stroke-width="2"/>
+  <ellipse cx="250" cy="170" rx="300" ry="220" fill="url(#glow)"/>
+  <ellipse cx="820" cy="120" rx="260" ry="200" fill="url(#glow)" opacity="0.5"/>
+
+  <!-- Щит (glow + контур) -->
+  <g transform="translate(150 170)">
+    <path d="M0 -92 L72 -62 L72 6 C72 64 40 96 0 116 C-40 96 -72 64 -72 6 L-72 -62 Z"
+          fill="none" stroke="url(#neon)" stroke-width="9" filter="url(#soft)" opacity="0.7"/>
+    <path d="M0 -92 L72 -62 L72 6 C72 64 40 96 0 116 C-40 96 -72 64 -72 6 L-72 -62 Z"
+          fill="#0c1322" stroke="url(#neon)" stroke-width="6"/>
+    <path d="M-34 6 L-6 36 L40 -28" fill="none" stroke="url(#neon)" stroke-width="11"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Текст -->
+  <text x="278" y="158" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="86"
+        font-weight="800" letter-spacing="-2" fill="url(#word)">Remnashop</text>
+  <text x="282" y="206" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="27"
+        font-weight="600" letter-spacing="7" fill="#8aa0c0">ВЕБ-КАБИНЕТ · АДМИНКА</text>
+  <text x="282" y="244" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="19"
+        font-weight="500" letter-spacing="1" fill="#5d6b82">Личный кабинет и панель управления на базе Remnawave</text>
+</svg>

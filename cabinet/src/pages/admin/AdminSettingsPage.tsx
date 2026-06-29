@@ -1,13 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
-import { Save, AlertCircle, CheckCircle2, Bell } from "lucide-react";
+import { Save, AlertCircle, CheckCircle2, Bell, Lock, Coins, SlidersHorizontal } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { settingsAdminApi, type AdminSettings } from "@/api/admin";
 import { ApiError } from "@/types/api";
+
+// Крупный блок настроек: заголовок с иконкой + вложенные секции (карточки).
+function Group({ title, icon: Icon, children }: { title: string; icon: LucideIcon; children: React.ReactNode }) {
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center gap-2 px-1 pt-1">
+        <Icon className="h-[18px] w-[18px] text-accent" />
+        <h2 className="text-base font-bold text-fg md:text-lg">{title}</h2>
+      </div>
+      {children}
+    </section>
+  );
+}
 
 function Section({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) {
   return (
     <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
       <div className="mb-4">
-        <h2 className="text-sm font-semibold text-fg">{title}</h2>
+        <h3 className="text-sm font-semibold text-fg">{title}</h3>
         {desc && <p className="mt-0.5 text-xs text-fg-muted">{desc}</p>}
       </div>
       <div className="space-y-2.5">{children}</div>
@@ -211,7 +225,7 @@ export default function AdminSettingsPage() {
   const firstRewardValue = Object.values(settings.referral.reward.config)[0] ?? 0;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto max-w-3xl space-y-8">
       {/* Sticky header */}
       <div className="sticky top-0 z-10 -mx-5 flex items-center justify-between border-b border-border-subtle bg-bg/80 px-5 py-3 backdrop-blur-md md:-mx-8 md:px-8">
         <h1 className="text-xl font-bold text-fg md:text-2xl">Настройки</h1>
@@ -234,6 +248,7 @@ export default function AdminSettingsPage() {
         </div>
       )}
 
+      <Group title="Доступ и регистрация" icon={Lock}>
       {/* Access */}
       <Section title="Доступ" desc="Кто и как может пользоваться сервисом">
         <div>
@@ -264,6 +279,9 @@ export default function AdminSettingsPage() {
         </div>
       </Section>
 
+      </Group>
+
+      <Group title="Монетизация и рефералы" icon={Coins}>
       {/* Referral */}
       <Section title="Реферальная программа">
         <Toggle label="Реферальная программа" sub="Включить начисление наград за приглашённых" checked={settings.referral.enable} onChange={(v) => upd(["referral", "enable"], v)} />
@@ -299,6 +317,9 @@ export default function AdminSettingsPage() {
         </div>
       </Section>
 
+      </Group>
+
+      <Group title="Система" icon={SlidersHorizontal}>
       {/* Backup */}
       <Section title="Резервные копии">
         <div className="grid gap-2.5 sm:grid-cols-2">
@@ -327,7 +348,7 @@ export default function AdminSettingsPage() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Bell className="h-4 w-4 text-fg-muted" />
-            <h2 className="text-sm font-semibold text-fg">Уведомления</h2>
+            <h3 className="text-sm font-semibold text-fg">Уведомления</h3>
             <span className="rounded-full bg-bg px-2 py-0.5 text-xs font-medium text-fg-muted">
               {notifStats.on} / {notifStats.total}
             </span>
@@ -355,6 +376,7 @@ export default function AdminSettingsPage() {
           ))}
         </div>
       </section>
+      </Group>
     </div>
   );
 }

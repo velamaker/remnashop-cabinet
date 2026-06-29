@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ShieldCheck } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -10,6 +9,7 @@ import { TelegramLoginButton } from "@/components/TelegramLoginButton";
 import { ApiError, type TelegramAuthRequest } from "@/types/api";
 import { getTelegramWebApp, whenTelegramReady } from "@/hooks/useTelegramWebApp";
 import { BrandWordmark } from "@/components/BrandWordmark";
+import { BrandLogo } from "@/components/BrandLogo";
 import { useBranding } from "@/contexts/BrandingContext";
 
 const TELEGRAM_BOT_USERNAME = import.meta.env.VITE_TELEGRAM_BOT_USERNAME || "";
@@ -137,9 +137,7 @@ export default function LoginPage() {
       <div className="relative z-10 w-full max-w-[360px] animate-fade-in">
         {/* Brand */}
         <div className="mb-8 text-center">
-          <div className="brand-mark mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl text-white">
-            <ShieldCheck className="h-6 w-6" strokeWidth={2.2} />
-          </div>
+          <BrandLogo size={48} className="mx-auto mb-4" />
           <div className="flex items-baseline justify-center">
             <BrandWordmark className="text-2xl" />
           </div>
@@ -152,28 +150,34 @@ export default function LoginPage() {
         <div className="rounded-xl border border-[var(--border)] bg-bg-raised p-6">
           {(telegramOidcEnabled || TELEGRAM_BOT_USERNAME) && (
             <>
-              {telegramOidcEnabled ? (
-                // Новый флоу Telegram (OpenID Connect): редирект на oauth.telegram.org.
-                <button
-                  type="button"
-                  onClick={() => {
-                    window.location.href = "/api/auth/telegram/oidc/start";
-                  }}
-                  className="flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-[#2aabee] text-sm font-medium text-white transition-colors hover:bg-[#1f97d4]"
-                >
-                  <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current" aria-hidden>
-                    <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z" />
-                  </svg>
-                  Войти через Telegram
-                </button>
-              ) : (
-                TELEGRAM_BOT_USERNAME && (
-                  <TelegramLoginButton
-                    botUsername={TELEGRAM_BOT_USERNAME}
-                    onAuth={handleTelegramAuth}
-                  />
-                )
-              )}
+              {/* Показываем ОБА способа входа через Telegram, если оба доступны:
+                  новый OIDC (без «deprecated») + классический виджет как привычный
+                  запасной. Включение OIDC не убирает старый вход. */}
+              <div className="flex flex-col items-stretch gap-2.5">
+                {telegramOidcEnabled && (
+                  // Новый флоу Telegram (OpenID Connect): редирект на oauth.telegram.org.
+                  <button
+                    type="button"
+                    onClick={() => {
+                      window.location.href = "/api/auth/telegram/oidc/start";
+                    }}
+                    className="flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-[#2aabee] text-sm font-medium text-white transition-colors hover:bg-[#1f97d4]"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current" aria-hidden>
+                      <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z" />
+                    </svg>
+                    Войти через Telegram
+                  </button>
+                )}
+                {TELEGRAM_BOT_USERNAME && (
+                  <div className="flex justify-center">
+                    <TelegramLoginButton
+                      botUsername={TELEGRAM_BOT_USERNAME}
+                      onAuth={handleTelegramAuth}
+                    />
+                  </div>
+                )}
+              </div>
               <div className="my-5 flex items-center gap-3">
                 <div className="h-px flex-1 bg-[var(--border)]" />
                 <span className="text-xs text-fg-subtle">или</span>

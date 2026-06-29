@@ -24,8 +24,17 @@ backups/
 logs/
 *.log
 
-# Оформление конкретной установки (название/цвета) — не часть кода
+# Дампы БД (update.sh кладёт их в корень) — НИКОГДА не коммитить: данные юзеров
+backup-*.sql.gz
+*.sql.gz
+*.sql
+
+# Оформление/состояние конкретной установки — не часть кода
 assets/branding.json
+assets/logo.*
+assets/menu.json
+assets/reminders.json
+assets/update_state.json
 
 # Editor / OS
 .DS_Store

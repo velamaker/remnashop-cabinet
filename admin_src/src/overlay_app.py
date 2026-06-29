@@ -119,6 +119,30 @@ def _wrap_lifespan_with_support_tables(app: FastAPI, container: AsyncContainer) 
         except Exception as exc:  # не валим старт из-за overlay-таблиц
             logger.exception(f"Overlay: не удалось создать таблицы поддержки: {exc}")
 
+        # Сверка роли владельца: гарантируем, что у BOT_OWNER_ID роль OWNER.
+        # Веб-вход в кабинет (через Telegram) создаёт юзера БЕЗ owner-проверки —
+        # поэтому владелец, впервые зашедший через сайт, оставался USER и не видел
+        # админку. Идемпотентно чиним при каждом старте (как бот делает на /start).
+        try:
+            owner_id = getattr(AppConfig.get().bot, "owner_id", None)
+            if owner_id:
+                async with container(scope=Scope.REQUEST) as request_container:
+                    session = await request_container.get(AsyncSession)
+                    res = await session.execute(
+                        text(
+                            "UPDATE users SET role = 'OWNER' "
+                            "WHERE telegram_id = :oid AND role <> 'OWNER'"
+                        ),
+                        {"oid": owner_id},
+                    )
+                    await session.commit()
+                    if res.rowcount:
+                        logger.info(
+                            f"Overlay: роль OWNER восстановлена для telegram_id={owner_id}"
+                        )
+        except Exception as exc:  # роль не критична для старта
+            logger.exception(f"Overlay: не удалось сверить роль владельца: {exc}")
+
         async with base_lifespan(app):
             yield
 

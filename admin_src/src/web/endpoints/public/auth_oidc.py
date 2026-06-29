@@ -36,8 +36,10 @@ from fastapi.responses import RedirectResponse
 
 from src.application.common.dao import UserDao
 from src.application.common.dao.auth import AuthSessionDao
+from src.application.common.uow import UnitOfWork
 from src.application.use_cases.user.commands.web_registration import RegisterWebUser
 from src.core.config import AppConfig
+from src.core.enums import Role
 
 router = APIRouter(prefix="/auth/telegram/oidc", tags=["Public - Telegram OIDC"])
 
@@ -98,7 +100,10 @@ def _jwks() -> "jwt.PyJWKClient":
 
 @router.get("/start")
 @inject
-async def oidc_start(config: FromDishka[AppConfig]) -> RedirectResponse:
+async def oidc_start(
+    request: Request,
+    config: FromDishka[AppConfig],
+) -> RedirectResponse:
     if not oidc_enabled():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
@@ -107,8 +112,33 @@ async def oidc_start(config: FromDishka[AppConfig]) -> RedirectResponse:
     code_verifier = secrets.token_urlsafe(48)
     code_challenge = _b64url(hashlib.sha256(code_verifier.encode("ascii")).digest())
 
+    tx_payload: dict[str, Any] = {
+        "st": state,
+        "no": nonce,
+        "cv": code_verifier,
+        "exp": int(time.time()) + TX_TTL,
+    }
+
+    # Режим ПРИВЯЗКИ (?mode=link): не логинимся, а привязываем Telegram к уже
+    # залогиненному аккаунту. Запоминаем id текущего пользователя в подписанной
+    # tx-куке, чтобы callback знал, к кому привязывать (а не создавал новый акк).
+    if (request.query_params.get("mode") or "").strip() == "link":
+        from src.web.endpoints.public._common import decode_access_token
+
+        token = request.cookies.get("access_token")
+        uid: Optional[int] = None
+        if token:
+            try:
+                uid = decode_access_token(token, _signing_secret(config))
+            except Exception:
+                uid = None
+        if uid is None:
+            # Нет валидной сессии — привязывать некого, отправляем на вход.
+            return RedirectResponse(f"{_cabinet_url()}/login?error=auth", status_code=302)
+        tx_payload["uid"] = uid
+
     tx = jwt.encode(
-        {"st": state, "no": nonce, "cv": code_verifier, "exp": int(time.time()) + TX_TTL},
+        tx_payload,
         _signing_secret(config),
         algorithm="HS256",
     )
@@ -138,6 +168,7 @@ async def oidc_callback(
     user_dao: FromDishka[UserDao],
     register_web_user: FromDishka[RegisterWebUser],
     auth_session: FromDishka[AuthSessionDao],
+    uow: FromDishka[UnitOfWork],
 ) -> RedirectResponse:
     if not oidc_enabled():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
@@ -157,12 +188,15 @@ async def oidc_callback(
     if not code or not state or not tx_raw:
         return RedirectResponse(f"{login_url}?error=telegram", status_code=302)
 
+    link_uid: Optional[int] = None
     try:
         tx = jwt.decode(tx_raw, _signing_secret(config), algorithms=["HS256"])
         if not secrets.compare_digest(str(tx.get("st", "")), state):
             raise ValueError("state mismatch")
         nonce = tx.get("no", "")
         code_verifier = tx["cv"]
+        if tx.get("uid") is not None:
+            link_uid = int(tx["uid"])
 
         # 1) code → id_token
         async with httpx.AsyncClient(timeout=10) as cli:
@@ -205,7 +239,55 @@ async def oidc_callback(
         username=claims.get("preferred_username") or claims.get("username"),
         payload={},
     )
+
+    # Режим ПРИВЯЗКИ: привязываем Telegram к текущему аккаунту, НЕ создаём новый и
+    # НЕ выдаём новую сессию. Зеркалит проверки конфликтов из базового LinkTelegram
+    # (verify_telegram_auth здесь не нужен — доверяем подписи id_token Telegram).
+    if link_uid is not None:
+        settings_url = f"{_cabinet_url()}/settings"
+        current = await user_dao.get_by_id(link_uid)
+        if current is None:
+            return RedirectResponse(f"{login_url}?error=auth", status_code=302)
+
+        def _back(tag: str) -> RedirectResponse:
+            r = RedirectResponse(f"{settings_url}?tg={tag}", status_code=302)
+            r.delete_cookie(TX_COOKIE, httponly=True, secure=True, samesite="lax")
+            return r
+
+        if current.telegram_id == tg_id:
+            return _back("linked")  # уже привязан этот же Telegram — идемпотентно
+        if current.telegram_id is not None:
+            return _back("already")  # к аккаунту уже привязан ДРУГОЙ Telegram
+
+        existing = await user_dao.get_by_telegram_id(tg_id)
+        if existing and existing.id != current.id:
+            # У этого Telegram уже есть отдельный аккаунт (возможно с подпиской).
+            # Объединение — отдельная фича; пока безопасно отказываем без дубля.
+            return _back("conflict")
+
+        current.telegram_id = tg_id
+        if data.username is not None:
+            current.username = data.username
+        # Если привязали владельческий Telegram (BOT_OWNER_ID) — сразу OWNER.
+        if config.bot.owner_id and tg_id == config.bot.owner_id and current.role != Role.OWNER:
+            current.role = Role.OWNER
+        async with uow:
+            await user_dao.update(current)
+            await uow.commit()
+        return _back("linked")
+
     user = await _get_or_create_telegram_user(user_dao, register_web_user, config, data)
+    # Веб-вход не применяет правило BOT_OWNER_ID — поднимаем роль владельца здесь,
+    # чтобы он не оказался обычным USER без админки (см. overlay_app startup-сверку).
+    if (
+        config.bot.owner_id
+        and user.telegram_id == config.bot.owner_id
+        and user.role != Role.OWNER
+    ):
+        user.role = Role.OWNER
+        async with uow:
+            await user_dao.update(user)
+            await uow.commit()
     access_token, refresh_token, _ = await issue_session(user, config, auth_session)
 
     resp = RedirectResponse(_cabinet_url() or "/", status_code=302)

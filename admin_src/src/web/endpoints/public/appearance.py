@@ -16,7 +16,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import FileResponse
 
 router = APIRouter(prefix="/appearance", tags=["Public - Appearance"])
 
@@ -25,13 +26,43 @@ BRANDING_PATH = ASSETS_DIR / "branding.json"
 
 FALLBACK_BRAND = "RemnaShop"
 
+# Расширения логотипа → media-type. SVG, загруженный через <img>, скрипты не
+# исполняет — безопасно отдавать как картинку.
+LOGO_MEDIA_TYPES: dict[str, str] = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".gif": "image/gif",
+}
+
 # brand_name == None → подхватывается автоматически (см. resolve_brand_name).
 # accent / background == None → кабинет использует цвета темы по умолчанию.
+# logo_file == None → логотип не загружен (показывается дефолтная иконка).
 DEFAULTS: dict[str, Any] = {
     "brand_name": None,
     "accent": None,
     "background": None,
+    "logo_file": None,
 }
+
+
+def logo_path(logo_file: Optional[str]) -> Optional[Path]:
+    """Безопасный путь к файлу логотипа внутри ASSETS_DIR (или None)."""
+    if not logo_file:
+        return None
+    # Только basename — защита от path traversal (logo_file пишет админ, но всё же).
+    path = ASSETS_DIR / Path(logo_file).name
+    return path if path.exists() else None
+
+
+def logo_url(logo_file: Optional[str]) -> Optional[str]:
+    """Публичный URL логотипа с cache-busting по mtime, либо None."""
+    path = logo_path(logo_file)
+    if path is None:
+        return None
+    return f"/api/appearance/logo?v={int(path.stat().st_mtime)}"
 
 # Кэш имени бота, чтобы не дёргать getMe на каждый запрос.
 _bot_name_cache: Optional[str] = None
@@ -103,6 +134,8 @@ async def get_appearance() -> dict[str, Any]:
     if not data.get("brand_name"):
         data["brand_name"] = resolve_brand_name()
     data["support_username"] = _support_username()
+    # logo_file — внутреннее имя файла; наружу отдаём готовый logo_url.
+    data["logo_url"] = logo_url(data.pop("logo_file", None))
     # Вход через Telegram по OIDC доступен, только если заданы client_id/secret
     # (BotFather → Web Login). Иначе кабинет покажет классический Login Widget.
     data["telegram_oidc_enabled"] = bool(
@@ -110,3 +143,13 @@ async def get_appearance() -> dict[str, Any]:
         and (os.environ.get("TELEGRAM_OIDC_CLIENT_SECRET") or "").strip()
     )
     return data
+
+
+@router.get("/logo")
+async def get_logo() -> FileResponse:
+    """Отдаёт загруженный логотип кабинета (публично, для тега <img>)."""
+    path = logo_path(load_branding().get("logo_file"))
+    if path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Logo not set")
+    media = LOGO_MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
+    return FileResponse(path, media_type=media)

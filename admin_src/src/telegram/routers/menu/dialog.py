@@ -2,7 +2,7 @@ from aiogram.enums import ButtonStyle
 from aiogram_dialog import Dialog, StartMode
 from aiogram_dialog.widgets.input import MessageInput
 from aiogram_dialog.widgets.style import Style
-from aiogram_dialog.widgets.text import Format
+from aiogram_dialog.widgets.text import Const, Format
 from magic_filter import F
 
 from src.application.common.policy import Permission
@@ -78,7 +78,7 @@ cabinet_connect_buttons = (
         style=Style(ButtonStyle.PRIMARY),
     ),
     Url(
-        text=Format("🌐 Кабинет в браузере"),
+        text=Const("🌐 Кабинет в браузере"),
         url=Format("{web_cabinet_url}"),
         id="cab_url",
         when=F["web_enabled"] & F["menu_cabinet_url"],
@@ -97,7 +97,7 @@ cabinet_connect_buttons = (
         when=F["web_enabled"] & F["connectable"] & F["menu_connect_url"],
     ),
     Url(
-        text=Format("📲 Подписка (резерв)"),
+        text=Const("📲 Подписка (резерв)"),
         url=Format("{subscription_url}"),
         id="remna_sub",
         when=F["web_enabled"] & F["connectable"] & F["menu_remna_sub"],

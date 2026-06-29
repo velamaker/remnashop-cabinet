@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { BrandWordmark } from "@/components/BrandWordmark";
+import { BrandLogo } from "@/components/BrandLogo";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
 import { getTelegramWebApp } from "@/hooks/useTelegramWebApp";
 
@@ -71,9 +72,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
       <aside className="relative z-10 hidden w-52 flex-shrink-0 flex-col border-r border-[var(--border)] bg-bg/70 px-2 py-5 backdrop-blur-xl md:flex sticky top-0 h-screen overflow-hidden">
         {/* Brand — клик возвращает на главную */}
         <NavLink to="/" end className="mb-7 flex items-center gap-3 rounded-xl px-2 py-1 transition-opacity hover:opacity-80">
-          <div className="brand-mark flex h-[42px] w-[42px] items-center justify-center rounded-2xl text-white">
-            <ShieldCheck className="h-[23px] w-[23px]" strokeWidth={2.2} />
-          </div>
+          <BrandLogo size={42} />
           <BrandWordmark className="text-[20px] leading-none" />
         </NavLink>
 
@@ -153,9 +152,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
       {/* Mobile top bar */}
       <div className="fixed inset-x-0 top-0 z-30 flex items-center justify-between border-b border-[var(--border)] bg-bg px-4 py-3 md:hidden">
         <NavLink to="/" end className="flex items-center gap-2 transition-opacity active:opacity-70">
-          <div className="brand-mark flex h-7 w-7 items-center justify-center rounded-lg text-white">
-            <ShieldCheck className="h-4 w-4" strokeWidth={2.2} />
-          </div>
+          <BrandLogo size={28} className="!rounded-lg" />
           <BrandWordmark className="text-sm" />
         </NavLink>
         <div className="flex items-center gap-1">
