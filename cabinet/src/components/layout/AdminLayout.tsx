@@ -23,27 +23,99 @@ import {
   Menu,
   X,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
 
-const navItems = [
-  { to: "/admin", icon: LayoutDashboard, label: "Обзор", end: true },
-  { to: "/admin/users", icon: Users, label: "Пользователи" },
-  { to: "/admin/transactions", icon: CreditCard, label: "Транзакции" },
-  { to: "/admin/promocodes", icon: Tag, label: "Промокоды" },
-  { to: "/admin/plans", icon: Package, label: "Тарифы" },
-  { to: "/admin/gateways", icon: Wallet, label: "Шлюзы" },
-  { to: "/admin/ad-links", icon: Link2, label: "Рекл. ссылки" },
-  { to: "/admin/broadcasts", icon: Radio, label: "Рассылки" },
-  { to: "/admin/remnawave", icon: Waves, label: "RemnaWave" },
-  { to: "/admin/support", icon: LifeBuoy, label: "Поддержка" },
-  { to: "/admin/apps", icon: Smartphone, label: "Приложения" },
-  { to: "/admin/menu", icon: SquareMenu, label: "Меню" },
-  { to: "/admin/email", icon: Mail, label: "Письмо" },
-  { to: "/admin/appearance", icon: Palette, label: "Оформление" },
-  { to: "/admin/audit", icon: ShieldAlert, label: "Аудит" },
-  { to: "/admin/settings", icon: Settings, label: "Настройки" },
+type NavItem = { to: string; icon: LucideIcon; label: string; end?: boolean };
+
+// Разделы сгруппированы по категориям (заголовки в сайдбаре), чтобы длинный
+// список не висел плоской простынёй.
+const navGroups: { title: string; items: NavItem[] }[] = [
+  {
+    title: "Аналитика",
+    items: [
+      { to: "/admin", icon: LayoutDashboard, label: "Обзор", end: true },
+      { to: "/admin/transactions", icon: CreditCard, label: "Транзакции" },
+    ],
+  },
+  {
+    title: "Пользователи",
+    items: [
+      { to: "/admin/users", icon: Users, label: "Пользователи" },
+      { to: "/admin/support", icon: LifeBuoy, label: "Поддержка" },
+    ],
+  },
+  {
+    title: "Продажи",
+    items: [
+      { to: "/admin/plans", icon: Package, label: "Тарифы" },
+      { to: "/admin/promocodes", icon: Tag, label: "Промокоды" },
+      { to: "/admin/gateways", icon: Wallet, label: "Шлюзы" },
+    ],
+  },
+  {
+    title: "Маркетинг",
+    items: [
+      { to: "/admin/ad-links", icon: Link2, label: "Рекл. ссылки" },
+      { to: "/admin/broadcasts", icon: Radio, label: "Рассылки" },
+    ],
+  },
+  {
+    title: "Кабинет",
+    items: [
+      { to: "/admin/appearance", icon: Palette, label: "Оформление" },
+      { to: "/admin/menu", icon: SquareMenu, label: "Меню" },
+      { to: "/admin/apps", icon: Smartphone, label: "Приложения" },
+      { to: "/admin/email", icon: Mail, label: "Письмо" },
+    ],
+  },
+  {
+    title: "Система",
+    items: [
+      { to: "/admin/remnawave", icon: Waves, label: "RemnaWave" },
+      { to: "/admin/settings", icon: Settings, label: "Настройки" },
+      { to: "/admin/audit", icon: ShieldAlert, label: "Аудит" },
+    ],
+  },
 ];
+
+// Плоский список для мобильного нижнего навбара (там без группировки).
+const navItems = navGroups.flatMap((g) => g.items);
+
+function GroupedNav({ onNavigate, itemPad }: { onNavigate?: () => void; itemPad: string }) {
+  return (
+    <>
+      {navGroups.map((group) => (
+        <div key={group.title} className="flex flex-col gap-0.5">
+          <span className="px-2.5 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">
+            {group.title}
+          </span>
+          {group.items.map(({ to, icon: Icon, label, end }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={end}
+              onClick={onNavigate}
+              className={({ isActive }) =>
+                clsx(
+                  "flex items-center gap-2.5 rounded-lg px-2.5 text-sm transition-colors duration-150",
+                  itemPad,
+                  isActive
+                    ? "bg-bg-raised font-medium text-fg"
+                    : "font-normal text-fg-muted hover:bg-bg-subtle hover:text-fg",
+                )
+              }
+            >
+              <Icon className="h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
+              {label}
+            </NavLink>
+          ))}
+        </div>
+      ))}
+    </>
+  );
+}
 
 export function AdminLayout({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
@@ -67,24 +139,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
         </div>
 
         <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto min-h-0">
-          {navItems.map(({ to, icon: Icon, label, end }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              className={({ isActive }) =>
-                clsx(
-                  "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors duration-150",
-                  isActive
-                    ? "bg-bg-raised font-medium text-fg"
-                    : "font-normal text-fg-muted hover:bg-bg-subtle hover:text-fg",
-                )
-              }
-            >
-              <Icon className="h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
-              {label}
-            </NavLink>
-          ))}
+          <GroupedNav itemPad="py-2" />
         </nav>
 
         <div className="mt-4 flex flex-col gap-0.5 border-t border-[var(--border)] pt-4">
@@ -154,25 +209,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             </div>
 
             <nav className="flex flex-1 flex-col gap-0.5">
-              {navItems.map(({ to, icon: Icon, label, end }) => (
-                <NavLink
-                  key={to}
-                  to={to}
-                  end={end}
-                  onClick={() => setMenuOpen(false)}
-                  className={({ isActive }) =>
-                    clsx(
-                      "flex items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-sm transition-colors",
-                      isActive
-                        ? "bg-bg-raised font-medium text-fg"
-                        : "font-normal text-fg-muted hover:bg-bg-subtle hover:text-fg",
-                    )
-                  }
-                >
-                  <Icon className="h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
-                  {label}
-                </NavLink>
-              ))}
+              <GroupedNav onNavigate={() => setMenuOpen(false)} itemPad="py-2.5" />
             </nav>
 
             <div className="mt-4 flex flex-col gap-0.5 border-t border-[var(--border)] pt-4">
