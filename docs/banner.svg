@@ -1,4 +1,4 @@
-<svg width="1000" height="340" viewBox="0 0 1000 340" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="RemnaShop — веб-кабинет и админка">
+<svg width="1000" height="340" viewBox="0 0 1000 340" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Веб-кабинет и админка">
   <defs>
     <linearGradient id="neon" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#22d3ee"/>
@@ -19,12 +19,10 @@
     </filter>
   </defs>
 
-  <!-- Панель -->
   <rect x="2" y="2" width="996" height="336" rx="28" fill="#0a0d16" stroke="#1d2433" stroke-width="2"/>
   <ellipse cx="250" cy="170" rx="300" ry="220" fill="url(#glow)"/>
   <ellipse cx="820" cy="120" rx="260" ry="200" fill="url(#glow)" opacity="0.5"/>
 
-  <!-- Щит (glow + контур) -->
   <g transform="translate(150 170)">
     <path d="M0 -92 L72 -62 L72 6 C72 64 40 96 0 116 C-40 96 -72 64 -72 6 L-72 -62 Z"
           fill="none" stroke="url(#neon)" stroke-width="9" filter="url(#soft)" opacity="0.7"/>
@@ -34,11 +32,10 @@
           stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 
-  <!-- Текст -->
-  <text x="278" y="158" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="86"
-        font-weight="800" letter-spacing="-2" fill="url(#word)">Remnashop</text>
-  <text x="282" y="206" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="27"
-        font-weight="600" letter-spacing="7" fill="#8aa0c0">ВЕБ-КАБИНЕТ · АДМИНКА</text>
-  <text x="282" y="244" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="19"
-        font-weight="500" letter-spacing="1" fill="#5d6b82">Личный кабинет и панель управления на базе Remnawave</text>
+  <text x="278" y="156" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="80"
+        font-weight="800" letter-spacing="-2" fill="url(#word)">Веб-кабинет</text>
+  <text x="282" y="202" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="25"
+        font-weight="600" letter-spacing="6" fill="#8aa0c0">КАБИНЕТ ПОЛЬЗОВАТЕЛЯ · АДМИНКА</text>
+  <text x="282" y="240" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="18"
+        font-weight="500" letter-spacing="1" fill="#5d6b82">для Telegram-бота на базе RemnaShop</text>
 </svg>
