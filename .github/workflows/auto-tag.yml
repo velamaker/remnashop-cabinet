@@ -1,0 +1,36 @@
+name: Auto-tag from VERSION
+
+# Когда в main меняется файл VERSION — автоматически создаём git-тег vX.Y.Z.
+# Бейдж версии в README (github/v/tag) подтянет его сам. Ручных шагов не нужно.
+on:
+  push:
+    branches: [main]
+    paths: ["VERSION"]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # нужны все теги, чтобы не дублировать
+
+      - name: Create tag from VERSION
+        run: |
+          set -eu
+          VER="$(tr -d ' \t\n\r' < VERSION)"
+          if [ -z "$VER" ]; then
+            echo "VERSION пустой — пропускаю"; exit 0
+          fi
+          TAG="v$VER"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "Тег $TAG уже существует — пропускаю"; exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+          echo "Создан и запушен тег $TAG"
