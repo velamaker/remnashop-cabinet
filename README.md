@@ -17,11 +17,6 @@
 
 </div>
 
-<details>
-<summary><img alt="GET STARTED — установка и документация" src="https://img.shields.io/badge/GET_STARTED_%E2%86%92-2563eb?style=for-the-badge&logo=rocket&logoColor=white"></summary>
-
-<br/>
-
 ## 📑 Содержание
 
 - [Что это](#-что-это)
@@ -510,5 +505,3 @@ Remnawave (ноды панели бота) и не редактируется.
 | **Solana (SOL)** | `BnJAvjJNXcDGozYbu29vmCzvWrFMpgvXEmgKRxCV3SMG` |
 
 Спасибо за поддержку! 🙏
-
-</details>
