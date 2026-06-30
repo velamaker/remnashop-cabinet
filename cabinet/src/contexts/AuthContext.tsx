@@ -19,7 +19,12 @@ import type {
 
 interface AuthContextValue {
   user: MeResponse | null;
+  // Доступ к админ-разделу вообще (полный админ ИЛИ read-only).
   isAdmin: boolean;
+  // Админ только для просмотра — видит админку, но ничего не меняет.
+  isReadonlyAdmin: boolean;
+  // Владелец — может менять роли пользователей.
+  isOwner: boolean;
   hasPassword: boolean;
   isLoading: boolean;
   login: (data: LoginRequest) => Promise<void>;
@@ -35,6 +40,8 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<MeResponse | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isReadonlyAdmin, setIsReadonlyAdmin] = useState(false);
+  const [isOwner, setIsOwner] = useState(false);
   const [hasPassword, setHasPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -42,19 +49,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const me = await authApi.me();
       setUser(me);
-      // fail-closed: админ-доступ только при явном is_admin от бэкенда
+      // fail-closed: админ-доступ только при явных флагах от бэкенда
       try {
         const who = await authApi.whoami();
-        setIsAdmin(Boolean(who?.is_admin));
+        // В админ-раздел пускаем как полных, так и read-only админов.
+        setIsAdmin(Boolean(who?.can_access_admin ?? who?.is_admin));
+        setIsReadonlyAdmin(Boolean(who?.is_readonly_admin));
+        setIsOwner(Boolean(who?.is_owner));
         setHasPassword(Boolean(who?.has_password));
       } catch {
         setIsAdmin(false);
+        setIsReadonlyAdmin(false);
+        setIsOwner(false);
         setHasPassword(false);
       }
     } catch (e) {
       if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
         setUser(null);
         setIsAdmin(false);
+        setIsReadonlyAdmin(false);
+        setIsOwner(false);
         setHasPassword(false);
       } else {
         throw e;
@@ -104,6 +118,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setUser(null);
       setIsAdmin(false);
+      setIsReadonlyAdmin(false);
+      setIsOwner(false);
       setHasPassword(false);
     }
   }, []);
@@ -112,6 +128,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       user,
       isAdmin,
+      isReadonlyAdmin,
+      isOwner,
       hasPassword,
       isLoading,
       login,
@@ -121,7 +139,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout,
       refreshMe,
     }),
-    [user, isAdmin, hasPassword, isLoading, login, register, loginWithTelegram, loginWithTelegramWebApp, logout, refreshMe],
+    [user, isAdmin, isReadonlyAdmin, isOwner, hasPassword, isLoading, login, register, loginWithTelegram, loginWithTelegramWebApp, logout, refreshMe],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

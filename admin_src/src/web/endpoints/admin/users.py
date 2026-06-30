@@ -11,6 +11,7 @@ from src.application.dto import UserDto
 from src.core.enums import Role
 
 from ._common import AdminUser
+from ._redact import is_readonly_admin, redact_user
 
 router = APIRouter(prefix="/users", tags=["Admin - Users"])
 
@@ -40,7 +41,7 @@ def _user_to_dict(user: UserDto) -> dict[str, Any]:
 @router.get("")
 @inject
 async def list_users(
-    _admin: AdminUser,
+    admin: AdminUser,
     user_dao: FromDishka[UserDao],
     limit: int = Query(default=25, le=100),
     offset: int = Query(default=0, ge=0),
@@ -59,11 +60,15 @@ async def list_users(
         total = await user_dao.count()
         users = await user_dao.get_all(limit=limit, offset=offset)
 
+    items = [_user_to_dict(u) for u in users]
+    if is_readonly_admin(admin):
+        items = [redact_user(it) for it in items]
+
     return {
         "total": total,
         "limit": limit,
         "offset": offset,
-        "items": [_user_to_dict(u) for u in users],
+        "items": items,
     }
 
 
@@ -71,7 +76,7 @@ async def list_users(
 @inject
 async def get_user(
     user_id: int,
-    _admin: AdminUser,
+    admin: AdminUser,
     user_dao: FromDishka[UserDao],
     subscription_dao: FromDishka[SubscriptionDao],
     transaction_dao: FromDishka[TransactionDao],
@@ -82,10 +87,16 @@ async def get_user(
 
     current_sub = await subscription_dao.get_current(user_id)
     all_subs = await subscription_dao.get_all_by_user(user_id)
-    transactions = await transaction_dao.get_by_user(user_id)
+    # Транзакции в карточке — платёжные детали; для read-only их не отдаём.
+    readonly = is_readonly_admin(admin)
+    transactions = [] if readonly else await transaction_dao.get_by_user(user_id)
+
+    user_dict = _user_to_dict(user)
+    if readonly:
+        user_dict = redact_user(user_dict)
 
     return {
-        "user": _user_to_dict(user),
+        "user": user_dict,
         "current_subscription": {
             "status": current_sub.current_status.value,
             "is_trial": current_sub.is_trial,

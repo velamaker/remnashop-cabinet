@@ -6,6 +6,7 @@ from .ad_links import router as ad_links_router
 from .appearance import router as appearance_router
 from .apps import router as apps_router
 from .audit import router as audit_router
+from .auth_settings import router as auth_settings_router
 from .broadcasts import router as broadcasts_router
 from .email_settings import router as email_settings_router
 from .email_template import router as email_template_router
@@ -41,6 +42,7 @@ router.include_router(info_router)
 router.include_router(menu_router)
 router.include_router(email_template_router)
 router.include_router(email_settings_router)
+router.include_router(auth_settings_router)
 router.include_router(audit_router)
 
 __all__ = ["router"]

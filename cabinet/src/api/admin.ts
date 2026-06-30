@@ -85,7 +85,9 @@ export interface GatewayStats {
 }
 
 export interface AdminUser {
-  id: number;
+  // id/telegram_id/email/referral_code приходят null для роли «только просмотр»
+  // (сервер маскирует личные идентификаторы).
+  id: number | null;
   telegram_id: number | null;
   auth_type: string;
   email: string | null;
@@ -100,7 +102,7 @@ export interface AdminUser {
   personal_discount: number;
   purchase_discount: number;
   points: number;
-  referral_code: string;
+  referral_code: string | null;
   created_at: string | null;
 }
 
@@ -119,8 +121,9 @@ export interface AdminUserDetail {
 }
 
 export interface AdminTransaction {
-  payment_id: string;
-  user_id: number;
+  // payment_id/user_id приходят null для роли «только просмотр» (маскировка).
+  payment_id: string | null;
+  user_id: number | null;
   user_name: string | null;
   user_email: string | null;
   status: string;

@@ -14,7 +14,14 @@ import type {
 export const authApi = {
   me: () => api.get<MeResponse>("/auth/me"),
   whoami: () =>
-    api.get<{ role: number | null; is_admin: boolean; has_password: boolean }>("/auth/whoami"),
+    api.get<{
+      role: number | null;
+      is_admin: boolean;
+      is_readonly_admin: boolean;
+      can_access_admin: boolean;
+      is_owner: boolean;
+      has_password: boolean;
+    }>("/auth/whoami"),
   setPassword: (password: string) =>
     api.post<{ success: boolean; has_password: boolean }>("/auth/password/set", { password }),
 

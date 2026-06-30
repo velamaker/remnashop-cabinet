@@ -136,12 +136,12 @@ async def get_appearance() -> dict[str, Any]:
     data["support_username"] = _support_username()
     # logo_file — внутреннее имя файла; наружу отдаём готовый logo_url.
     data["logo_url"] = logo_url(data.pop("logo_file", None))
-    # Вход через Telegram по OIDC доступен, только если заданы client_id/secret
-    # (BotFather → Web Login). Иначе кабинет покажет классический Login Widget.
-    data["telegram_oidc_enabled"] = bool(
-        (os.environ.get("TELEGRAM_OIDC_CLIENT_ID") or "").strip()
-        and (os.environ.get("TELEGRAM_OIDC_CLIENT_SECRET") or "").strip()
-    )
+    # Вход через Telegram по OIDC доступен, если заданы client_id/secret и тумблер
+    # не выключен. Креды/тумблер берутся из assets/auth.json (правятся в админке),
+    # с фолбэком на .env (TELEGRAM_OIDC_CLIENT_ID/SECRET) — см. auth_settings.
+    from src.infrastructure.services.auth_settings import telegram_oidc_enabled
+
+    data["telegram_oidc_enabled"] = telegram_oidc_enabled()
     return data
 
 

@@ -55,16 +55,24 @@ TX_TTL = 600  # 10 минут на завершение входа
 _jwk_client: Optional["jwt.PyJWKClient"] = None
 
 
+# Креды/тумблер берём из assets/auth.json (правятся в админке кабинета), с
+# фолбэком на .env. Так включение OIDC не требует переустановки/пересборки.
 def _client_id() -> str:
-    return (os.environ.get("TELEGRAM_OIDC_CLIENT_ID") or "").strip()
+    from src.infrastructure.services.auth_settings import telegram_oidc_client_id
+
+    return telegram_oidc_client_id()
 
 
 def _client_secret() -> str:
-    return (os.environ.get("TELEGRAM_OIDC_CLIENT_SECRET") or "").strip()
+    from src.infrastructure.services.auth_settings import telegram_oidc_client_secret
+
+    return telegram_oidc_client_secret()
 
 
 def oidc_enabled() -> bool:
-    return bool(_client_id() and _client_secret())
+    from src.infrastructure.services.auth_settings import telegram_oidc_enabled
+
+    return telegram_oidc_enabled()
 
 
 def _cabinet_url() -> str:

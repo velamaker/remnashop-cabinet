@@ -33,6 +33,7 @@ import AdminAuditPage from "@/pages/admin/AdminAuditPage";
 import AdminAppsPage from "@/pages/admin/AdminAppsPage";
 import AdminMenuPage from "@/pages/admin/AdminMenuPage";
 import AdminEmailPage from "@/pages/admin/AdminEmailPage";
+import AdminAuthPage from "@/pages/admin/AdminAuthPage";
 import SupportPage from "@/pages/SupportPage";
 import HomePage from "@/pages/HomePage";
 
@@ -251,6 +252,14 @@ export default function App() {
               element={
                 <AdminRoute>
                   <AdminEmailPage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/auth"
+              element={
+                <AdminRoute>
+                  <AdminAuthPage />
                 </AdminRoute>
               }
             />

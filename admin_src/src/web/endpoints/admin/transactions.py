@@ -8,6 +8,7 @@ from src.application.common.dao import TransactionDao, UserDao
 from src.core.enums import TransactionStatus
 
 from ._common import AdminUser
+from ._redact import is_readonly_admin, redact_transaction
 
 router = APIRouter(prefix="/transactions", tags=["Admin - Transactions"])
 
@@ -15,7 +16,7 @@ router = APIRouter(prefix="/transactions", tags=["Admin - Transactions"])
 @router.get("")
 @inject
 async def list_transactions(
-    _admin: AdminUser,
+    admin: AdminUser,
     transaction_dao: FromDishka[TransactionDao],
     user_dao: FromDishka[UserDao],
     limit: int = Query(default=25, le=100),
@@ -59,6 +60,9 @@ async def list_transactions(
                 "updated_at": t.updated_at.isoformat() if t.updated_at else None,
             }
         )
+
+    if is_readonly_admin(admin):
+        items = [redact_transaction(it) for it in items]
 
     return {
         "total": total,

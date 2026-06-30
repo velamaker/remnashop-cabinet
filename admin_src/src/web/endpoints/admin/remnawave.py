@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from src.application.common import Remnawave
 
 from ._common import AdminUser
+from ._redact import is_readonly_admin, redact_host, redact_inbound, redact_node
 
 router = APIRouter(prefix="/remnawave", tags=["Admin - RemnaWave"])
 
@@ -71,14 +72,16 @@ async def get_system_info(
 @router.get("/nodes")
 @inject
 async def get_nodes(
-    _admin: AdminUser,
+    admin: AdminUser,
     remnawave: FromDishka[Remnawave],
 ) -> dict[str, Any]:
     try:
         sdk = _sdk(remnawave)
         result = await sdk.nodes.get_all_nodes()
-        nodes = _unpack(result)
-        return {"nodes": [_dump(n) for n in nodes]}
+        nodes = [_dump(n) for n in _unpack(result)]
+        if is_readonly_admin(admin):
+            nodes = [redact_node(n) for n in nodes]
+        return {"nodes": nodes}
     except HTTPException:
         raise
     except Exception as e:
@@ -157,14 +160,16 @@ async def disable_node(
 @router.get("/hosts")
 @inject
 async def get_hosts(
-    _admin: AdminUser,
+    admin: AdminUser,
     remnawave: FromDishka[Remnawave],
 ) -> dict[str, Any]:
     try:
         sdk = _sdk(remnawave)
         result = await sdk.hosts.get_all_hosts()
-        hosts = _unpack(result)
-        return {"hosts": [_dump(h) for h in hosts]}
+        hosts = [_dump(h) for h in _unpack(result)]
+        if is_readonly_admin(admin):
+            hosts = [redact_host(h) for h in hosts]
+        return {"hosts": hosts}
     except HTTPException:
         raise
     except Exception as e:
@@ -176,7 +181,7 @@ async def get_hosts(
 @router.get("/inbounds")
 @inject
 async def get_inbounds(
-    _admin: AdminUser,
+    admin: AdminUser,
     remnawave: FromDishka[Remnawave],
 ) -> dict[str, Any]:
     try:
@@ -185,9 +190,12 @@ async def get_inbounds(
         d = _dump(result)
         # inbounds response: {'total': N, 'inbounds': [...]}
         if isinstance(d, dict) and "inbounds" in d:
-            return {"inbounds": d["inbounds"]}
-        inbounds = _unpack(result)
-        return {"inbounds": [_dump(i) for i in inbounds]}
+            inbounds = d["inbounds"]
+        else:
+            inbounds = [_dump(i) for i in _unpack(result)]
+        if is_readonly_admin(admin):
+            inbounds = [redact_inbound(i) for i in inbounds]
+        return {"inbounds": inbounds}
     except HTTPException:
         raise
     except Exception as e:

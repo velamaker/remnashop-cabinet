@@ -132,17 +132,17 @@ export default function AdminTransactionsPage() {
                   </td>
                 </tr>
               ) : (
-                items.map((t) => (
+                items.map((t, i) => (
                   <tr
-                    key={t.payment_id}
+                    key={t.payment_id ?? `tx-${i}`}
                     className="border-b border-border-subtle last:border-0 hover:bg-bg-raised transition-colors"
                   >
                     <td className="px-4 py-3 font-mono text-xs text-fg-muted truncate max-w-[100px]">
-                      {t.payment_id.slice(0, 8)}…
+                      {t.payment_id ? `${t.payment_id.slice(0, 8)}…` : "—"}
                     </td>
                     <td className="px-4 py-3">
                       <div>
-                        <p className="font-medium text-fg">{t.user_name ?? `#${t.user_id}`}</p>
+                        <p className="font-medium text-fg">{t.user_name ?? (t.user_id != null ? `#${t.user_id}` : "—")}</p>
                         {t.user_email && (
                           <p className="text-xs text-fg-muted">{t.user_email}</p>
                         )}

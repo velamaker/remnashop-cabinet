@@ -23,6 +23,8 @@ import {
   Info,
   Menu,
   X,
+  Eye,
+  KeyRound,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
@@ -76,6 +78,7 @@ const navGroups: { title: string; items: NavItem[] }[] = [
     title: "Система",
     items: [
       { to: "/admin/remnawave", icon: Waves, label: "RemnaWave" },
+      { to: "/admin/auth", icon: KeyRound, label: "Вход через Telegram" },
       { to: "/admin/settings", icon: Settings, label: "Настройки" },
       { to: "/admin/audit", icon: ShieldAlert, label: "Аудит" },
     ],
@@ -120,7 +123,7 @@ function GroupedNav({ onNavigate, itemPad }: { onNavigate?: () => void; itemPad:
 }
 
 export function AdminLayout({ children }: { children: ReactNode }) {
-  const { user, logout } = useAuth();
+  const { user, logout, isReadonlyAdmin } = useAuth();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -237,7 +240,19 @@ export function AdminLayout({ children }: { children: ReactNode }) {
 
       {/* Main */}
       <main className="flex-1 min-w-0 overflow-x-hidden px-5 pb-24 pt-20 md:px-8 md:pb-8 md:pt-8">
-        <div className="mx-auto max-w-6xl animate-fade-in">{children}</div>
+        <div className="mx-auto max-w-6xl animate-fade-in">
+          {isReadonlyAdmin && (
+            <div className="mb-5 flex items-center gap-2.5 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+              <Eye className="h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
+              <span>
+                <strong className="font-semibold">Режим просмотра.</strong>{" "}
+                Вам доступна вся админка, но изменения отключены — кнопки сохранения
+                и действия не сработают.
+              </span>
+            </div>
+          )}
+          {children}
+        </div>
       </main>
 
       {/* Mobile bottom nav — горизонтальная прокрутка по всем разделам */}

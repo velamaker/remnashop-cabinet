@@ -9,14 +9,28 @@ import {
 } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { formatDate } from "@/lib/format";
+import { useAuth } from "@/contexts/AuthContext";
 
 const LIMIT = 25;
 
+// Значения совпадают с серверным enum Role: USER=1, PREVIEW=2 (read-only админ),
+// ADMIN=3, DEV=4, OWNER=5, SYSTEM=6.
 const ROLE_LABELS: Record<number, { label: string; cls: string }> = {
-  0: { label: "Пользователь", cls: "text-fg-muted" },
-  10: { label: "Администратор", cls: "text-warning" },
-  100: { label: "Владелец", cls: "text-accent" },
+  1: { label: "Пользователь", cls: "text-fg-muted" },
+  2: { label: "Админ (просмотр)", cls: "text-warning" },
+  3: { label: "Администратор", cls: "text-warning" },
+  4: { label: "Разработчик", cls: "text-accent" },
+  5: { label: "Владелец", cls: "text-accent" },
+  6: { label: "Система", cls: "text-accent" },
 };
+
+// Роли, которые владелец может назначать из кабинета. OWNER/SYSTEM/DEV не даём
+// раздавать через UI — это делается осознанно и редко.
+const ASSIGNABLE_ROLES: { value: number; label: string }[] = [
+  { value: 1, label: "Пользователь" },
+  { value: 2, label: "Админ только для просмотра" },
+  { value: 3, label: "Администратор (полный доступ)" },
+];
 
 const STATUS_COLORS: Record<string, string> = {
   ACTIVE: "text-success",
@@ -233,6 +247,7 @@ function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClo
   const [saving, setSaving] = useState(false);
   const [discountPersonal, setDiscountPersonal] = useState("");
   const [discountPurchase, setDiscountPurchase] = useState("");
+  const { isOwner } = useAuth();
 
   const load = useCallback(() => {
     setLoading(true);
@@ -261,6 +276,18 @@ function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClo
     setSaving(true);
     try {
       await usersAdminApi.setDiscount(userId, Number(discountPersonal), Number(discountPurchase));
+      load(); onUpdated();
+    } catch (e) { alert(e instanceof ApiError ? e.detail : "Ошибка"); }
+    finally { setSaving(false); }
+  };
+
+  const changeRole = async (role: number) => {
+    if (!detail || role === detail.user.role) return;
+    const label = ASSIGNABLE_ROLES.find(r => r.value === role)?.label ?? `роль ${role}`;
+    if (!confirm(`Назначить пользователю «${label}»?`)) return;
+    setSaving(true);
+    try {
+      await usersAdminApi.changeRole(userId, role);
       load(); onUpdated();
     } catch (e) { alert(e instanceof ApiError ? e.detail : "Ошибка"); }
     finally { setSaving(false); }
@@ -352,6 +379,33 @@ function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClo
                     </button>
                   </div>
 
+                  {/* Роль — только владелец, и не трогаем владельцев/системных */}
+                  {isOwner && u.role < 4 && (
+                    <div className="rounded-xl border border-[var(--border)] p-4">
+                      <p className="mb-1 text-xs font-semibold text-fg">Роль и доступ</p>
+                      <p className="mb-3 text-[11px] text-fg-subtle">
+                        «Админ только для просмотра» открывает всю админку, но
+                        запрещает любые изменения.
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {ASSIGNABLE_ROLES.map(r => (
+                          <button
+                            key={r.value}
+                            onClick={() => changeRole(r.value)}
+                            disabled={saving || u.role === r.value}
+                            className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-default ${
+                              u.role === r.value
+                                ? "border-accent bg-accent/10 text-accent"
+                                : "border-[var(--border)] text-fg-muted hover:bg-bg-subtle hover:text-fg disabled:opacity-50"
+                            }`}
+                          >
+                            {r.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Block */}
                   <button onClick={toggleBlock} disabled={saving}
                     className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${u.is_blocked ? "border-success/20 bg-success/8 text-success hover:bg-success/15" : "border-danger/20 bg-danger/8 text-danger hover:bg-danger/15"}`}>
@@ -394,6 +448,7 @@ export default function AdminUsersPage() {
   const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const { isReadonlyAdmin } = useAuth();
 
   const load = useCallback(() => {
     setLoading(true);
@@ -445,11 +500,13 @@ export default function AdminUsersPage() {
               <tbody>
                 {users.map((u, i) => {
                   const rInfo = ROLE_LABELS[u.role] ?? { label: `${u.role}`, cls: "text-fg-muted" };
+                  // У read-only id скрыт сервером (null) → карточку не открыть.
+                  const clickable = u.id != null;
                   return (
                     <tr
-                      key={u.id}
-                      onClick={() => setSelectedId(u.id)}
-                      className={`cursor-pointer border-b border-[var(--border)] transition-colors hover:bg-bg-subtle ${i === users.length - 1 ? "border-0" : ""}`}
+                      key={u.id ?? `row-${i}`}
+                      onClick={clickable ? () => setSelectedId(u.id) : undefined}
+                      className={`border-b border-[var(--border)] transition-colors ${clickable ? "cursor-pointer hover:bg-bg-subtle" : ""} ${i === users.length - 1 ? "border-0" : ""}`}
                     >
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
@@ -471,7 +528,7 @@ export default function AdminUsersPage() {
                           <span className="text-xs font-medium text-success">Активен</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-xs text-fg-muted font-mono">{u.id}</td>
+                      <td className="px-4 py-3 text-xs text-fg-muted font-mono">{u.id ?? "—"}</td>
                       <td className="px-4 py-3 text-xs text-fg-muted">{u.created_at ? formatDate(u.created_at) : "—"}</td>
                     </tr>
                   );

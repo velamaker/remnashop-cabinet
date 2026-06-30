@@ -37,8 +37,19 @@ async def _get_admin_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     if user.is_blocked:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is blocked")
-    if user.role < Role.ADMIN:
+    # PREVIEW(2) — «админ только для просмотра»: видит всю админку, но ничего не
+    # меняет. Полные админы — ADMIN(3) и выше. Всё, что ниже PREVIEW (обычный
+    # USER) — в админку не пускаем вовсе.
+    if user.role < Role.PREVIEW:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    # Read-only роль: разрешаем только безопасные методы; любой изменяющий запрос
+    # (создать/обновить/удалить) отклоняем ещё до попадания в обработчик. Так
+    # запрет действует на ВСЕ админ-эндпоинты сразу — единая точка контроля.
+    if user.role < Role.ADMIN and request.method not in ("GET", "HEAD", "OPTIONS"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Read-only admin: изменения недоступны",
+        )
     # Кто действует — для аудит-лога (читается мидлварью после ответа).
     request.state.audit_actor = (
         f"@{user.username}" if getattr(user, "username", None)
