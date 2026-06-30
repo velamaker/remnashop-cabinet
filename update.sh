@@ -78,12 +78,19 @@ set_env() {
 }
 
 # ── 1. Бэкап БД ───────────────────────────────────────────────────────────────
+# Дампы храним ВНЕ папки репозитория, чтобы дампы БД с данными физически не лежали
+# рядом с git (защита от случайной утечки). Путь можно переопределить: BACKUP_DIR=…
+BACKUP_DIR="${BACKUP_DIR:-/opt/remnashop-backups}"
+BACKUP_KEEP="${BACKUP_KEEP:-10}"   # сколько последних дампов хранить
 if [ "$BACKUP" = 1 ]; then
   if docker ps --format '{{.Names}}' | grep -qx remnashop-db; then
-    F="backup-$(date +%F-%H%M%S).sql.gz"
+    mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR" 2>/dev/null || true
+    F="$BACKUP_DIR/backup-$(date +%F-%H%M%S).sql.gz"
     info "Бэкап БД → ${F}…"
     if docker exec remnashop-db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' 2>/dev/null | gzip > "$F" && [ -s "$F" ]; then
       ok "Бэкап готов (${F}, $(du -h "$F" | cut -f1))"
+      # Чистим старые: оставляем последние $BACKUP_KEEP.
+      ls -1t "$BACKUP_DIR"/backup-*.sql.gz 2>/dev/null | tail -n +"$((BACKUP_KEEP+1))" | xargs -r rm -f
     else
       rm -f "$F"; warn "Бэкап не удался — продолжаю без него (Ctrl+C чтобы прервать)"
     fi

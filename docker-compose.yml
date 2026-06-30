@@ -9,7 +9,8 @@ x-build: &build
   volumes:
       - ./logs:/opt/remnashop/logs
       - ./assets:/opt/remnashop/assets
-      - ./backups:/opt/remnashop/backups
+      # Дампы БД храним ВНЕ папки репозитория (рядом с git их быть не должно).
+      - ../remnashop-backups:/opt/remnashop/backups
 
 x-common: &common
   ulimits:
