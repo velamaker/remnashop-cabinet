@@ -48,6 +48,11 @@ export const subscriptionApi = {
   activateTrial: () =>
     api.post<{ success: boolean }>("/subscription/trial"),
 
+  trialInfo: () =>
+    api.get<{ available: boolean; days: number; traffic_gb: number; devices: number }>(
+      "/subscription/trial-info",
+    ),
+
   offers: () => api.get<SubscriptionOffersResponse>("/subscription/offers"),
 
   purchase: (data: PurchaseRequest) =>

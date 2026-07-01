@@ -276,7 +276,13 @@ export default function AdminPlansPage() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={() => toggle(plan)} className="rounded-lg p-1.5 text-fg-muted hover:text-accent transition-colors" title={plan.is_active ? "Выключить" : "Включить"}>
+                  <button
+                    onClick={() => toggle(plan)}
+                    className={`rounded-lg p-1.5 transition-colors ${
+                      plan.is_active ? "text-success hover:text-success" : "text-fg-muted hover:text-fg"
+                    }`}
+                    title={plan.is_active ? "Включён — нажмите, чтобы выключить" : "Выключен — нажмите, чтобы включить"}
+                  >
                     {plan.is_active ? <ToggleRight className="h-5 w-5" /> : <ToggleLeft className="h-5 w-5" />}
                   </button>
                   <button onClick={() => setModalPlan(plan)} className="rounded-lg p-1.5 text-fg-muted hover:text-accent transition-colors">

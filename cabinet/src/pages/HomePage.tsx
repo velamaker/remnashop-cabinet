@@ -52,12 +52,20 @@ export default function HomePage() {
   const [trialError, setTrialError] = useState<string | null>(null);
   const [activating, setActivating] = useState(false);
   const [countdown, setCountdown] = useState(REFRESH_SECONDS);
+  const [trial, setTrial] = useState<{ available: boolean; days: number; traffic_gb: number; devices: number } | null>(null);
 
   const loadExtras = useCallback(() => {
     subscriptionApi.devices().then((d) => setDevices({ current: d.current_count, max: d.max_count })).catch(() => {});
     referralApi.program().then((p) => setReferrals(p.invited_count)).catch(() => {});
     subscriptionApi.serverStats().then((s) => { setFavServer(s.favorite); setServers(s.nodes); }).catch(() => {});
   }, []);
+
+  // Инфо о пробном периоде — только когда нет подписки (для карточки-предложения).
+  useEffect(() => {
+    if (!isLoading && !subscription) {
+      subscriptionApi.trialInfo().then(setTrial).catch(() => setTrial(null));
+    }
+  }, [isLoading, subscription]);
 
   useEffect(() => {
     loadExtras();
@@ -134,21 +142,41 @@ export default function HomePage() {
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-2)] text-white shadow-[0_10px_24px_-8px_var(--accent-glow)]">
             <Gift className="h-7 w-7" />
           </div>
-          <h2 className="text-lg font-bold tracking-tight text-fg">У вас пока нет подписки</h2>
+          <h2 className="text-lg font-bold tracking-tight text-fg">
+            {trial?.available ? "Начните бесплатно" : "У вас пока нет подписки"}
+          </h2>
           <p className="mx-auto mt-1.5 max-w-sm text-sm text-fg-muted">
-            Активируйте бесплатный пробный период или выберите тариф
+            {trial?.available
+              ? `Пробный период на ${trial.days} дн. — бесплатно, без карты и обязательств.`
+              : "Выберите подходящий тариф, чтобы начать пользоваться VPN."}
           </p>
+
+          {trial?.available && (
+            <div className="mt-4 flex flex-wrap justify-center gap-2 text-xs font-medium text-fg-muted">
+              <span className="rounded-full border border-[var(--border)] bg-bg-raised px-3 py-1">🗓 {trial.days} дн.</span>
+              <span className="rounded-full border border-[var(--border)] bg-bg-raised px-3 py-1">
+                📊 {trial.traffic_gb === 0 ? "Безлимит трафика" : `${trial.traffic_gb} ГБ`}
+              </span>
+              <span className="rounded-full border border-[var(--border)] bg-bg-raised px-3 py-1">
+                📱 {trial.devices === 0 ? "Устройств: без лимита" : `До ${trial.devices} устройств`}
+              </span>
+            </div>
+          )}
+
           {trialError && <p className="mt-3 text-sm text-danger">{trialError}</p>}
+
           <div className="mt-6 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
-            <button
-              onClick={handleTrial}
-              disabled={activating}
-              className="btn-gradient inline-flex h-10 items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold transition-all active:scale-[0.98] disabled:opacity-60"
-            >
-              {activating ? "Активируем…" : "Пробный период"}
-            </button>
+            {trial?.available && (
+              <button
+                onClick={handleTrial}
+                disabled={activating}
+                className="btn-gradient inline-flex h-11 items-center justify-center gap-2 rounded-xl px-6 text-sm font-semibold transition-all active:scale-[0.98] disabled:opacity-60"
+              >
+                {activating ? "Активируем…" : `🎁 Активировать ${trial.days} дн. бесплатно`}
+              </button>
+            )}
             <Link to="/billing">
-              <Button variant="secondary" size="lg" className="rounded-xl">
+              <Button variant={trial?.available ? "secondary" : "primary"} size="lg" className="rounded-xl">
                 Выбрать тариф <ArrowRight className="h-4 w-4" />
               </Button>
             </Link>

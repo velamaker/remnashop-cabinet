@@ -286,6 +286,24 @@ async def activate_trial_web(
     return TrialActivateResponse(is_free=True, activated=True, duration_days=duration_days)
 
 
+@router.get("/trial-info")
+@inject
+async def trial_info_web(
+    user: CurrentUser,
+    plan_dao: FromDishka[PlanDao],
+) -> dict:
+    """Инфо о пробном периоде для карточки в кабинете (дни/трафик/устройства)."""
+    plan = await _resolve_trial_plan(plan_dao)
+    if not plan or not plan.durations:
+        return {"available": False, "days": 0, "traffic_gb": 0, "devices": 0}
+    return {
+        "available": bool(user.is_trial_available),
+        "days": plan.durations[0].days,
+        "traffic_gb": plan.traffic_limit,  # ГБ, 0 = безлимит
+        "devices": plan.device_limit,      # 0 = безлимит
+    }
+
+
 @router.post("/purchase", response_model=PaymentInitResponse)
 @inject
 async def purchase_subscription(
