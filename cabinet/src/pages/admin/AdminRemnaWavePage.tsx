@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import {
   Server, Cpu, MemoryStick, Clock, RefreshCw, Power, PowerOff,
-  Activity, Globe, Layers, AlertCircle, Users, Wifi,
+  Activity, Globe, Layers, AlertCircle, Users, Wifi, Info,
 } from "lucide-react";
 import { adminApi } from "@/api/admin";
 
@@ -293,6 +293,13 @@ export default function AdminRemnaWavePage() {
 
   const onlineNodes = nodes.filter(n => n.is_connected && !n.is_disabled).length;
 
+  const dataSourceHint: Record<Tab, string> = {
+    nodes: "список и состояние нод (онлайн, трафик, ЦПУ/ОЗУ) — метод nodes панели",
+    system: "версия, CPU/RAM/аптайм сервера и сводка пользователей — метод system панели",
+    hosts: "хосты подключения — метод hosts панели",
+    inbounds: "инбаунды — метод inbounds панели",
+  };
+
   return (
     <div className="space-y-5">
       {/* Header */}
@@ -353,6 +360,17 @@ export default function AdminRemnaWavePage() {
             )}
           </button>
         ))}
+      </div>
+
+      {/* Откуда данные */}
+      <div className="flex items-start gap-2.5 rounded-xl border border-[var(--border)] bg-bg-subtle px-4 py-3">
+        <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-fg-subtle" strokeWidth={1.75} />
+        <p className="text-xs leading-relaxed text-fg-muted">
+          <span className="font-medium text-fg">Откуда данные:</span>{" "}
+          {dataSourceHint[tab]}. Всё тянется напрямую из API панели Remnawave в реальном
+          времени — при каждом обновлении делается свежий запрос. В базе кабинета эти данные
+          не хранятся, поэтому здесь всегда актуальное состояние панели.
+        </p>
       </div>
 
       {err && (

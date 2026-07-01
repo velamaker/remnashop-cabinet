@@ -3,6 +3,8 @@ from typing import Any, Optional
 from dishka import FromDishka
 from dishka.integrations.fastapi import inject
 from fastapi import APIRouter
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common.dao import SubscriptionDao, TransactionDao, UserDao
 from src.application.dto.statistics import GatewayStatsDto, SubscriptionStatsDto
@@ -83,6 +85,80 @@ async def get_overview(
             "expiring_soon": sub_stats.expiring_soon,
             "unlimited": sub_stats.total_unlimited,
         },
+    }
+
+
+@router.get("/sales")
+@inject
+async def get_sales_stats(
+    _admin: AdminUser,
+    session: FromDishka[AsyncSession],
+) -> dict[str, Any]:
+    """Продажи (оплаченные транзакции) за 30/60/90 дней.
+
+    Валюты не суммируются между собой (RUB/USD/XTR-звёзды) — выручка разбита
+    по валютам. Данные считаются на лету из таблицы transactions (status=COMPLETED,
+    исключая тестовые), поэтому всегда актуальны.
+    """
+    periods = (30, 60, 90)
+
+    # Один проход по последним 90 дням, условные агрегаты на каждое окно.
+    rows = (
+        await session.execute(
+            text(
+                """
+                SELECT
+                    currency::text AS currency,
+                    sum((pricing->>'final_amount')::numeric)
+                        FILTER (WHERE created_at >= now() - interval '30 days') AS rev30,
+                    count(*) FILTER (WHERE created_at >= now() - interval '30 days') AS cnt30,
+                    sum((pricing->>'final_amount')::numeric)
+                        FILTER (WHERE created_at >= now() - interval '60 days') AS rev60,
+                    count(*) FILTER (WHERE created_at >= now() - interval '60 days') AS cnt60,
+                    sum((pricing->>'final_amount')::numeric)
+                        FILTER (WHERE created_at >= now() - interval '90 days') AS rev90,
+                    count(*) FILTER (WHERE created_at >= now() - interval '90 days') AS cnt90
+                FROM transactions
+                WHERE status::text = 'COMPLETED'
+                  AND is_test = false
+                  AND (pricing->>'final_amount')::numeric > 0
+                  AND created_at >= now() - interval '90 days'
+                GROUP BY currency
+                """
+            )
+        )
+    ).all()
+
+    # Собираем в структуру по периодам.
+    result: dict[int, dict[str, Any]] = {
+        d: {"days": d, "sales_count": 0, "revenue": {}} for d in periods
+    }
+    for r in rows:
+        for d, rev_key, cnt_key in (
+            (30, "rev30", "cnt30"),
+            (60, "rev60", "cnt60"),
+            (90, "rev90", "cnt90"),
+        ):
+            cnt = getattr(r, cnt_key) or 0
+            if cnt == 0:
+                continue
+            result[d]["sales_count"] += cnt
+            rev = float(getattr(r, rev_key) or 0)
+            if rev:
+                result[d]["revenue"][r.currency] = rev
+
+    return {
+        "periods": [
+            {
+                "days": p["days"],
+                "sales_count": p["sales_count"],
+                "revenue": [
+                    {"currency": cur, "amount": amt}
+                    for cur, amt in sorted(p["revenue"].items())
+                ],
+            }
+            for p in (result[d] for d in periods)
+        ]
     }
 
 

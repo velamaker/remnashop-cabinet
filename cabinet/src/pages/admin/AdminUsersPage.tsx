@@ -1,12 +1,12 @@
 import { useEffect, useState, useCallback } from "react";
 import {
   Search, ChevronLeft, ChevronRight, AlertCircle, X,
-  CalendarPlus, Trash2, Ban, CheckCircle, Gift, RefreshCw, Star, ChevronDown, ChevronUp, LogIn,
+  CalendarPlus, Trash2, Ban, CheckCircle, Gift, RefreshCw, Star, ChevronDown, ChevronUp, LogIn, Gauge,
 } from "lucide-react";
 import {
   usersAdminApi, subscriptionsAdminApi, plansAdminApi,
   type AdminUser, type AdminUserDetail, type AdminSubscription, type AdminPlan,
-  type LoginHistory,
+  type LoginHistory, type TrafficByNode,
 } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { formatDate } from "@/lib/format";
@@ -281,6 +281,78 @@ function LoginHistoryBlock({ userId }: { userId: number }) {
   );
 }
 
+// ─── Traffic by node ───────────────────────────────────────────────────────
+
+function fmtBytesRu(n: number): string {
+  if (n >= 1e12) return `${(n / 1e12).toFixed(2)} ТБ`;
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)} ГБ`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(0)} МБ`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(0)} КБ`;
+  return `${n} Б`;
+}
+
+function TrafficByNodeBlock({ userId }: { userId: number }) {
+  const [data, setData] = useState<TrafficByNode | null>(null);
+  const [open, setOpen] = useState(false);
+  const [days, setDays] = useState(30);
+
+  useEffect(() => {
+    setData(null);
+    usersAdminApi.trafficByNode(userId, days).then(setData).catch(() => setData(null));
+  }, [userId, days]);
+
+  // Прячем блок только если панель явно вернула "нет данных о нодах".
+  if (data && (!data.available || data.nodes.length === 0)) return null;
+
+  return (
+    <div className="rounded-xl border border-[var(--border)] p-4">
+      <button onClick={() => setOpen(!open)} className="flex w-full items-center justify-between gap-2 text-xs font-semibold text-fg">
+        <span className="flex items-center gap-1.5"><Gauge className="h-3.5 w-3.5 text-accent" />Трафик по нодам</span>
+        <span className="font-normal text-fg-subtle">
+          {data ? `${fmtBytesRu(data.total)} за ${data.days} дн.` : "загрузка…"}
+          <ChevronDown className={`ml-1 inline h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+        </span>
+      </button>
+      {open && (
+        <div className="mt-3 space-y-2">
+          <div className="flex gap-1.5">
+            {[30, 60, 90].map(d => (
+              <button key={d} onClick={() => setDays(d)}
+                className={`rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  days === d ? "border-accent bg-accent/10 text-accent" : "border-[var(--border)] text-fg-muted hover:text-fg"
+                }`}>
+                {d} дн.
+              </button>
+            ))}
+          </div>
+          {!data ? (
+            <p className="py-2 text-center text-xs text-fg-subtle">загрузка…</p>
+          ) : (
+            <div className="space-y-1">
+              {data.nodes.map((n, i) => {
+                const pct = data.total > 0 ? Math.round((n.total / data.total) * 100) : 0;
+                return (
+                  <div key={i} className="rounded-lg border border-[var(--border)] px-3 py-2">
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="truncate text-fg">
+                        {n.country_code && <span className="mr-1 text-fg-muted">{n.country_code}</span>}{n.name}
+                      </span>
+                      <span className="flex-shrink-0 font-medium text-fg">{fmtBytesRu(n.total)}</span>
+                    </div>
+                    <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-bg-subtle">
+                      <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── User Detail Modal ─────────────────────────────────────────────────────
 
 function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClose: () => void; onUpdated: () => void }) {
@@ -404,6 +476,9 @@ function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClo
 
                   {/* История входов */}
                   <LoginHistoryBlock userId={userId} />
+
+                  {/* Трафик по нодам (живьём из панели) */}
+                  <TrafficByNodeBlock userId={userId} />
 
                   {/* Discounts */}
                   <div className="rounded-xl border border-[var(--border)] p-4">

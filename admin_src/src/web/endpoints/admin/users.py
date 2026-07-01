@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from dishka import FromDishka
@@ -7,6 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.application.common import Remnawave
 from src.application.common.dao import SubscriptionDao, TransactionDao, UserDao
 from src.application.dto import UserDto
 from src.core.enums import Role
@@ -236,6 +238,61 @@ async def user_logins(
             }
             for r in rows
         ],
+    }
+
+
+@router.get("/{user_id}/traffic-by-node")
+@inject
+async def user_traffic_by_node(
+    user_id: int,
+    _admin: AdminUser,
+    subscription_dao: FromDishka[SubscriptionDao],
+    remnawave: FromDishka[Remnawave],
+    days: int = Query(default=30, ge=1, le=365),
+) -> dict[str, Any]:
+    """Расход трафика пользователя по нодам за последние N дней.
+
+    Данные — живьём из API панели Remnawave (bandwidthstats), в БД не хранятся.
+    Возвращаем список нод с трафиком (по убыванию) и суммарный объём."""
+    empty = {"available": False, "days": days, "total": 0, "nodes": []}
+
+    current = await subscription_dao.get_current(user_id)
+    if not current or not getattr(current, "user_remna_id", None):
+        return empty
+
+    sdk = getattr(remnawave, "sdk", None)
+    if sdk is None:
+        return empty
+
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=days)
+    try:
+        result = await sdk.bandwidthstats.get_stats_user_usage(
+            uuid=str(current.user_remna_id),
+            top_nodes_limit=50,
+            start=start.strftime("%Y-%m-%d"),
+            end=end.strftime("%Y-%m-%d"),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"RemnaWave error: {e}")
+
+    data = getattr(result, "root", result)
+    top_nodes = getattr(data, "top_nodes", None) or []
+    nodes = [
+        {
+            "name": n.name,
+            "country_code": getattr(n, "country_code", "") or "",
+            "total": int(getattr(n, "total", 0) or 0),
+        }
+        for n in top_nodes
+    ]
+    nodes.sort(key=lambda x: x["total"], reverse=True)
+
+    return {
+        "available": True,
+        "days": days,
+        "total": sum(n["total"] for n in nodes),
+        "nodes": nodes,
     }
 
 

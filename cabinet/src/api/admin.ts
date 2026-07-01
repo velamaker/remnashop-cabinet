@@ -121,6 +121,13 @@ export interface LoginHistory {
   items: LoginEvent[];
 }
 
+export interface TrafficByNode {
+  available: boolean;
+  days: number;
+  total: number;
+  nodes: { name: string; country_code: string; total: number }[];
+}
+
 export interface AdminUserDetail {
   user: AdminUser;
   current_subscription: {
@@ -173,9 +180,20 @@ export interface AdminPromocode {
 
 // ---------- API calls ----------
 
+export interface SalesPeriod {
+  days: number;
+  sales_count: number;
+  revenue: { currency: string; amount: number }[];
+}
+
+export interface SalesStatsResponse {
+  periods: SalesPeriod[];
+}
+
 export const statisticsApi = {
   overview: () => adminApi.get<AdminOverviewResponse>("/statistics/overview"),
   transactions: () => adminApi.get<unknown>("/statistics/transactions"),
+  sales: () => adminApi.get<SalesStatsResponse>("/statistics/sales"),
 };
 
 export const usersAdminApi = {
@@ -195,6 +213,8 @@ export const usersAdminApi = {
   },
   get: (id: number) => adminApi.get<AdminUserDetail>(`/users/${id}`),
   logins: (id: number) => adminApi.get<LoginHistory>(`/users/${id}/logins`),
+  trafficByNode: (id: number, days = 30) =>
+    adminApi.get<TrafficByNode>(`/users/${id}/traffic-by-node?days=${days}`),
   block: (id: number, is_blocked: boolean) =>
     adminApi.put<{ success: boolean; is_blocked: boolean }>(`/users/${id}/block`, { is_blocked }),
   changeRole: (id: number, role: number) =>

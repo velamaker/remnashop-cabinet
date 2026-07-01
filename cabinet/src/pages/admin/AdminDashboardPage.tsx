@@ -1,7 +1,24 @@
 import { useEffect, useState } from "react";
-import { Users, CreditCard, TrendingUp, Activity, AlertCircle } from "lucide-react";
-import { statisticsApi, type AdminOverviewResponse, type GatewayStats } from "@/api/admin";
+import { Users, CreditCard, TrendingUp, Activity, AlertCircle, ShoppingCart } from "lucide-react";
+import {
+  statisticsApi,
+  type AdminOverviewResponse,
+  type GatewayStats,
+  type SalesStatsResponse,
+} from "@/api/admin";
 import { ApiError } from "@/types/api";
+
+// Форматирование выручки по валюте (RUB → ₽, USD → $, XTR → ⭐ звёзды Telegram).
+function fmtMoney(currency: string, amount: number): string {
+  const n = amount.toLocaleString("ru-RU", { maximumFractionDigits: 0 });
+  switch (currency) {
+    case "RUB": return `${n} ₽`;
+    case "USD": return `$${n}`;
+    case "EUR": return `€${n}`;
+    case "XTR": return `${n} ⭐`;
+    default: return `${n} ${currency}`;
+  }
+}
 
 function StatCard({
   label,
@@ -62,6 +79,7 @@ function GatewayCard({ g }: { g: GatewayStats }) {
 
 export default function AdminDashboardPage() {
   const [data, setData] = useState<AdminOverviewResponse | null>(null);
+  const [sales, setSales] = useState<SalesStatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -73,6 +91,8 @@ export default function AdminDashboardPage() {
         setError(e instanceof ApiError ? e.detail : "Ошибка загрузки");
       })
       .finally(() => setLoading(false));
+    // Продажи грузим отдельно — не блокируют обзор, если что-то пойдёт не так.
+    statisticsApi.sales().then(setSales).catch(() => {});
   }, []);
 
   if (loading) {
@@ -138,6 +158,41 @@ export default function AdminDashboardPage() {
           />
         </div>
       </section>
+
+      {/* Sales 30/60/90 */}
+      {sales && sales.periods.length > 0 && (
+        <section>
+          <div className="mb-4 flex items-center gap-2">
+            <ShoppingCart className="h-5 w-5 text-accent" />
+            <h2 className="text-base font-semibold text-fg">Продажи</h2>
+            <span className="text-xs text-fg-subtle">оплаченные заказы за период</span>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            {sales.periods.map((p) => (
+              <div key={p.days} className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
+                <div className="mb-3 flex items-baseline justify-between">
+                  <span className="text-sm font-semibold text-fg">за {p.days} дней</span>
+                  <span className="rounded-full bg-accent-subtle px-2 py-0.5 text-xs text-accent">
+                    {p.sales_count} продаж
+                  </span>
+                </div>
+                {p.revenue.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {p.revenue.map((r) => (
+                      <div key={r.currency} className="flex items-baseline justify-between">
+                        <span className="text-xs text-fg-muted">{r.currency}</span>
+                        <span className="text-lg font-bold text-fg">{fmtMoney(r.currency, r.amount)}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-fg-subtle">нет продаж</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Gateways */}
       {transactions.gateways.length > 0 && (
