@@ -30,6 +30,7 @@ import AdminInfoPage from "@/pages/admin/AdminInfoPage";
 import AdminRemnaWavePage from "@/pages/admin/AdminRemnaWavePage";
 import AdminSupportPage from "@/pages/admin/AdminSupportPage";
 import AdminAuditPage from "@/pages/admin/AdminAuditPage";
+import AdminUpdatesPage from "@/pages/admin/AdminUpdatesPage";
 import AdminAppsPage from "@/pages/admin/AdminAppsPage";
 import AdminMenuPage from "@/pages/admin/AdminMenuPage";
 import AdminEmailPage from "@/pages/admin/AdminEmailPage";
@@ -268,6 +269,14 @@ export default function App() {
               element={
                 <AdminRoute>
                   <AdminAuditPage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/updates"
+              element={
+                <AdminRoute>
+                  <AdminUpdatesPage />
                 </AdminRoute>
               }
             />

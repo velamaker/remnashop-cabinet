@@ -45,6 +45,7 @@ SECTIONS: list[dict[str, Any]] = [
         "prefixes": ["settings", "email-settings", "email-template", "auth-settings"],
     },
     {"key": "audit", "label": "Журнал действий", "prefixes": ["audit"]},
+    {"key": "updates", "label": "Обновления", "prefixes": ["updates"]},
 ]
 
 ALL_SECTION_KEYS: list[str] = [s["key"] for s in SECTIONS]

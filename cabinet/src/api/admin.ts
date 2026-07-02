@@ -259,6 +259,26 @@ export interface GrantPayload {
   expires_at: string | null;
 }
 
+// ---------- Лента обновлений ----------
+
+export interface UpdateItem {
+  version: string;
+  name: string;
+  date: string | null;
+  notes: string;
+  url: string | null;
+}
+export interface UpdatesInfo {
+  current: string;
+  latest: string | null;
+  update_available: boolean;
+  repo: string;
+  items: UpdateItem[];
+}
+export const updatesAdminApi = {
+  get: () => adminApi.get<UpdatesInfo>("/updates"),
+};
+
 export const grantsAdminApi = {
   catalog: () => adminApi.get<GrantCatalog>("/grants/catalog"),
   get: (userId: number) => adminApi.get<UserGrant>(`/grants/${userId}`),

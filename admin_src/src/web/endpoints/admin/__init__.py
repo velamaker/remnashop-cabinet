@@ -22,6 +22,7 @@ from .statistics import router as statistics_router
 from .subscriptions import router as subscriptions_router
 from .support import router as support_router
 from .transactions import router as transactions_router
+from .updates import router as updates_router
 from .users import router as users_router
 
 router = APIRouter(prefix=API_V1 + "/admin")
@@ -46,5 +47,6 @@ router.include_router(email_settings_router)
 router.include_router(auth_settings_router)
 router.include_router(audit_router)
 router.include_router(grants_router)
+router.include_router(updates_router)
 
 __all__ = ["router"]

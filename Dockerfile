@@ -13,6 +13,9 @@ COPY admin_src/src/ /opt/remnashop/src/
 # на которой собран образ — ровно то, что сейчас работает.
 COPY VERSION /opt/remnashop/VERSION
 
+# Курируемый список изменений — его читает лента обновлений в админке.
+COPY CHANGELOG.md /opt/remnashop/CHANGELOG.md
+
 # Точку входа uvicorn переключаем на overlay-обёртку (src/overlay_app.py),
 # которая вызывает базовый application() и добавляет admin/public-роуты + таблицы
 # поддержки. Если строка точки входа в base изменится и sed не сматчится —

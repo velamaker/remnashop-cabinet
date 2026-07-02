@@ -25,6 +25,7 @@ import {
   X,
   Eye,
   KeyRound,
+  Sparkles,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
@@ -83,6 +84,7 @@ const navGroups: { title: string; items: NavItem[] }[] = [
       { to: "/admin/auth", icon: KeyRound, label: "Вход через Telegram", section: "settings" },
       { to: "/admin/settings", icon: Settings, label: "Настройки", section: "settings" },
       { to: "/admin/audit", icon: ShieldAlert, label: "Аудит", section: "audit" },
+      { to: "/admin/updates", icon: Sparkles, label: "Обновления", section: "updates" },
     ],
   },
 ];

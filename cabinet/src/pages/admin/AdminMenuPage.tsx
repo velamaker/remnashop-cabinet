@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Save, CheckCircle2, SquareMenu, ChevronUp, ChevronDown } from "lucide-react";
-import { menuAdminApi, type MenuConfig } from "@/api/menu";
+import { menuAdminApi, type MenuConfig, type BotButton } from "@/api/menu";
 import { ApiError } from "@/types/api";
 
 type Key = "cabinet_miniapp" | "cabinet_url" | "connect_miniapp" | "connect_url" | "remna_sub";
@@ -173,6 +173,98 @@ export default function AdminMenuPage() {
         Подписка и т.д.). Когда веб-кабинет выключен, показывается стандартная
         кнопка подписки Remnawave.
       </p>
+
+      <BotButtonColors />
     </div>
+  );
+}
+
+// ── Цвета кнопок бота (авторская задумка: settings.menu.buttons[].color) ──────
+
+const COLOR_META: Record<string, { label: string; dot: string }> = {
+  "": { label: "Дефолт", dot: "bg-fg-subtle" },
+  primary: { label: "Синяя", dot: "bg-[#2563eb]" },
+  success: { label: "Зелёная", dot: "bg-[#16a34a]" },
+  danger: { label: "Красная", dot: "bg-[#dc2626]" },
+};
+
+function BotButtonColors() {
+  const [buttons, setButtons] = useState<BotButton[]>([]);
+  const [colors, setColors] = useState<Record<number, string>>({}); // index → "" | primary…
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = () => {
+    setLoading(true);
+    menuAdminApi.getButtons()
+      .then((r) => {
+        setButtons(r.buttons);
+        setColors(Object.fromEntries(r.buttons.map((b) => [b.index, b.color ?? ""])));
+      })
+      .catch((e) => setErr(e instanceof ApiError ? e.detail : "Ошибка"))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, []);
+
+  const save = async () => {
+    setSaving(true); setErr(null);
+    try {
+      const payload: Record<number, string | null> = {};
+      for (const [idx, c] of Object.entries(colors)) payload[Number(idx)] = c || null;
+      const r = await menuAdminApi.setButtonColors(payload);
+      setButtons(r.buttons);
+      setSaved(true); setTimeout(() => setSaved(false), 2000);
+    } catch (e) { setErr(e instanceof ApiError ? e.detail : "Ошибка"); }
+    finally { setSaving(false); }
+  };
+
+  if (loading) return null;
+  // Показываем только заполненные/активные кнопки бота (пустые слоты не нужны).
+  const shown = buttons.filter((b) => b.is_active || (b.text && b.text !== "btn-test"));
+  if (shown.length === 0) return null;
+
+  return (
+    <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
+      <div className="mb-1 flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-fg">Цвета кнопок бота</h2>
+        <button onClick={save} disabled={saving}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg hover:opacity-90 disabled:opacity-60">
+          {saved ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
+          {saved ? "Сохранено" : saving ? "…" : "Сохранить цвета"}
+        </button>
+      </div>
+      <p className="mb-3 text-xs text-fg-muted">
+        Цвет ваших кнопок в главном меню бота (кнопки 1–6 из меню бота). Применяется сразу.
+      </p>
+      {err && <p className="mb-2 text-xs text-danger">{err}</p>}
+      <div className="space-y-2">
+        {shown.map((b) => (
+          <div key={b.index} className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-bg p-3">
+            <span className="min-w-0 flex-1 truncate text-sm text-fg">
+              {b.text || `Кнопка ${b.index}`}
+            </span>
+            <div className="flex gap-1.5">
+              {["", "primary", "success", "danger"].map((c) => {
+                const m = COLOR_META[c] ?? COLOR_META[""]!;
+                return (
+                  <button key={c} type="button"
+                    onClick={() => setColors((p) => ({ ...p, [b.index]: c }))}
+                    className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs transition-colors ${
+                      (colors[b.index] ?? "") === c
+                        ? "border-accent bg-accent/10 text-accent"
+                        : "border-[var(--border)] text-fg-muted hover:text-fg"
+                    }`}>
+                    <span className={`h-2.5 w-2.5 rounded-full ${m.dot}`} />
+                    {m.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
