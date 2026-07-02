@@ -66,5 +66,3 @@ export const supportAdminApi = {
   setStatus: (id: number, status: TicketStatus) =>
     adminApi.post<{ success: boolean }>(`/support/tickets/${id}/status`, { status }),
 };
-
-export const SUPPORT_TELEGRAM = "VPN_Begemot";

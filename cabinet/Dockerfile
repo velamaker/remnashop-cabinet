@@ -21,6 +21,11 @@ COPY --from=build /app/dist /usr/share/nginx/html
 # entrypoint nginx подставил ${API_*} при старте контейнера (см. nginx.conf).
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 
+# Подстановка бренда в index.html при старте (превью ссылок в мессенджерах без JS).
+# Запускается официальным entrypoint'ом nginx из /docker-entrypoint.d/.
+COPY docker-entrypoint.d/40-brand-title.sh /docker-entrypoint.d/40-brand-title.sh
+RUN chmod +x /docker-entrypoint.d/40-brand-title.sh
+
 # Подставляем ТОЛЬКО переменные с префиксом API_ — рантайм-переменные nginx
 # ($host, $remote_addr, $binary_remote_addr, $request_uri, …) остаются нетронутыми.
 ENV NGINX_ENVSUBST_FILTER=^API_

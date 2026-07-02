@@ -90,7 +90,7 @@ async def check_update_and_notify() -> None:
 
     latest_clean = latest.lstrip("vV")
     text = (
-        "🆕 Доступно обновление RемнаShop (кабинет + админка)\n\n"
+        "🆕 Доступно обновление Vela (кабинет + админка для бота RemnaShop)\n\n"
         f"Версия: {local} → {latest_clean}\n\n"
         "Как обновить (на сервере бота):\n"
         "  cd /opt/remnashop && ./update.sh\n\n"

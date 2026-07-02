@@ -19,8 +19,8 @@ from src.infrastructure.services.email_template_config import fill, load_email_t
 # Если EMAIL_BREVO_API_KEY задан — используем Brevo; иначе откатываемся на SMTP.
 BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
 
-# Русские тексты письма с кодом подтверждения.
-RU_VERIFICATION_SUBJECT = "Код подтверждения — Begemot VPN"
+# Русские тексты письма с кодом подтверждения (без хардкода бренда — он резолвится).
+RU_VERIFICATION_SUBJECT = "Код подтверждения"
 
 
 def _brevo_api_key() -> str:
@@ -55,7 +55,16 @@ def _render_verification(body: str, from_name: str) -> tuple[str, str, str]:
     minutes_match = re.search(r"(\d+)\s*minutes", body)
     minutes = minutes_match.group(1) if minutes_match else "15"
 
-    brand = from_name or "Begemot VPN"
+    # Бренд письма: имя отправителя из настроек почты, иначе — бренд установки
+    # (из branding.json / имени бота), без хардкода конкретного бренда.
+    if from_name:
+        brand = from_name
+    else:
+        try:
+            from src.web.endpoints.public.appearance import resolve_brand_name
+            brand = resolve_brand_name() or "VPN"
+        except Exception:
+            brand = "VPN"
     t = load_email_template()
     subject = fill(t["subject"], brand=brand, code=code, minutes=minutes)
     heading = fill(t["heading"], brand=brand, code=code, minutes=minutes)

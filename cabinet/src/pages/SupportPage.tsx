@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { MessageCircle, Plus, X, Send, ArrowLeft } from "lucide-react";
 import {
   supportApi,
-  SUPPORT_TELEGRAM,
   type TicketListItem,
   type TicketDetail,
   type TicketStatus,
@@ -84,7 +83,7 @@ function NewTicketModal({ onClose, onCreated }: { onClose: () => void; onCreated
 
 export default function SupportPage() {
   const { supportUsername } = useBranding();
-  const support = supportUsername || SUPPORT_TELEGRAM; // из конфига бота, иначе дефолт
+  const support = supportUsername; // только из конфига бота; нет — блок не показываем
   const [tickets, setTickets] = useState<TicketListItem[]>([]);
   const [active, setActive] = useState<TicketDetail | null>(null);
   const [loadingList, setLoadingList] = useState(true);
@@ -126,26 +125,29 @@ export default function SupportPage() {
         </Button>
       </div>
 
-      {/* Telegram fallback */}
-      <div className="surface flex flex-wrap items-center justify-between gap-3 p-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-subtle text-accent">
-            <MessageCircle className="h-5 w-5" />
+      {/* Контакт в Telegram — только если задан BOT_SUPPORT_USERNAME (иначе не
+          подсовываем чужой аккаунт). Тикеты доступны всегда ниже. */}
+      {support && (
+        <div className="surface flex flex-wrap items-center justify-between gap-3 p-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-subtle text-accent">
+              <MessageCircle className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-fg">Связаться в Telegram</p>
+              <p className="text-xs text-fg-muted">@{support}</p>
+            </div>
           </div>
-          <div>
-            <p className="text-sm font-medium text-fg">Связаться в Telegram</p>
-            <p className="text-xs text-fg-muted">@{support}</p>
-          </div>
+          <a
+            href={`https://t.me/${support}`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex h-9 items-center justify-center rounded-lg border border-[var(--border)] bg-bg-raised px-4 text-sm font-medium text-fg transition-colors hover:bg-bg-overlay"
+          >
+            Открыть чат
+          </a>
         </div>
-        <a
-          href={`https://t.me/${support}`}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex h-9 items-center justify-center rounded-lg border border-[var(--border)] bg-bg-raised px-4 text-sm font-medium text-fg transition-colors hover:bg-bg-overlay"
-        >
-          Открыть чат
-        </a>
-      </div>
+      )}
 
       {/* Two-column */}
       <div className="grid gap-4 lg:grid-cols-[320px_1fr]">

@@ -15,7 +15,7 @@
   <text x="62" y="114" fill="#eef3fb" font-size="14" font-weight="600">Название сервиса</text>
   <text x="62" y="134" fill="#9aa7bd" font-size="11">Пусто — подхватится автоматически из имени бота</text>
   <rect x="62" y="146" width="796" height="20" rx="6" fill="#0e1622" stroke="#243149"/>
-  <text x="74" y="160" fill="#eef3fb" font-size="12">Begemot VPN</text>
+  <text x="74" y="160" fill="#eef3fb" font-size="12">Aurora VPN</text>
 
   <!-- Accent -->
   <rect x="40" y="196" width="840" height="104" rx="16" fill="#111722" stroke="#1f2a3d"/>
@@ -43,7 +43,7 @@
   <!-- Preview -->
   <rect x="40" y="436" width="840" height="104" rx="16" fill="#111722" stroke="#1f2a3d"/>
   <text x="62" y="466" fill="#eef3fb" font-size="13" font-weight="600">Предпросмотр</text>
-  <text x="62" y="500" fill="#eef3fb" font-size="18" font-weight="800">Begemot VPN</text>
+  <text x="62" y="500" fill="#eef3fb" font-size="18" font-weight="800">Aurora VPN</text>
   <rect x="62" y="510" width="84" height="22" rx="8" fill="url(#acc3)"/>
   <text x="104" y="525" fill="#06121f" font-size="11" font-weight="700" text-anchor="middle">Кнопка</text>
   <rect x="156" y="510" width="74" height="22" rx="11" fill="#13233f"/>

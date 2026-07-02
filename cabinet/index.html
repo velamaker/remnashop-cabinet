@@ -6,8 +6,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#0a0a0d" media="(prefers-color-scheme: dark)" />
     <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)" />
-    <title>Begemot VPN</title>
-    <meta name="description" content="Begemot VPN — личный кабинет: подписка, устройства и тарифы" />
+    <!-- __CABINET_BRAND__ подставляется при старте контейнера (docker-entrypoint.d/
+         40-brand-title.sh): бренд из API бота / env CABINET_BRAND / нейтральный дефолт.
+         Нужно для превью ссылки в мессенджерах (они не исполняют JS). -->
+    <title>__CABINET_BRAND__</title>
+    <meta name="description" content="__CABINET_BRAND__ — личный кабинет: подписка, устройства и тарифы" />
+    <meta property="og:title" content="__CABINET_BRAND__" />
+    <meta property="og:description" content="__CABINET_BRAND__ — личный кабинет: подписка, устройства и тарифы" />
+    <meta property="og:type" content="website" />
     <script>
       (function () {
         // Применяет тему из localStorage / системную. Используется в обычном браузере.
