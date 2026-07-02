@@ -17,8 +17,15 @@ grep -q "__CABINET_BRAND__" "$HTML" || exit 0  # уже подставлено �
 
 brand=""
 url="${API_SCHEME:-http}://${API_UPSTREAM:-remnashop:5000}/api/v1/public/appearance"
-json="$(wget -q -T 5 -O - "$url" 2>/dev/null || true)"
-brand="$(printf '%s' "$json" | sed -n 's/.*"brand_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+# Кабинет может стартовать раньше API бота — ретраим ожидание (до ~20с).
+i=0
+while [ "$i" -lt 10 ]; do
+  json="$(wget -q -T 4 -O - "$url" 2>/dev/null || true)"
+  brand="$(printf '%s' "$json" | sed -n 's/.*"brand_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+  [ -n "$brand" ] && break
+  i=$((i + 1))
+  sleep 2
+done
 
 [ -z "$brand" ] && brand="${CABINET_BRAND:-}"
 [ -z "$brand" ] && brand="Личный кабинет"
