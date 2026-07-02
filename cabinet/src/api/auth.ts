@@ -20,6 +20,10 @@ export const authApi = {
       is_readonly_admin: boolean;
       can_access_admin: boolean;
       is_owner: boolean;
+      full_access: boolean;
+      can_write: boolean;
+      sections: string[];
+      grant_expires_at: string | null;
       has_password: boolean;
     }>("/auth/whoami"),
   setPassword: (password: string) =>

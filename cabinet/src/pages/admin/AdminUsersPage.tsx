@@ -4,9 +4,9 @@ import {
   CalendarPlus, Trash2, Ban, CheckCircle, Gift, RefreshCw, Star, ChevronDown, ChevronUp, LogIn, Gauge,
 } from "lucide-react";
 import {
-  usersAdminApi, subscriptionsAdminApi, plansAdminApi,
+  usersAdminApi, subscriptionsAdminApi, plansAdminApi, grantsAdminApi,
   type AdminUser, type AdminUserDetail, type AdminSubscription, type AdminPlan,
-  type LoginHistory, type TrafficByNode,
+  type LoginHistory, type TrafficByNode, type GrantCatalog, type GrantPreset, type UserGrant,
 } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { formatDate } from "@/lib/format";
@@ -25,13 +25,6 @@ const ROLE_LABELS: Record<number, { label: string; cls: string }> = {
   6: { label: "Система", cls: "text-accent" },
 };
 
-// Роли, которые владелец может назначать из кабинета. OWNER/SYSTEM/DEV не даём
-// раздавать через UI — это делается осознанно и редко.
-const ASSIGNABLE_ROLES: { value: number; label: string }[] = [
-  { value: 1, label: "Пользователь" },
-  { value: 2, label: "Админ только для просмотра" },
-  { value: 3, label: "Администратор (полный доступ)" },
-];
 
 const STATUS_COLORS: Record<string, string> = {
   ACTIVE: "text-success",
@@ -353,6 +346,136 @@ function TrafficByNodeBlock({ userId }: { userId: number }) {
   );
 }
 
+// ─── Access grant (гранулярные роли) ───────────────────────────────────────
+
+function AccessGrantBlock({ userId }: { userId: number }) {
+  const [catalog, setCatalog] = useState<GrantCatalog | null>(null);
+  const [grant, setGrant] = useState<UserGrant | null>(null);
+  const [fullAccess, setFullAccess] = useState(false);
+  const [canWrite, setCanWrite] = useState(true);
+  const [secs, setSecs] = useState<Set<string>>(new Set());
+  const [expires, setExpires] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    Promise.all([grantsAdminApi.catalog(), grantsAdminApi.get(userId)])
+      .then(([cat, g]) => {
+        setCatalog(cat);
+        setGrant(g);
+        setFullAccess(g.full_access);
+        setCanWrite(g.has_grant ? g.can_write : true);
+        setSecs(new Set(g.sections));
+        setExpires(g.expires_at ? g.expires_at.slice(0, 10) : "");
+      })
+      .catch(() => setMsg("Не удалось загрузить доступ"));
+  }, [userId]);
+  useEffect(() => { load(); }, [load]);
+
+  if (!catalog || !grant) return null;
+
+  const applyPreset = (p: GrantPreset) => { setFullAccess(p.full_access); setSecs(new Set(p.sections)); };
+  const toggleSec = (k: string) =>
+    setSecs(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
+
+  const save = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      await grantsAdminApi.set(userId, {
+        full_access: fullAccess,
+        can_write: canWrite,
+        sections: fullAccess ? [] : Array.from(secs),
+        expires_at: expires ? new Date(expires + "T23:59:59").toISOString() : null,
+      });
+      setMsg("Сохранено"); load();
+    } catch (e) { setMsg(e instanceof ApiError ? e.detail : "Ошибка"); }
+    finally { setBusy(false); }
+  };
+  const removeGrant = async () => {
+    setBusy(true); setMsg(null);
+    try { await grantsAdminApi.remove(userId); setMsg("Доступ убран"); load(); }
+    catch (e) { setMsg(e instanceof ApiError ? e.detail : "Ошибка"); }
+    finally { setBusy(false); }
+  };
+
+  const eff = grant.effective;
+  const effLabel = !eff.allowed
+    ? "нет доступа к админке"
+    : (eff.full_access ? "полный доступ" : `разделов: ${eff.sections.length}`) +
+      (eff.can_write ? "" : " · только просмотр");
+
+  return (
+    <div className="space-y-3 rounded-xl border border-[var(--border)] p-4">
+      <div>
+        <p className="text-xs font-semibold text-fg">Доступ к админке (роль)</p>
+        <p className="mt-0.5 text-[11px] text-fg-subtle">
+          Выберите пресет или отметьте разделы вручную. Пусто = нет доступа к админке.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {catalog.presets.map(p => (
+          <button key={p.key} type="button" onClick={() => applyPreset(p)}
+            className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-fg-muted hover:bg-bg-subtle hover:text-fg">
+            {p.label}
+          </button>
+        ))}
+      </div>
+
+      <label className="flex items-center gap-2 text-xs text-fg">
+        <input type="checkbox" className="h-4 w-4 accent-[var(--accent)]" checked={fullAccess}
+          onChange={e => setFullAccess(e.target.checked)} />
+        Полный доступ ко всем разделам
+      </label>
+      <label className="flex items-center gap-2 text-xs text-fg">
+        <input type="checkbox" className="h-4 w-4 accent-[var(--accent)]" checked={!canWrite}
+          onChange={e => setCanWrite(!e.target.checked)} />
+        Только просмотр (изменения запрещены)
+      </label>
+
+      {!fullAccess && (
+        <div className="flex flex-wrap gap-1.5">
+          {catalog.sections.map(s => (
+            <button key={s.key} type="button" onClick={() => toggleSec(s.key)}
+              className={`rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ${
+                secs.has(s.key)
+                  ? "border-accent bg-accent/10 text-accent"
+                  : "border-[var(--border)] text-fg-muted hover:bg-bg-subtle hover:text-fg"
+              }`}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-fg-muted">Истекает:</span>
+        <input type="date" value={expires} onChange={e => setExpires(e.target.value)}
+          className="h-8 rounded-lg border border-[var(--border)] bg-bg px-2 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent" />
+        {expires
+          ? <button type="button" onClick={() => setExpires("")} className="text-fg-subtle hover:text-fg">бессрочно</button>
+          : <span className="text-fg-subtle">бессрочно</span>}
+      </div>
+
+      {msg && <p className="text-xs text-fg-muted">{msg}</p>}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" onClick={save} disabled={busy}
+          className="rounded-lg bg-accent px-4 py-1.5 text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50">
+          {busy ? "Сохранение…" : "Сохранить доступ"}
+        </button>
+        {grant.has_grant && (
+          <button type="button" onClick={removeGrant} disabled={busy}
+            className="rounded-lg border border-danger/20 bg-danger/8 px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/15 disabled:opacity-50">
+            Убрать доступ
+          </button>
+        )}
+        <span className="ml-auto text-[11px] text-fg-subtle">Сейчас: {effLabel}</span>
+      </div>
+    </div>
+  );
+}
+
 // ─── User Detail Modal ─────────────────────────────────────────────────────
 
 function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClose: () => void; onUpdated: () => void }) {
@@ -392,18 +515,6 @@ function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClo
     setSaving(true);
     try {
       await usersAdminApi.setDiscount(userId, Number(discountPersonal), Number(discountPurchase));
-      load(); onUpdated();
-    } catch (e) { alert(e instanceof ApiError ? e.detail : "Ошибка"); }
-    finally { setSaving(false); }
-  };
-
-  const changeRole = async (role: number) => {
-    if (!detail || role === detail.user.role) return;
-    const label = ASSIGNABLE_ROLES.find(r => r.value === role)?.label ?? `роль ${role}`;
-    if (!confirm(`Назначить пользователю «${label}»?`)) return;
-    setSaving(true);
-    try {
-      await usersAdminApi.changeRole(userId, role);
       load(); onUpdated();
     } catch (e) { alert(e instanceof ApiError ? e.detail : "Ошибка"); }
     finally { setSaving(false); }
@@ -503,31 +614,9 @@ function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClo
                     </button>
                   </div>
 
-                  {/* Роль — только владелец, и не трогаем владельцев/системных */}
-                  {isOwner && u.role < 4 && (
-                    <div className="rounded-xl border border-[var(--border)] p-4">
-                      <p className="mb-1 text-xs font-semibold text-fg">Роль и доступ</p>
-                      <p className="mb-3 text-[11px] text-fg-subtle">
-                        «Админ только для просмотра» открывает всю админку, но
-                        запрещает любые изменения.
-                      </p>
-                      <div className="flex flex-wrap gap-2">
-                        {ASSIGNABLE_ROLES.map(r => (
-                          <button
-                            key={r.value}
-                            onClick={() => changeRole(r.value)}
-                            disabled={saving || u.role === r.value}
-                            className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-default ${
-                              u.role === r.value
-                                ? "border-accent bg-accent/10 text-accent"
-                                : "border-[var(--border)] text-fg-muted hover:bg-bg-subtle hover:text-fg disabled:opacity-50"
-                            }`}
-                          >
-                            {r.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                  {/* Доступ к админке (гранулярные роли) — только владелец, не для владельцев/системных */}
+                  {isOwner && u.role != null && u.role < 5 && (
+                    <AccessGrantBlock userId={userId} />
                   )}
 
                   {/* Block */}

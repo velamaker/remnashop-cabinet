@@ -226,6 +226,48 @@ export const usersAdminApi = {
     }),
 };
 
+// ---------- Гранулярные права (grants) ----------
+
+export interface GrantSection { key: string; label: string; }
+export interface GrantPreset {
+  key: string; label: string; full_access: boolean; sections: string[];
+}
+export interface GrantCatalog { sections: GrantSection[]; presets: GrantPreset[]; }
+
+export interface UserGrant {
+  user_id: number;
+  role: number;
+  has_grant: boolean;
+  full_access: boolean;
+  can_write: boolean;
+  sections: string[];
+  expires_at: string | null;
+  granted_by: string | null;
+  effective: {
+    allowed: boolean;
+    full_access: boolean;
+    can_write: boolean;
+    sections: string[];
+    source: string;
+  };
+}
+
+export interface GrantPayload {
+  full_access: boolean;
+  can_write: boolean;
+  sections: string[];
+  expires_at: string | null;
+}
+
+export const grantsAdminApi = {
+  catalog: () => adminApi.get<GrantCatalog>("/grants/catalog"),
+  get: (userId: number) => adminApi.get<UserGrant>(`/grants/${userId}`),
+  set: (userId: number, body: GrantPayload) =>
+    adminApi.put<UserGrant & { success: boolean }>(`/grants/${userId}`, body),
+  remove: (userId: number) =>
+    adminApi.delete<{ success: boolean; user_id: number }>(`/grants/${userId}`),
+};
+
 export const transactionsAdminApi = {
   list: (params: {
     limit?: number; offset?: number; status?: string; gateway?: string;

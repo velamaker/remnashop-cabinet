@@ -88,6 +88,17 @@ _SUPPORT_TABLES_DDL = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS ix_login_events_user ON login_events (user_id, created_at DESC)",
+    """
+    CREATE TABLE IF NOT EXISTS admin_grants (
+        user_id      INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        full_access  BOOLEAN     NOT NULL DEFAULT false,
+        can_write    BOOLEAN     NOT NULL DEFAULT true,
+        sections     JSONB       NOT NULL DEFAULT '[]'::jsonb,
+        expires_at   TIMESTAMPTZ,
+        granted_by   VARCHAR(120),
+        updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
 )
 
 

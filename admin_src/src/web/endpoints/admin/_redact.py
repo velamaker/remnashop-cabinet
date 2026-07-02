@@ -12,14 +12,30 @@ PREVIEW видит все разделы и страницы (меню не ур
     остаются имя/метка и статус онлайн/нагрузка (для мониторинга).
 """
 
+import contextvars
 from typing import Any
 
 from src.application.dto import UserDto
 from src.core.enums import Role
 
+# Решение «только просмотр» на текущий запрос. Ставится в _get_admin_user из
+# эффективных прав (can_write): read-only может задаваться и грантом, не только
+# enum-ролью PREVIEW. Контекстно-локально — у каждого запроса своё значение.
+_readonly_ctx: contextvars.ContextVar = contextvars.ContextVar("admin_readonly", default=None)
+
+
+def set_request_readonly(value: bool) -> None:
+    _readonly_ctx.set(value)
+
 
 def is_readonly_admin(admin: UserDto) -> bool:
-    """True для роли «только просмотр» (PREVIEW и всё ниже ADMIN)."""
+    """True для режима «только просмотр».
+
+    Если для запроса вычислены эффективные права (грант или enum) — берём их;
+    иначе фолбэк на enum-роль (PREVIEW и ниже ADMIN)."""
+    v = _readonly_ctx.get()
+    if v is not None:
+        return bool(v)
     return admin.role < Role.ADMIN
 
 

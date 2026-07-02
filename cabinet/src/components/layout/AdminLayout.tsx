@@ -30,7 +30,9 @@ import type { LucideIcon } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
 
-type NavItem = { to: string; icon: LucideIcon; label: string; end?: boolean };
+// section — ключ раздела прав (см. backend permissions.py). Пункт показывается,
+// только если у пользователя есть доступ к разделу (fullAccess или в списке).
+type NavItem = { to: string; icon: LucideIcon; label: string; end?: boolean; section: string };
 
 // Разделы сгруппированы по категориям (заголовки в сайдбаре), чтобы длинный
 // список не висел плоской простынёй.
@@ -38,60 +40,68 @@ const navGroups: { title: string; items: NavItem[] }[] = [
   {
     title: "Аналитика",
     items: [
-      { to: "/admin", icon: LayoutDashboard, label: "Обзор", end: true },
-      { to: "/admin/transactions", icon: CreditCard, label: "Транзакции" },
+      { to: "/admin", icon: LayoutDashboard, label: "Обзор", end: true, section: "dashboard" },
+      { to: "/admin/transactions", icon: CreditCard, label: "Транзакции", section: "transactions" },
     ],
   },
   {
     title: "Пользователи",
     items: [
-      { to: "/admin/users", icon: Users, label: "Пользователи" },
-      { to: "/admin/support", icon: LifeBuoy, label: "Поддержка" },
+      { to: "/admin/users", icon: Users, label: "Пользователи", section: "users" },
+      { to: "/admin/support", icon: LifeBuoy, label: "Поддержка", section: "support" },
     ],
   },
   {
     title: "Продажи",
     items: [
-      { to: "/admin/plans", icon: Package, label: "Тарифы" },
-      { to: "/admin/promocodes", icon: Tag, label: "Промокоды" },
-      { to: "/admin/gateways", icon: Wallet, label: "Шлюзы" },
+      { to: "/admin/plans", icon: Package, label: "Тарифы", section: "plans" },
+      { to: "/admin/promocodes", icon: Tag, label: "Промокоды", section: "promocodes" },
+      { to: "/admin/gateways", icon: Wallet, label: "Шлюзы", section: "gateways" },
     ],
   },
   {
     title: "Маркетинг",
     items: [
-      { to: "/admin/ad-links", icon: Link2, label: "Рекл. ссылки" },
-      { to: "/admin/broadcasts", icon: Radio, label: "Рассылки" },
+      { to: "/admin/ad-links", icon: Link2, label: "Рекл. ссылки", section: "ad_links" },
+      { to: "/admin/broadcasts", icon: Radio, label: "Рассылки", section: "broadcasts" },
     ],
   },
   {
     title: "Кабинет",
     items: [
-      { to: "/admin/appearance", icon: Palette, label: "Оформление" },
-      { to: "/admin/info", icon: Info, label: "Информация" },
-      { to: "/admin/menu", icon: SquareMenu, label: "Меню" },
-      { to: "/admin/apps", icon: Smartphone, label: "Приложения" },
-      { to: "/admin/email", icon: Mail, label: "Письмо" },
+      { to: "/admin/appearance", icon: Palette, label: "Оформление", section: "content" },
+      { to: "/admin/info", icon: Info, label: "Информация", section: "content" },
+      { to: "/admin/menu", icon: SquareMenu, label: "Меню", section: "content" },
+      { to: "/admin/apps", icon: Smartphone, label: "Приложения", section: "content" },
+      { to: "/admin/email", icon: Mail, label: "Письмо", section: "settings" },
     ],
   },
   {
     title: "Система",
     items: [
-      { to: "/admin/remnawave", icon: Waves, label: "RemnaWave" },
-      { to: "/admin/auth", icon: KeyRound, label: "Вход через Telegram" },
-      { to: "/admin/settings", icon: Settings, label: "Настройки" },
-      { to: "/admin/audit", icon: ShieldAlert, label: "Аудит" },
+      { to: "/admin/remnawave", icon: Waves, label: "RemnaWave", section: "remnawave" },
+      { to: "/admin/auth", icon: KeyRound, label: "Вход через Telegram", section: "settings" },
+      { to: "/admin/settings", icon: Settings, label: "Настройки", section: "settings" },
+      { to: "/admin/audit", icon: ShieldAlert, label: "Аудит", section: "audit" },
     ],
   },
 ];
 
-// Плоский список для мобильного нижнего навбара (там без группировки).
-const navItems = navGroups.flatMap((g) => g.items);
-
-function GroupedNav({ onNavigate, itemPad }: { onNavigate?: () => void; itemPad: string }) {
+function GroupedNav({
+  onNavigate,
+  itemPad,
+  canSection,
+}: {
+  onNavigate?: () => void;
+  itemPad: string;
+  canSection: (key: string) => boolean;
+}) {
+  const groups = navGroups
+    .map((group) => ({ ...group, items: group.items.filter((it) => canSection(it.section)) }))
+    .filter((group) => group.items.length > 0);
   return (
     <>
-      {navGroups.map((group) => (
+      {groups.map((group) => (
         <div key={group.title} className="flex flex-col gap-0.5">
           <span className="px-2.5 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">
             {group.title}
@@ -123,9 +133,12 @@ function GroupedNav({ onNavigate, itemPad }: { onNavigate?: () => void; itemPad:
 }
 
 export function AdminLayout({ children }: { children: ReactNode }) {
-  const { user, logout, isReadonlyAdmin } = useAuth();
+  const { user, logout, isReadonlyAdmin, canSection } = useAuth();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // Плоский список разрешённых пунктов для мобильного нижнего навбара.
+  const mobileItems = navGroups.flatMap((g) => g.items).filter((it) => canSection(it.section));
 
   const handleLogout = async () => {
     await logout();
@@ -144,7 +157,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
         </div>
 
         <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto min-h-0">
-          <GroupedNav itemPad="py-2" />
+          <GroupedNav itemPad="py-2" canSection={canSection} />
         </nav>
 
         <div className="mt-4 flex flex-col gap-0.5 border-t border-[var(--border)] pt-4">
@@ -214,7 +227,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             </div>
 
             <nav className="flex flex-1 flex-col gap-0.5">
-              <GroupedNav onNavigate={() => setMenuOpen(false)} itemPad="py-2.5" />
+              <GroupedNav onNavigate={() => setMenuOpen(false)} itemPad="py-2.5" canSection={canSection} />
             </nav>
 
             <div className="mt-4 flex flex-col gap-0.5 border-t border-[var(--border)] pt-4">
@@ -257,7 +270,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
 
       {/* Mobile bottom nav — горизонтальная прокрутка по всем разделам */}
       <nav className="scrollbar-hide fixed inset-x-0 bottom-0 z-20 flex items-center gap-0.5 overflow-x-auto border-t border-[var(--border)] bg-bg/90 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur-md md:hidden">
-        {navItems.map(({ to, icon: Icon, label, end }) => (
+        {mobileItems.map(({ to, icon: Icon, label, end }) => (
           <NavLink
             key={to}
             to={to}

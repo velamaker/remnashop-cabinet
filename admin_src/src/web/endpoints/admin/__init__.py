@@ -11,6 +11,7 @@ from .broadcasts import router as broadcasts_router
 from .email_settings import router as email_settings_router
 from .email_template import router as email_template_router
 from .gateways import router as gateways_router
+from .grants import router as grants_router
 from .info import router as info_router
 from .menu import router as menu_router
 from .plans import router as plans_router
@@ -44,5 +45,6 @@ router.include_router(email_template_router)
 router.include_router(email_settings_router)
 router.include_router(auth_settings_router)
 router.include_router(audit_router)
+router.include_router(grants_router)
 
 __all__ = ["router"]

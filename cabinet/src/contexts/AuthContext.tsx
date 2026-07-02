@@ -25,6 +25,12 @@ interface AuthContextValue {
   isReadonlyAdmin: boolean;
   // Владелец — может менять роли пользователей.
   isOwner: boolean;
+  // Полный доступ ко всем разделам админки.
+  fullAccess: boolean;
+  // Ключи разрешённых разделов (при неполном доступе). Пусто = только те, что в grant.
+  sections: string[];
+  // Разрешён ли раздел (полный доступ ИЛИ ключ в списке).
+  canSection: (key: string) => boolean;
   hasPassword: boolean;
   isLoading: boolean;
   login: (data: LoginRequest) => Promise<void>;
@@ -42,6 +48,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [isReadonlyAdmin, setIsReadonlyAdmin] = useState(false);
   const [isOwner, setIsOwner] = useState(false);
+  const [fullAccess, setFullAccess] = useState(false);
+  const [sections, setSections] = useState<string[]>([]);
   const [hasPassword, setHasPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -56,11 +64,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setIsAdmin(Boolean(who?.can_access_admin ?? who?.is_admin));
         setIsReadonlyAdmin(Boolean(who?.is_readonly_admin));
         setIsOwner(Boolean(who?.is_owner));
+        setFullAccess(Boolean(who?.full_access));
+        setSections(Array.isArray(who?.sections) ? who.sections : []);
         setHasPassword(Boolean(who?.has_password));
       } catch {
         setIsAdmin(false);
         setIsReadonlyAdmin(false);
         setIsOwner(false);
+        setFullAccess(false);
+        setSections([]);
         setHasPassword(false);
       }
     } catch (e) {
@@ -120,9 +132,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsAdmin(false);
       setIsReadonlyAdmin(false);
       setIsOwner(false);
+      setFullAccess(false);
+      setSections([]);
       setHasPassword(false);
     }
   }, []);
+
+  const canSection = useCallback(
+    (key: string) => fullAccess || sections.includes(key),
+    [fullAccess, sections],
+  );
 
   const value = useMemo(
     () => ({
@@ -130,6 +149,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAdmin,
       isReadonlyAdmin,
       isOwner,
+      fullAccess,
+      sections,
+      canSection,
       hasPassword,
       isLoading,
       login,
@@ -139,7 +161,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout,
       refreshMe,
     }),
-    [user, isAdmin, isReadonlyAdmin, isOwner, hasPassword, isLoading, login, register, loginWithTelegram, loginWithTelegramWebApp, logout, refreshMe],
+    [user, isAdmin, isReadonlyAdmin, isOwner, fullAccess, sections, canSection, hasPassword, isLoading, login, register, loginWithTelegram, loginWithTelegramWebApp, logout, refreshMe],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
