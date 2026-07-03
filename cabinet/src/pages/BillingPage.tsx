@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { clsx } from "clsx";
-import { Check, Sparkles } from "lucide-react";
+import { Check, ChevronDown, Sparkles } from "lucide-react";
 import { subscriptionApi } from "@/api/subscription";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { formatTrafficLimit } from "@/lib/format";
@@ -32,18 +32,26 @@ function isPopular(plan: PlanOfferResponse): boolean {
   return hay.includes("хит") || hay.includes("популярн");
 }
 
-/** Маркетинговая карточка тарифа: цена за выбранный срок, список фич, кнопка. */
+/**
+ * Карточка тарифа — аккордеон: свёрнута показывает только имя/бейдж/цену,
+ * по клику раскрывается со списком фич и кнопкой «Выбрать». Открыта может
+ * быть только одна карточка одновременно (управляется родителем).
+ */
 function PlanCard({
   plan,
   days,
   gateway,
   busy,
+  expanded,
+  onToggle,
   onBuy,
 }: {
   plan: PlanOfferResponse;
   days: number | null;
   gateway: PaymentGatewayType | null;
   busy: boolean;
+  expanded: boolean;
+  onToggle: () => void;
   onBuy: () => void;
 }) {
   const price = priceFor(plan, days, gateway);
@@ -63,72 +71,80 @@ function PlanCard({
   return (
     <div
       className={clsx(
-        "relative flex flex-col rounded-[22px] border p-6 transition-all duration-200",
-        popular
-          ? "border-accent bg-accent-subtle/40 shadow-[0_18px_50px_-20px_var(--accent-glow)] sm:-translate-y-1"
-          : "border-[var(--border-subtle)] bg-bg-raised hover:-translate-y-0.5 hover:border-[var(--accent)]/50",
+        "overflow-hidden rounded-2xl border transition-all duration-200",
+        expanded
+          ? "border-accent bg-accent-subtle/40 shadow-[0_18px_50px_-20px_var(--accent-glow)]"
+          : "border-[var(--border-subtle)] bg-bg-raised hover:border-[var(--accent)]/50",
       )}
     >
-      {popular && (
-        <span className="absolute -top-3 left-1/2 inline-flex -translate-x-1/2 items-center gap-1 rounded-full bg-gradient-to-r from-[var(--accent)] to-[var(--accent-2)] px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-white shadow-[0_6px_16px_-6px_var(--accent-glow)]">
-          <Sparkles className="h-3 w-3" /> Хит
-        </span>
-      )}
-
-      <h3 className="text-[17px] font-bold leading-tight text-fg">{plan.name}</h3>
-      {plan.description && <p className="mt-1 text-xs text-fg-subtle">{plan.description}</p>}
-
-      {/* Цена */}
-      <div className="mt-5 flex items-end gap-2">
-        {price ? (
-          price.is_free ? (
-            <span className="text-3xl font-extrabold text-success">Бесплатно</span>
-          ) : (
-            <>
-              <span className="text-[34px] font-extrabold leading-none text-fg">
-                {price.final_amount}
-              </span>
-              <span className="pb-1 text-lg font-semibold text-fg-muted">{price.currency_symbol}</span>
-              {price.discount_percent > 0 && (
-                <span className="pb-1.5 text-sm text-fg-subtle line-through">
-                  {price.original_amount}
-                </span>
-              )}
-            </>
-          )
-        ) : (
-          <span className="text-2xl font-bold text-fg-subtle">—</span>
-        )}
-      </div>
-      <p className="mt-1 text-xs text-fg-subtle">
-        {days ? `за ${days} дн.` : "выберите срок"}
-        {perMonth ? ` · ≈ ${perMonth} ${price?.currency_symbol}/мес` : ""}
-      </p>
-
-      {/* Фичи */}
-      <ul className="mt-5 flex flex-1 flex-col gap-2.5">
-        {features.map((f) => (
-          <li key={f} className="flex items-center gap-2 text-sm text-fg-muted">
-            <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full bg-accent-subtle text-accent">
-              <Check className="h-3 w-3" strokeWidth={3} />
-            </span>
-            {f}
-          </li>
-        ))}
-      </ul>
-
       <button
-        onClick={onBuy}
-        disabled={busy || !price}
-        className={clsx(
-          "mt-6 inline-flex h-11 items-center justify-center rounded-xl px-5 text-sm font-semibold transition-all active:scale-[0.98] disabled:opacity-60",
-          popular
-            ? "btn-gradient text-white"
-            : "border border-[var(--accent)]/40 bg-accent-subtle text-accent hover:bg-accent-subtle/80",
-        )}
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center gap-3 px-4 py-3.5 text-left"
       >
-        {busy ? "Переход к оплате…" : "Выбрать"}
+        {popular && (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-gradient-to-r from-[var(--accent)] to-[var(--accent-2)] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white">
+            <Sparkles className="h-3 w-3" /> Хит
+          </span>
+        )}
+        <div className="min-w-0 flex-1">
+          <h3 className="truncate text-[15px] font-bold leading-tight text-fg">{plan.name}</h3>
+          {plan.description && (
+            <p className="mt-0.5 truncate text-xs text-fg-subtle">{plan.description}</p>
+          )}
+        </div>
+        <div className="shrink-0 text-right">
+          {price ? (
+            price.is_free ? (
+              <span className="text-base font-extrabold text-success">Бесплатно</span>
+            ) : (
+              <span className="text-base font-extrabold text-fg">
+                {price.final_amount} {price.currency_symbol}
+              </span>
+            )
+          ) : (
+            <span className="text-sm text-fg-subtle">—</span>
+          )}
+        </div>
+        <ChevronDown
+          className={clsx(
+            "h-4 w-4 shrink-0 text-fg-muted transition-transform",
+            expanded && "rotate-180",
+          )}
+        />
       </button>
+
+      {expanded && (
+        <div className="border-t border-[var(--border-subtle)] px-4 pb-4 pt-3.5">
+          <p className="text-xs text-fg-subtle">
+            {days ? `за ${days} дн.` : "выберите срок"}
+            {perMonth ? ` · ≈ ${perMonth} ${price?.currency_symbol}/мес` : ""}
+            {price && !price.is_free && price.discount_percent > 0 && (
+              <span className="ml-1.5 text-fg-subtle line-through">{price.original_amount}</span>
+            )}
+          </p>
+
+          {/* Фичи */}
+          <ul className="mt-3 flex flex-col gap-2.5">
+            {features.map((f) => (
+              <li key={f} className="flex items-center gap-2 text-sm text-fg-muted">
+                <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full bg-accent-subtle text-accent">
+                  <Check className="h-3 w-3" strokeWidth={3} />
+                </span>
+                {f}
+              </li>
+            ))}
+          </ul>
+
+          <button
+            onClick={onBuy}
+            disabled={busy || !price}
+            className="btn-gradient mt-4 inline-flex h-11 w-full items-center justify-center rounded-xl px-5 text-sm font-semibold text-white transition-all active:scale-[0.98] disabled:opacity-60"
+          >
+            {busy ? "Переход к оплате…" : "Выбрать"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -142,6 +158,8 @@ export default function BillingPage() {
   const [selectedGateway, setSelectedGateway] = useState<PaymentGatewayType | null>(null);
   const [purchasingCode, setPurchasingCode] = useState<string | null>(null);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
+  // Аккордеон: раскрыта не больше одной карточки тарифа одновременно.
+  const [expandedCode, setExpandedCode] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -203,10 +221,11 @@ export default function BillingPage() {
     return (
       <div className="flex flex-col gap-5">
         <h1 className="text-2xl font-bold tracking-tight text-fg">Тарифы</h1>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <Skeleton className="h-80 w-full rounded-[22px]" />
-          <Skeleton className="h-80 w-full rounded-[22px]" />
-          <Skeleton className="h-80 w-full rounded-[22px]" />
+        <div className="mx-auto flex w-full max-w-xl flex-col gap-2.5">
+          <Skeleton className="h-14 w-full rounded-2xl" />
+          <Skeleton className="h-14 w-full rounded-2xl" />
+          <Skeleton className="h-14 w-full rounded-2xl" />
+          <Skeleton className="h-14 w-full rounded-2xl" />
         </div>
       </div>
     );
@@ -298,8 +317,8 @@ export default function BillingPage() {
         </div>
       )}
 
-      {/* Карточки тарифов */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {/* Карточки тарифов — аккордеон, раскрывается по клику */}
+      <div className="mx-auto flex w-full max-w-xl flex-col gap-2.5">
         {offers.plans.map((plan) => (
           <PlanCard
             key={plan.public_code}
@@ -307,6 +326,10 @@ export default function BillingPage() {
             days={selectedDays}
             gateway={selectedGateway}
             busy={purchasingCode === plan.public_code}
+            expanded={expandedCode === plan.public_code}
+            onToggle={() =>
+              setExpandedCode((c) => (c === plan.public_code ? null : plan.public_code))
+            }
             onBuy={() => handlePurchase(plan)}
           />
         ))}

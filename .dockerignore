@@ -1,0 +1,12 @@
+.git
+.github
+.env
+.env.local
+*.log
+logs/
+docs/
+cabinet/node_modules
+cabinet/dist
+**/node_modules
+**/__pycache__
+**/*.pyc

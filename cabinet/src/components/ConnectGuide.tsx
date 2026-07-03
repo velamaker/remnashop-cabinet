@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, Zap, Check, Star, QrCode, X } from "lucide-react";
+import { Download, Zap, Check, Star, QrCode, X, Link2, Copy } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { APPS, PLATFORMS, DEFAULT_PRIORITY, type AppEntry, type Platform } from "@/data/apps";
 import { appsApi, type AppsConfig } from "@/api/apps";
+import { openExternalLink, useIsMiniApp } from "@/hooks/useTelegramWebApp";
 
 function detectPlatform(): Platform {
   const ua = (navigator.userAgent || "").toLowerCase();
@@ -28,7 +29,7 @@ function AppCard({
   const installUrl = app.install[platform];
 
   const handleConnect = () => {
-    window.location.href = app.deepLink(sub);
+    openExternalLink(app.deepLink(sub));
     setConnected(true);
     setTimeout(() => setConnected(false), 2500);
   };
@@ -74,6 +75,22 @@ function AppCard({
 export function ConnectGuide({ subUrl }: { subUrl: string }) {
   const [platform, setPlatform] = useState<Platform>(detectPlatform);
   const [showQr, setShowQr] = useState(false);
+  const [copied, setCopied] = useState(false);
+  // Telegram Mini App не открывает кастомные схемы (happ://, hiddify:// и т.п.) —
+  // это ограничение самого Telegram, кнопка «Подключиться» там может не сработать.
+  // Подсказываем сразу, куда смотреть, а не оставляем гадать после неудачного клика.
+  const isMiniApp = useIsMiniApp();
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(subUrl);
+    } catch {
+      // clipboard недоступен (http/старый браузер) — выделяем через prompt-фолбэк
+      window.prompt("Скопируйте ссылку подписки:", subUrl);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
   // Выбор админа: какие приложения показывать и какое приоритетное.
   const [config, setConfig] = useState<AppsConfig | null>(null);
 
@@ -144,6 +161,14 @@ export function ConnectGuide({ subUrl }: { subUrl: string }) {
         ))}
       </div>
 
+      {isMiniApp && (
+        <p className="mt-3 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-fg">
+          Открыто внутри Telegram — если кнопка «Подключиться» не переключает в
+          приложение, скопируйте ссылку внизу страницы и вставьте её в приложении
+          вручную («Добавить подписку по URL»).
+        </p>
+      )}
+
       {/* Приложения */}
       <div className="mt-4 flex flex-col gap-2.5">
         {apps.map((app) => (
@@ -184,6 +209,35 @@ export function ConnectGuide({ subUrl }: { subUrl: string }) {
             </p>
           </div>
         )}
+      </div>
+
+      {/* Прямая ссылка подписки — вставить вручную в приложение («Добавить по URL»)
+          или скопировать на другое устройство. */}
+      <div className="mt-4 border-t border-[var(--border)] pt-4">
+        <p className="flex items-center gap-2 text-sm font-medium text-fg">
+          <Link2 className="h-4 w-4 text-fg-muted" />
+          Прямая ссылка подписки
+        </p>
+        <p className="mt-0.5 text-xs text-fg-subtle">
+          Если приложение просит ввести ссылку вручную — скопируйте и вставьте её в
+          «Добавить подписку по URL».
+        </p>
+        <div className="mt-2 flex items-stretch gap-2">
+          <input
+            readOnly
+            value={subUrl}
+            onFocus={(e) => e.currentTarget.select()}
+            className="min-w-0 flex-1 truncate rounded-lg border border-[var(--border)] bg-bg-subtle px-2.5 py-2 text-xs text-fg-muted outline-none"
+          />
+          <button
+            type="button"
+            onClick={copyLink}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-accent-fg transition-opacity hover:opacity-90"
+          >
+            {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+            {copied ? "Скопировано" : "Копировать"}
+          </button>
+        </div>
       </div>
     </div>
   );

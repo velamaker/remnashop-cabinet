@@ -5,6 +5,7 @@ interface TelegramWebApp {
   colorScheme: "dark" | "light";
   ready: () => void;
   expand: () => void;
+  openLink: (url: string, options?: { try_instant_view?: boolean }) => void;
   BackButton: {
     isVisible: boolean;
     show: () => void;
@@ -56,6 +57,24 @@ export function whenTelegramReady(timeoutMs = 5000): Promise<void> {
 
 export function useIsMiniApp(): boolean {
   return Boolean(getTelegramWebApp());
+}
+
+/**
+ * Переход по ссылке — deep-link кастомных схем (happ://, hiddify:// и т.п.)
+ * внутри Telegram Mini App через обычный location.href не работает: встроенный
+ * WebView не резолвит неизвестную схему сам (net::ERR_UNKNOWN_URL_SCHEME),
+ * т.к. это top-level навигация через его собственный сетевой стек. Telegram.
+ * WebApp.openLink передаёт ссылку самому клиенту Telegram, а он уже открывает
+ * её через ОС (Intent/URL scheme) — так кастомные схемы открываются нормально.
+ * Вне Mini App (обычный браузер) — как раньше, просто location.href.
+ */
+export function openExternalLink(url: string) {
+  const app = getTelegramWebApp();
+  if (app) {
+    app.openLink(url, { try_instant_view: false });
+  } else {
+    window.location.href = url;
+  }
 }
 
 export function useTelegramTheme(): "dark" | "light" | null {

@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common.dao import SettingsDao
-from src.telegram.routers.menu.menu_config import load_menu_config, save_menu_config
+from src.telegram.routers.menu.menu_config import DEFAULT_TEXTS, load_menu_config, save_menu_config
 
 from ._common import AdminUser
 
@@ -33,11 +33,16 @@ class MenuConfigUpdate(BaseModel):
     # Порядок кнопок (список ключей). Нормализуется в menu_config (чужие ключи и
     # дубли отсекаются, недостающие добиваются в дефолтном порядке).
     order: Optional[list[str]] = None
+    # Кастомные подписи (ключ→текст, эмодзи разрешены) и цвета (ключ→primary/success/
+    # danger). Нормализация и валидация — в menu_config.save_menu_config.
+    texts: Optional[dict[str, str]] = None
+    colors: Optional[dict[str, Optional[str]]] = None
 
 
 @router.get("")
 async def get_menu(_admin: AdminUser) -> dict[str, Any]:
-    return load_menu_config()
+    # defaults — только для превью в UI, не хранится в menu.json (см. save_menu_config).
+    return {**load_menu_config(), "defaults": DEFAULT_TEXTS}
 
 
 @router.put("")
@@ -70,23 +75,31 @@ async def get_menu_buttons(
     }
 
 
-class ButtonColorsUpdate(BaseModel):
+class ButtonsUpdate(BaseModel):
     # index кнопки → цвет ('primary'/'success'/'danger') или null (дефолт темы).
-    colors: dict[int, Optional[str]]
+    colors: Optional[dict[int, Optional[str]]] = None
+    # index кнопки → текст (эмодзи разрешены; ≤32 символа, как в редакторе бота).
+    texts: Optional[dict[int, str]] = None
+
+
+# Лимит длины текста кнопки — как в авторском UpdateMenuButtonText.
+_BTN_TEXT_MAX = 32
 
 
 @router.put("/buttons")
 @inject
-async def set_menu_button_colors(
-    body: ButtonColorsUpdate,
+async def set_menu_buttons(
+    body: ButtonsUpdate,
     _admin: AdminUser,
     settings_dao: FromDishka[SettingsDao],
     session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     s = await settings_dao.get()
+    colors = body.colors or {}
+    texts = body.texts or {}
     for b in s.menu.buttons:
-        if b.index in body.colors:
-            val = body.colors[b.index]
+        if b.index in colors:
+            val = colors[b.index]
             if val is None or val == "":
                 b.color = None
             else:
@@ -97,6 +110,19 @@ async def set_menu_button_colors(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=f"Недопустимый цвет: {val}",
                     )
+        if b.index in texts:
+            text = (texts[b.index] or "").strip()
+            if not text:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Текст кнопки {b.index} не может быть пустым",
+                )
+            if len(text) > _BTN_TEXT_MAX:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Текст кнопки {b.index} длиннее {_BTN_TEXT_MAX} символов",
+                )
+            b.text = text
     updated = await settings_dao.update(s)
     if not updated:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Update failed")

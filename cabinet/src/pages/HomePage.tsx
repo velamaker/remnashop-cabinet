@@ -135,6 +135,19 @@ export default function HomePage() {
       {/* Ненавязчивое предложение привязать Telegram (только email-пользователям) */}
       <TelegramLinkPrompt />
 
+      {/* Явная кнопка «Подключиться» — чтобы не искали, где подключаться.
+          Видна на мобильной и ПК-версии, когда подписка активна. */}
+      {subscription && (
+        <Link
+          to="/devices"
+          className="btn-gradient flex h-14 items-center justify-center gap-2.5 rounded-2xl px-6 text-base font-semibold transition-all active:scale-[0.99]"
+        >
+          <MonitorSmartphone className="h-5 w-5" />
+          Подключиться
+          <ArrowRight className="h-5 w-5" />
+        </Link>
+      )}
+
       {isLoading ? (
         <Skeleton className="h-72 w-full rounded-[22px]" />
       ) : !subscription ? (

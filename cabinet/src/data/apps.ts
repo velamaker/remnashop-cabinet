@@ -6,6 +6,19 @@
 // версиями. Если какой-то deep-link перестал работать — поправьте здесь. Для
 // query-стиля ссылку подписки кодируем (encodeURIComponent), для Shadowrocket —
 // base64. Во всех карточках также есть кнопка «Установить» и общий QR.
+//
+// Happ — отдельный случай: вместо обычной happ://add/<url> используем формат
+// happ://crypt4/<...> (RSA-4096 шифрование ссылки публичным ключом Happ,
+// @kastov/cryptohapp). Он прячет реальный домен подписки от DPI — Роскомнадзор
+// блокирует sub-домены по паттерну, а зашифрованную ссылку разбирает только
+// сам Happ. Если шифрование не удалось (например, слишком длинная ссылка —
+// лимит PKCS1 ~500 байт) — откатываемся на обычный happ://add/.
+import { createHappCryptoLink } from "@kastov/cryptohapp";
+
+function happDeepLink(sub: string): string {
+  const encrypted = createHappCryptoLink(sub, "v4", true);
+  return encrypted || `happ://add/${sub}`;
+}
 
 export type Platform = "ios" | "android" | "windows" | "macos" | "androidtv";
 
@@ -41,7 +54,7 @@ export const APPS: AppEntry[] = [
     name: "Happ",
     desc: "Простое и быстрое — подходит большинству",
     platforms: ["ios", "android", "macos", "windows", "androidtv"],
-    deepLink: (sub) => `happ://add/${sub}`,
+    deepLink: happDeepLink,
     install: {
       ios: "https://apps.apple.com/app/id6504287215",
       android: "https://play.google.com/store/apps/details?id=com.happproxy",

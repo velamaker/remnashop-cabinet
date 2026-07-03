@@ -1,7 +1,7 @@
 from aiogram.enums import ButtonStyle
 from aiogram_dialog import Dialog, StartMode
 from aiogram_dialog.widgets.input import MessageInput
-from aiogram_dialog.widgets.style import Style
+from aiogram_dialog.widgets.style import BaseStyle, Style
 from aiogram_dialog.widgets.text import Const, Format
 from dishka import FromDishka
 from dishka.integrations.aiogram_dialog import inject
@@ -37,7 +37,7 @@ from .getters import (
     invite_getter,
     menu_getter as _base_menu_getter,
 )
-from .menu_config import load_menu_config
+from .menu_config import NAV_KEYS, load_menu_config
 from .handlers import (
     on_device_delete_all_confirm,
     on_device_delete_confirm,
@@ -91,6 +91,15 @@ async def menu_getter(i18n: FromDishka[TranslatorRunner], **kwargs):
     base_url = (data.get("web_cabinet_url") or "").rstrip("/")
     sub_url = data.get("subscription_url")
 
+    texts_cfg = cfg.get("texts", {}) or {}
+    colors_cfg = cfg.get("colors", {}) or {}
+
+    # Базовые кнопки навигации: подпись (кастом → i18n-дефолт) и цвет — в data,
+    # чтобы окно меню рендерило Format("{nav_*_text}") + динамический стиль.
+    for navkey, i18nkey in NAV_KEYS.items():
+        data[f"{navkey}_text"] = texts_cfg.get(navkey) or i18n.get(i18nkey)
+        data[f"{navkey}_color"] = colors_cfg.get(navkey)
+
     items: list[dict] = []
     if web_enabled:
         for key in cfg.get("order", []):
@@ -105,16 +114,48 @@ async def menu_getter(i18n: FromDishka[TranslatorRunner], **kwargs):
                 url = (base_url + defn.get("path", "")) if base_url else None
             if not url:
                 continue
-            text = i18n.get(defn["i18n"]) if "i18n" in defn else defn["text"]
-            items.append({"id": key, "kind": defn["kind"], "text": text, "url": url})
+            # Текст: кастомный из админки → иначе i18n/готовая строка.
+            default_text = i18n.get(defn["i18n"]) if "i18n" in defn else defn["text"]
+            text = texts_cfg.get(key) or default_text
+            # Цвет: кастомный из админки → иначе дефолт (webapp синяя, ссылка обычная).
+            default_color = "primary" if defn["kind"] == "webapp" else None
+            color = colors_cfg.get(key) or default_color
+            items.append(
+                {"id": key, "kind": defn["kind"], "text": text, "url": url, "color": color}
+            )
     data["menu_access_items"] = items
     return data
+
+
+# Динамический цвет кнопки: берём item[color] (задаётся в админке кабинета).
+# Пусто/None → без стиля (дефолтная кнопка).
+class _ItemColorStyle(BaseStyle):
+    async def _render_style(self, data, manager):  # type: ignore[override]
+        color = (data.get("item") or {}).get("color")
+        return ButtonStyle(color) if color else None
+
+    async def _render_emoji(self, data, manager):  # type: ignore[override]
+        return None
+
+
+# Цвет базовой кнопки навигации: читает data["nav_<key>_color"] (из getter'а).
+class _NavColorStyle(BaseStyle):
+    def __init__(self, navkey: str, when=None):
+        super().__init__(when=when)
+        self._navkey = navkey
+
+    async def _render_style(self, data, manager):  # type: ignore[override]
+        color = data.get(f"{self._navkey}_color")
+        return ButtonStyle(color) if color else None
+
+    async def _render_emoji(self, data, manager):  # type: ignore[override]
+        return None
 
 
 # Кнопки доступа (web ВКЛ): состав, видимость и ПОРЯДОК берутся из getter'а
 # (menu_access_items — упорядоченный, уже отфильтрованный список из админки).
 # Рендерим через ListGroup: на каждый элемент одна кнопка, тип по item[kind]
-# (webapp = синяя Mini App, url = обычная ссылка). Пустой список → кнопок нет.
+# (webapp = Mini App, url = обычная ссылка). Текст и цвет — из item (админка).
 menu_access_list = ListGroup(
     Row(
         WebApp(
@@ -122,13 +163,14 @@ menu_access_list = ListGroup(
             url=Format("{item[url]}"),
             id="acc_wa",
             when=F["item"]["kind"] == "webapp",
-            style=Style(ButtonStyle.PRIMARY),
+            style=_ItemColorStyle(),
         ),
         Url(
             text=Format("{item[text]}"),
             url=Format("{item[url]}"),
             id="acc_url",
             when=F["item"]["kind"] == "url",
+            style=_ItemColorStyle(),
         ),
     ),
     id="menu_access",
@@ -187,26 +229,29 @@ menu = Window(
     ),
     Row(
         SwitchTo(
-            text=I18nFormat("btn-menu.devices"),
+            text=Format("{nav_devices_text}"),
             id="devices",
             state=MainMenu.DEVICES,
             when=F["has_device_limit"],
+            style=_NavColorStyle("nav_devices"),
         ),
         Start(
-            text=I18nFormat("btn-menu.subscription"),
+            text=Format("{nav_subscription_text}"),
             id=f"{PAYMENT_PREFIX}subscription",
             state=Subscription.MAIN,
+            style=_NavColorStyle("nav_subscription"),
         ),
     ),
     Row(
         Button(
-            text=I18nFormat("btn-menu.invite"),
+            text=Format("{nav_invite_text}"),
             id="invite",
             on_click=on_invite,
             when=F["referral_enabled"],
+            style=_NavColorStyle("nav_invite"),
         ),
         SwitchInlineQueryChosenChatButton(
-            text=I18nFormat("btn-menu.invite"),
+            text=Format("{nav_invite_text}"),
             query=Format(INLINE_QUERY_INVITE),
             allow_user_chats=True,
             allow_group_chats=True,
@@ -215,19 +260,21 @@ menu = Window(
             when=~F["referral_enabled"],
         ),
         Url(
-            text=I18nFormat("btn-menu.support"),
+            text=Format("{nav_support_text}"),
             id="support",
             url=Format("{support_url}"),
+            style=_NavColorStyle("nav_support"),
         ),
     ),
     *custom_buttons,
     Row(
         Start(
-            text=I18nFormat("btn-menu.dashboard"),
+            text=Format("{nav_dashboard_text}"),
             id="dashboard",
             state=Dashboard.MAIN,
             mode=StartMode.RESET_STACK,
             when=require_permission(Permission.VIEW_DASHBOARD),
+            style=_NavColorStyle("nav_dashboard"),
         ),
     ),
     MessageInput(func=on_smart_search),

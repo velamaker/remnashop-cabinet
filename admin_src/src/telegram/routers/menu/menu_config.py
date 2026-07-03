@@ -36,6 +36,65 @@ DEFAULT_ORDER: list[str] = [
     "remna_sub",
 ]
 
+# Базовые кнопки навигации бота: ключ конфига → i18n-ключ дефолтной подписи.
+# Их состав фиксирован (это стандартная навигация), настраиваются только текст и цвет.
+NAV_KEYS: dict[str, str] = {
+    "nav_devices": "btn-menu.devices",
+    "nav_subscription": "btn-menu.subscription",
+    "nav_invite": "btn-menu.invite",
+    "nav_support": "btn-menu.support",
+    "nav_dashboard": "btn-menu.dashboard",
+}
+
+# Все ключи, для которых можно задать кастомный текст/цвет.
+_CUSTOMIZABLE = set(MENU_DEFAULTS) | set(NAV_KEYS)
+
+# Подписи по умолчанию (для превью в админке — «что покажется, если оставить
+# пустым» — и чтобы кнопка «добавить эмодзи» дописывала эмодзи к реальному
+# дефолтному тексту, а не стирала его). Должны совпадать с фактическими
+# текстами: dialog.py._ACCESS_DEFS (cabinet_url/remna_sub — статика) и
+# assets/translations/ru/custom.ftl (btn-menu.* — i18n-ключи в NAV_KEYS и
+# web-cabinet/connect/connect-reserve).
+DEFAULT_TEXTS: dict[str, str] = {
+    "cabinet_miniapp": "👤 Личный кабинет",
+    "cabinet_url": "🌐 Кабинет в браузере",
+    "connect_miniapp": "⚡ Подключиться",
+    "connect_url": "🔁 Подключиться (резерв)",
+    "remna_sub": "📲 Подписка (резерв)",
+    "nav_devices": "📱 Устройства",
+    "nav_subscription": "🪪 Подписка",
+    "nav_invite": "🎁 Пригласить",
+    "nav_support": "💬 Поддержка",
+    "nav_dashboard": "⚙️ Панель управления",
+}
+
+# Цвета кнопок (Telegram/aiogram ButtonStyle). Пусто/None = дефолт кнопки.
+VALID_COLORS: set[str] = {"primary", "success", "danger"}
+# Ограничение длины подписи кнопки (эмодзи считаются символами).
+BTN_TEXT_MAX = 64
+
+
+def _normalize_texts(texts: Any) -> dict[str, str]:
+    """Только известные ключи, непустые строки, обрезаем по BTN_TEXT_MAX символов."""
+    out: dict[str, str] = {}
+    if isinstance(texts, dict):
+        for k, v in texts.items():
+            if k in _CUSTOMIZABLE and isinstance(v, str):
+                s = v.strip()
+                if s:
+                    out[k] = "".join(list(s)[:BTN_TEXT_MAX])
+    return out
+
+
+def _normalize_colors(colors: Any) -> dict[str, str]:
+    """Только известные ключи и допустимые цвета; пустое/невалидное отбрасываем."""
+    out: dict[str, str] = {}
+    if isinstance(colors, dict):
+        for k, v in colors.items():
+            if k in _CUSTOMIZABLE and isinstance(v, str) and v in VALID_COLORS:
+                out[k] = v
+    return out
+
 
 def _normalize_order(order: Any) -> list[str]:
     """Только известные ключи, без дублей; недостающие добиваем в дефолтном порядке."""
@@ -73,10 +132,14 @@ def load_menu_config() -> dict[str, Any]:
                         data[k] = bool(stored[k])
                 if "order" in stored:
                     order = stored["order"]
+                data["texts"] = _normalize_texts(stored.get("texts"))
+                data["colors"] = _normalize_colors(stored.get("colors"))
     except Exception:
         # Битый файл не должен ронять меню — отдаём defaults/env.
         pass
     data["order"] = _normalize_order(order)
+    data.setdefault("texts", {})
+    data.setdefault("colors", {})
     return data
 
 
@@ -87,6 +150,10 @@ def save_menu_config(values: dict[str, Any]) -> dict[str, Any]:
             data[k] = bool(values[k])
     if values.get("order") is not None:
         data["order"] = _normalize_order(values["order"])
+    if values.get("texts") is not None:
+        data["texts"] = _normalize_texts(values["texts"])
+    if values.get("colors") is not None:
+        data["colors"] = _normalize_colors(values["colors"])
     MENU_PATH.parent.mkdir(parents=True, exist_ok=True)
     with MENU_PATH.open("w", encoding="utf-8") as fh:
         json.dump(data, fh, ensure_ascii=False, indent=2)
