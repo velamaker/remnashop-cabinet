@@ -8,6 +8,8 @@
 #   ./update.sh --base <тег>     # БАЗА бота: обновить базовый образ до конкретного <тег>
 #                                #   (snoups/remnashop) с валидацией и пересборкой
 #   ./update.sh --no-backup      # любой из режимов без бэкапа БД
+#   ./update.sh --force          # git reset --hard origin/<ветка> (СОТРЁТ локальные
+#                                #   правки) перед сборкой — когда обычный pull не идёт
 #
 # ПОЧЕМУ не `docker compose pull && down && up` (авторская команда):
 #   • overlay бота СОБИРАЕТСЯ локально поверх базового образа (а не тянется
@@ -28,10 +30,11 @@ warn() { printf '%s!%s %s\n' "$YLW" "$RST" "$*"; }
 die()  { printf '✗ %s\n' "$*" >&2; exit 1; }
 
 # ── разбор аргументов ─────────────────────────────────────────────────────────
-BACKUP=1; BASE=0; BASE_TAG=""
+BACKUP=1; BASE=0; BASE_TAG=""; FORCE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-backup) BACKUP=0 ;;
+    --force)     FORCE=1 ;;
     --base)      BASE=1; shift; BASE_TAG="${1:-}"
                  { [ -n "$BASE_TAG" ] && [ "${BASE_TAG#-}" = "$BASE_TAG" ]; } || die "Укажите тег: ./update.sh --base <тег> (напр. v0.8.3)" ;;
     -h|--help)   grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -124,8 +127,25 @@ if [ "$BASE" = 1 ]; then
 else
   # НАШ код: подтянуть последние изменения форка.
   if [ -d .git ]; then
-    info "git pull…"
-    git pull --ff-only || warn "git pull не прошёл (локальные правки/ветка?) — собираю из текущего кода"
+    BR="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
+    if [ "$FORCE" = 1 ]; then
+      warn "--force: git fetch + reset --hard origin/${BR} (локальные правки будут СТЁРТЫ)…"
+      git fetch origin || die "git fetch не прошёл — нет сети/доступа к origin. Код НЕ обновлён."
+      git reset --hard "origin/${BR}" || die "git reset --hard origin/${BR} не прошёл. Код НЕ обновлён."
+      ok "Код синхронизирован с origin/${BR} ($(git rev-parse --short HEAD))"
+    else
+      info "git pull…"
+      # ВАЖНО: не «собираем из старого кода молча». Если pull не идёт (локальные
+      # правки/расхождение) — СТОП с понятной инструкцией, иначе версия «застрянет».
+      if ! git pull --ff-only; then
+        die "git pull --ff-only не прошёл — есть локальные правки или ветка разошлась с origin.
+   Код НЕ обновлён (иначе собралась бы старая версия «под видом» новой). Что делать:
+     • убрать правки:      git stash        (или: git checkout -- <файлы>)
+       затем повторить:    ./update.sh
+     • ЛИБО принудительно: ./update.sh --force   (git reset --hard origin/${BR} — СОТРЁТ локальные правки)"
+      fi
+      ok "Код обновлён ($(git rev-parse --short HEAD))"
+    fi
   else
     warn "Не git-репозиторий — код через git не обновляю (если ставили тарболом — перекачайте архив)."
   fi
