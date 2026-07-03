@@ -16,8 +16,13 @@
 import { createHappCryptoLink } from "@kastov/cryptohapp";
 
 function happDeepLink(sub: string): string {
-  const encrypted = createHappCryptoLink(sub, "v4", true);
-  return encrypted || `happ://add/${sub}`;
+  try {
+    const encrypted = createHappCryptoLink(sub, "v4", true);
+    if (encrypted) return encrypted;
+  } catch {
+    // Шифрование недоступно/упало (напр. слишком длинная ссылка) — откат ниже.
+  }
+  return `happ://add/${sub}`;
 }
 
 export type Platform = "ios" | "android" | "windows" | "macos" | "androidtv";

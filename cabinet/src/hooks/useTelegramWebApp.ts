@@ -60,18 +60,24 @@ export function useIsMiniApp(): boolean {
 }
 
 /**
- * Переход по ссылке — deep-link кастомных схем (happ://, hiddify:// и т.п.)
- * внутри Telegram Mini App через обычный location.href не работает: встроенный
- * WebView не резолвит неизвестную схему сам (net::ERR_UNKNOWN_URL_SCHEME),
- * т.к. это top-level навигация через его собственный сетевой стек. Telegram.
- * WebApp.openLink передаёт ссылку самому клиенту Telegram, а он уже открывает
- * её через ОС (Intent/URL scheme) — так кастомные схемы открываются нормально.
- * Вне Mini App (обычный браузер) — как раньше, просто location.href.
+ * Открыть ссылку наружу.
+ *
+ * Тонкость Telegram Mini App:
+ *   • `Telegram.WebApp.openLink` принимает ТОЛЬКО http/https;
+ *   • кастомную схему (happ://, hiddify:// …) встроенный WebView сам ОС не отдаёт
+ *     (клик «срабатывает», но приложение не открывается).
+ * Поэтому кастомную схему в Mini App заворачиваем в https-редиректор
+ * (/connect.html), который openLink открывает во ВНЕШНЕМ браузере, а тот уже
+ * отдаёт схему приложению по URL-scheme. Вне Mini App — обычный location.href.
  */
 export function openExternalLink(url: string) {
   const app = getTelegramWebApp();
+  const isHttp = /^https?:\/\//i.test(url);
   if (app) {
-    app.openLink(url, { try_instant_view: false });
+    const target = isHttp
+      ? url
+      : `${window.location.origin}/connect.html#${encodeURIComponent(url)}`;
+    app.openLink(target, { try_instant_view: false });
   } else {
     window.location.href = url;
   }
