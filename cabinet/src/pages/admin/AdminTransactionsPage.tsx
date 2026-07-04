@@ -23,6 +23,24 @@ function statusStyle(status: string): string {
   }
 }
 
+// Сумма как есть, с разделителем тысяч (значение приходит строкой из pricing).
+function formatAmount(amount: string): string {
+  const n = Number(amount);
+  return Number.isFinite(n) ? n.toLocaleString("ru-RU") : amount;
+}
+
+const CURRENCY_SYMBOL: Record<string, string> = {
+  RUB: "₽",
+  USD: "$",
+  EUR: "€",
+  XTR: "⭐", // Telegram Stars
+};
+
+function currencySymbol(currency: string | null): string {
+  if (!currency) return "";
+  return CURRENCY_SYMBOL[currency.toUpperCase()] ?? currency;
+}
+
 export default function AdminTransactionsPage() {
   const [items, setItems] = useState<AdminTransaction[]>([]);
   const [total, setTotal] = useState(0);
@@ -142,21 +160,23 @@ export default function AdminTransactionsPage() {
                 <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted">ID платежа</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted">Пользователь</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted">Статус</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted">Сумма</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden md:table-cell">Тариф</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden sm:table-cell">Шлюз</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden md:table-cell">Тип</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden lg:table-cell">Тип</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden lg:table-cell">Дата</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center">
+                  <td colSpan={8} className="py-12 text-center">
                     <div className="inline-block h-7 w-7 animate-spin rounded-full border-2 border-border border-t-accent" />
                   </td>
                 </tr>
               ) : items.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center text-fg-muted">
+                  <td colSpan={8} className="py-12 text-center text-fg-muted">
                     Транзакции не найдены
                   </td>
                 </tr>
@@ -182,10 +202,27 @@ export default function AdminTransactionsPage() {
                         {t.status}
                       </span>
                     </td>
+                    <td className="px-4 py-3 whitespace-nowrap font-semibold text-fg">
+                      {t.amount != null && t.amount !== ""
+                        ? `${formatAmount(t.amount)} ${currencySymbol(t.currency)}`
+                        : "—"}
+                    </td>
+                    <td className="px-4 py-3 hidden md:table-cell">
+                      {t.plan_name ? (
+                        <div>
+                          <p className="text-fg">{t.plan_name}</p>
+                          {t.plan_duration != null && (
+                            <p className="text-xs text-fg-subtle">{t.plan_duration} дн.</p>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-fg-muted">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-fg-muted hidden sm:table-cell">
                       {t.gateway_type}
                     </td>
-                    <td className="px-4 py-3 text-fg-muted hidden md:table-cell">
+                    <td className="px-4 py-3 text-fg-muted hidden lg:table-cell">
                       {t.purchase_type}
                       {t.is_test && (
                         <span className="ml-1 rounded bg-warning/10 px-1 text-xs text-warning">

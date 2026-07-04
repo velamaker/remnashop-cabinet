@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { AlertCircle, KeyRound, X, Settings2 } from "lucide-react";
+import { AlertCircle, KeyRound, X, Settings2, FlaskConical } from "lucide-react";
 import { gatewaysAdminApi, type AdminGateway, type GatewayField } from "@/api/admin";
 import { ApiError } from "@/types/api";
 
@@ -163,6 +163,8 @@ export default function AdminGatewaysPage() {
   const [error, setError] = useState<string | null>(null);
   const [toggling, setToggling] = useState<number | null>(null);
   const [configuring, setConfiguring] = useState<AdminGateway | null>(null);
+  const [testing, setTesting] = useState<number | null>(null);
+  const [testResult, setTestResult] = useState<Record<number, { ok: boolean; text: string }>>({});
 
   const load = useCallback(() => {
     setLoading(true);
@@ -190,6 +192,34 @@ export default function AdminGatewaysPage() {
     }
   };
 
+  const test = async (g: AdminGateway) => {
+    const name = g.display_name || GATEWAY_NAMES[g.type] || g.type;
+    if (!window.confirm(
+      `Создать реальный тест-платёж (~2 ₽) для «${name}»?\n\n` +
+      `Это проверит, что ключи рабочие. Откроется ссылка оплаты — оплатите ` +
+      `и убедитесь, что платёж проходит.`,
+    )) return;
+
+    setTesting(g.id);
+    setTestResult((r) => ({ ...r, [g.id]: { ok: true, text: "Создаю тест-платёж…" } }));
+    try {
+      const res = await gatewaysAdminApi.test(g.id);
+      if (res.url) {
+        window.open(res.url, "_blank", "noopener");
+        setTestResult((r) => ({ ...r, [g.id]: { ok: true, text: "Ссылка оплаты открыта в новой вкладке." } }));
+      } else {
+        setTestResult((r) => ({ ...r, [g.id]: { ok: true, text: res.message || "Тест-платёж создан." } }));
+      }
+    } catch (e) {
+      setTestResult((r) => ({
+        ...r,
+        [g.id]: { ok: false, text: e instanceof ApiError ? e.detail : "Не удалось создать тест-платёж" },
+      }));
+    } finally {
+      setTesting(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -197,7 +227,8 @@ export default function AdminGatewaysPage() {
       </div>
 
       <div className="rounded-2xl border border-border-subtle bg-accent/5 px-5 py-4 text-sm text-fg-muted">
-        💡 Нажмите «Настроить» на шлюзе, чтобы ввести ключи API — они сохранятся в боте.
+        💡 Нажмите «Настроить ключи», чтобы ввести ключи API (сохранятся в боте). Затем
+        «Тест 2 ₽» создаёт реальный платёж — единственный способ убедиться, что ключи рабочие.
       </div>
 
       {error && <div className="flex items-center gap-2 rounded-xl bg-danger/10 px-4 py-3 text-sm text-danger"><AlertCircle className="h-4 w-4" />{error}</div>}
@@ -240,13 +271,32 @@ export default function AdminGatewaysPage() {
                   </button>
                 </div>
 
-                <button
-                  onClick={() => setConfiguring(g)}
-                  className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-accent transition-opacity hover:opacity-80"
-                >
-                  <Settings2 className="h-3.5 w-3.5" />
-                  Настроить ключи
-                </button>
+                <div className="mt-3 flex items-center gap-4">
+                  <button
+                    onClick={() => setConfiguring(g)}
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-accent transition-opacity hover:opacity-80"
+                  >
+                    <Settings2 className="h-3.5 w-3.5" />
+                    Настроить ключи
+                  </button>
+                  {g.is_configured && (
+                    <button
+                      onClick={() => test(g)}
+                      disabled={testing === g.id}
+                      title="Создать реальный тест-платёж ~2 ₽, чтобы проверить ключи"
+                      className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-muted transition-opacity hover:text-fg disabled:opacity-50"
+                    >
+                      <FlaskConical className="h-3.5 w-3.5" />
+                      {testing === g.id ? "Тест…" : "Тест 2 ₽"}
+                    </button>
+                  )}
+                </div>
+
+                {testResult[g.id] && (
+                  <p className={`mt-2 text-xs ${testResult[g.id]!.ok ? "text-fg-muted" : "text-danger"}`}>
+                    {testResult[g.id]!.text}
+                  </p>
+                )}
               </div>
             );
           })}

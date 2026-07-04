@@ -60,7 +60,11 @@ async def list_transactions(
             text(
                 f"""
                 SELECT payment_id, status, is_test, purchase_type, gateway_type,
-                       created_at, updated_at, user_id
+                       created_at, updated_at, user_id,
+                       pricing->>'final_amount' AS final_amount,
+                       currency::text AS currency,
+                       plan_snapshot->>'name' AS plan_name,
+                       plan_snapshot->>'duration' AS plan_duration
                 FROM transactions {where_sql}
                 ORDER BY created_at DESC NULLS LAST
                 LIMIT :limit OFFSET :offset
@@ -86,6 +90,10 @@ async def list_transactions(
                 "gateway_type": r.gateway_type,
                 "purchase_type": r.purchase_type,
                 "is_test": r.is_test,
+                "amount": r.final_amount,
+                "currency": r.currency,
+                "plan_name": r.plan_name,
+                "plan_duration": int(r.plan_duration) if r.plan_duration else None,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
                 "updated_at": r.updated_at.isoformat() if r.updated_at else None,
             }

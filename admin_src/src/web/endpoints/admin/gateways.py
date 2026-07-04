@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common.dao import PaymentGatewayDao
+from src.application.use_cases.gateways.commands.payment import CreateTestPayment
 
 from ._common import AdminUser
 
@@ -108,6 +109,65 @@ async def gateway_fields(
     if not gateway:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gateway not found")
     return {"fields": _gateway_fields(gateway)}
+
+
+@router.post("/{gateway_id}/test")
+@inject
+async def test_gateway(
+    gateway_id: int,
+    admin: AdminUser,
+    gateway_dao: FromDishka[PaymentGatewayDao],
+    create_test_payment: FromDishka[CreateTestPayment],
+) -> dict[str, Any]:
+    """Боевой тест-платёж (~2₽) через реальный use-case бота — единственный способ
+    убедиться, что введённые кредлы РАБОЧИЕ (а не просто «поля заполнены»).
+
+    Транзакция помечается is_test=True и привязывается к текущему админу. Ошибку
+    шлюза (кривой ключ, недоступность) возвращаем текстом — ради этого всё и затевалось.
+
+    Права: доступ к этому запросу уже проверен в `_common._get_admin_user`
+    (раздел `gateways` + can_write через грант/enum). Поэтому вызываем `_execute`
+    напрямую в обход enum-проверки интерактора (`REMNASHOP_GATEWAYS` есть только у
+    OWNER/DEV, но НЕ у гранулярного админа Role.USER + full_access грант). Actor
+    остаётся реальным админом — корректная привязка транзакции, аудит и логи.
+    """
+    gateway = await gateway_dao.get_by_id(gateway_id)
+    if not gateway:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gateway not found")
+
+    if gateway.settings and not gateway.settings.is_configured:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Шлюз не настроен — сначала введите ключи.",
+        )
+
+    try:
+        payment = await create_test_payment._execute(admin, gateway.type)
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Кривые кредлы / недоступность шлюза — показываем причину админу.
+        detail = str(e).strip() or e.__class__.__name__
+        if len(detail) > 300:
+            detail = detail[:300] + "…"
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Тест-платёж не создан: {detail}",
+        )
+
+    if not payment.url:
+        # Например, Telegram Stars: инвойс без внешней ссылки — из кабинета не оплатить.
+        return {
+            "ok": True,
+            "payment_id": str(payment.id),
+            "url": None,
+            "message": (
+                "Тест-платёж создан, но у этого шлюза нет ссылки оплаты "
+                "(например, Telegram Stars) — проверить оплату из кабинета нельзя."
+            ),
+        }
+
+    return {"ok": True, "payment_id": str(payment.id), "url": payment.url}
 
 
 class SetFieldRequest(BaseModel):

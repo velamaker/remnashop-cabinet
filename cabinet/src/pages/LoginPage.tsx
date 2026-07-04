@@ -116,7 +116,7 @@ export default function LoginPage() {
   const isMiniApp = miniAppPending || Boolean(getTelegramInitData());
   if (isMiniApp) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-bg">
+      <div className="app-scroll flex min-h-screen items-center justify-center bg-bg">
         <div className="text-center">
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-accent text-accent-fg shadow-glow">
             <span className="text-lg font-bold">R</span>
@@ -132,7 +132,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-bg px-4">
+    <div className="app-scroll relative flex min-h-screen items-center justify-center overflow-x-hidden bg-bg px-4">
       {/* Ambient background glow — single subtle accent */}
       <div aria-hidden className="ambient-glow -top-32 left-1/2 h-96 w-96 -translate-x-1/2" />
 

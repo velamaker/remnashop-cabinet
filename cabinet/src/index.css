@@ -66,11 +66,19 @@
 }
 
 /* ---------- Base ---------- */
+/* html/body закреплены (не скроллятся сами) — реальный скролл живёт внутри
+   .app-scroll (см. AppLayout/AdminLayout). На iOS Safari нельзя погасить
+   резиновый отскок (rubber-band) на самом документе через overscroll-behavior —
+   это работает только на вложенных скролл-контейнерах. Из-за отскока документа
+   первый тап по fixed-элементам (бургер-меню) во время анимации отскока
+   Safari «съедает». Перенос скролла во вложенный div решает это. */
 html,
 body {
   background-color: var(--bg);
   color: var(--fg);
-  overflow-x: hidden;
+  overflow: hidden;
+  overscroll-behavior: none;
+  height: 100%;
   max-width: 100%;
 }
 
@@ -86,10 +94,18 @@ body {
 }
 
 #root {
-  min-height: 100dvh;
-  min-height: var(--tg-viewport-stable-height, 100dvh);
-  overflow-x: hidden;
+  height: 100%;
+  height: var(--tg-viewport-stable-height, 100%);
+  overflow: hidden;
   width: 100%;
+}
+
+/* Единственный реальный скролл-контейнер страницы — гасит rubber-band
+   именно на iOS (overscroll-behavior работает только на вложенных элементах). */
+.app-scroll {
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* На мобиле поля ввода ≥16px — иначе iOS авто-зумит при фокусе и страница

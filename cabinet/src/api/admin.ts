@@ -153,6 +153,10 @@ export interface AdminTransaction {
   gateway_type: string;
   purchase_type: string;
   is_test: boolean;
+  amount: string | null; // final_amount из pricing
+  currency: string | null; // RUB/USD/XTR
+  plan_name: string | null; // что купили (название тарифа)
+  plan_duration: number | null; // срок в днях
   created_at: string | null;
   updated_at: string | null;
 }
@@ -429,6 +433,11 @@ export const gatewaysAdminApi = {
     adminApi.put<{ ok: boolean; is_configured: boolean }>(
       `/gateways/${id}/fields/${encodeURIComponent(field)}`,
       { value },
+    ),
+  test: (id: number) =>
+    adminApi.post<{ ok: boolean; payment_id: string; url: string | null; message?: string }>(
+      `/gateways/${id}/test`,
+      {},
     ),
 };
 

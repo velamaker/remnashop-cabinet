@@ -275,24 +275,24 @@ export default function AdminPlansPage() {
                     {formatTraffic(plan.traffic_limit)} · {plan.device_limit === 0 ? "∞" : plan.device_limit} уст. · {plan.type} · {plan.durations.length} вариантов
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2.5">
                   <button
                     onClick={() => toggle(plan)}
-                    className={`rounded-lg p-1.5 transition-colors ${
+                    className={`rounded-lg p-2 transition-colors ${
                       plan.is_active ? "text-success hover:text-success" : "text-fg-muted hover:text-fg"
                     }`}
                     title={plan.is_active ? "Включён — нажмите, чтобы выключить" : "Выключен — нажмите, чтобы включить"}
                   >
-                    {plan.is_active ? <ToggleRight className="h-5 w-5" /> : <ToggleLeft className="h-5 w-5" />}
+                    {plan.is_active ? <ToggleRight className="h-8 w-8" /> : <ToggleLeft className="h-8 w-8" />}
                   </button>
-                  <button onClick={() => setModalPlan(plan)} className="rounded-lg p-1.5 text-fg-muted hover:text-accent transition-colors">
-                    <Edit2 className="h-4 w-4" />
+                  <button onClick={() => setModalPlan(plan)} className="rounded-lg p-2 text-fg-muted hover:text-accent transition-colors" title="Редактировать">
+                    <Edit2 className="h-6 w-6" />
                   </button>
-                  <button onClick={() => remove(plan)} className="rounded-lg p-1.5 text-fg-muted hover:text-danger transition-colors">
-                    <Trash2 className="h-4 w-4" />
+                  <button onClick={() => remove(plan)} className="rounded-lg p-2 text-fg-muted hover:text-danger transition-colors" title="Удалить">
+                    <Trash2 className="h-6 w-6" />
                   </button>
-                  <button onClick={() => setExpanded(expanded === plan.id ? null : plan.id)} className="rounded-lg p-1.5 text-fg-muted hover:text-fg transition-colors">
-                    {expanded === plan.id ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                  <button onClick={() => setExpanded(expanded === plan.id ? null : plan.id)} className="rounded-lg p-2 text-fg-muted hover:text-fg transition-colors" title="Подробнее">
+                    {expanded === plan.id ? <ChevronUp className="h-6 w-6" /> : <ChevronDown className="h-6 w-6" />}
                   </button>
                 </div>
               </div>

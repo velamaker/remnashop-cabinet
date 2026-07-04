@@ -240,15 +240,14 @@ export default function AdminMenuPage() {
 
       {error && <p className="text-sm text-danger">{error}</p>}
 
-      <BotButtonColors />
-
-      {/* Дополнительные кнопки: доступ (кабинет/подключиться, с галочкой и порядком) + навигация (состав фиксирован) */}
+      {/* Основные кнопки: доступ (кабинет/подключиться, с галочкой и порядком) + навигация (состав фиксирован) */}
       <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
-        <h2 className="text-sm font-semibold text-fg">Дополнительные кнопки</h2>
+        <h2 className="text-sm font-semibold text-fg">Основные кнопки</h2>
         <p className="mb-3 mt-0.5 text-xs text-fg-muted">
-          Кнопки доступа к кабинету (можно включать/выключать и менять порядок) и
-          стандартная навигация (состав фиксирован). Нажмите на кнопку, чтобы
-          изменить текст, эмодзи и цвет — применяется сразу после «Сохранить».
+          Кнопки доступа к кабинету и стандартная навигация — то, чем пользователь
+          пользуется в первую очередь. Доступ можно включать/выключать и менять порядок,
+          навигация фиксирована. Нажмите на кнопку, чтобы изменить текст, эмодзи и цвет —
+          применяется сразу после «Сохранить».
         </p>
 
         <div className="space-y-1.5">
@@ -354,6 +353,8 @@ export default function AdminMenuPage() {
           стандартная кнопка подписки Remnawave.
         </p>
       </section>
+
+      <BotButtonColors />
     </div>
   );
 }
@@ -418,7 +419,7 @@ function BotButtonColors() {
   return (
     <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
       <div className="mb-1 flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-fg">Основные кнопки бота</h2>
+        <h2 className="text-sm font-semibold text-fg">Дополнительные кнопки</h2>
         <button onClick={save} disabled={saving}
           className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg hover:opacity-90 disabled:opacity-60">
           {saved ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
@@ -426,8 +427,8 @@ function BotButtonColors() {
         </button>
       </div>
       <p className="mb-3 text-xs text-fg-muted">
-        Кнопки в главном меню бота (1–6) — то, что пользователь видит первым.
-        Нажмите на кнопку, чтобы изменить текст, эмодзи и цвет.
+        Ваши дополнительные кнопки в меню бота (1–6): реклама, соглашения, свои
+        разделы. Нажмите на кнопку, чтобы изменить текст, эмодзи и цвет.
       </p>
       {err && <p className="mb-2 text-xs text-danger">{err}</p>}
       <div className="space-y-1.5">

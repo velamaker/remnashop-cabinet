@@ -64,7 +64,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
     : user?.email || user?.name || "Профиль";
 
   return (
-    <div className="relative flex w-full min-h-[100dvh] overflow-x-hidden bg-bg">
+    <div className="relative flex w-full h-[100dvh] overflow-hidden bg-bg">
       {/* Ambient background glow — single subtle accent glow (top-left) */}
       <div aria-hidden className="ambient-glow -left-32 -top-40 h-96 w-96" />
 
@@ -175,8 +175,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
         <ThemeSwitcher />
       </div>
 
-      {/* Main content */}
-      <main className="relative z-10 flex-1 min-w-0 px-5 pb-28 pt-20 md:px-8 md:pb-8 md:pt-8">
+      {/* Main content — единственный скролл-контейнер страницы (app-scroll) */}
+      <main className="app-scroll relative z-10 flex-1 min-w-0 px-5 pb-28 pt-20 md:px-8 md:pb-8 md:pt-8">
         <div className="mx-auto max-w-4xl animate-fade-in">{children}</div>
       </main>
 
