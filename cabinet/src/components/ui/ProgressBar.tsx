@@ -15,8 +15,12 @@ export function ProgressBar({ value, max, className }: ProgressBarProps) {
     <div className={clsx("h-2 w-full overflow-hidden rounded-full bg-bg-subtle", className)}>
       <div
         className={clsx(
-          "h-full rounded-full transition-all duration-500",
-          isHigh ? "bg-danger" : isMedium ? "bg-warning" : "bg-accent",
+          "h-full rounded-full bg-gradient-to-r shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] transition-all duration-500",
+          isHigh
+            ? "from-[var(--danger)] to-[#ff7a80]"
+            : isMedium
+              ? "from-[var(--warning)] to-[#ffc457]"
+              : "from-[var(--accent)] to-[var(--accent-2)]",
         )}
         style={{ width: `${percent}%` }}
       />

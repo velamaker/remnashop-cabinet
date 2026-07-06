@@ -72,7 +72,7 @@ async def create_promocode(
     existing = await promocode_dao.get_by_code(body.code.upper())
     if existing:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="Promocode with this code already exists"
+            status_code=status.HTTP_409_CONFLICT, detail="Промокод с таким кодом уже существует"
         )
 
     try:
@@ -115,7 +115,7 @@ async def get_promocode_stats(
 ) -> dict[str, Any]:
     promo = await promocode_dao.get_by_id(promocode_id)
     if not promo:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Promocode not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Промокод не найден")
 
     stats = await promocode_dao.get_detail_statistics(promocode_id)
     if not stats:
@@ -142,7 +142,7 @@ async def delete_promocode(
 ) -> None:
     promo = await promocode_dao.get_by_id(promocode_id)
     if not promo:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Promocode not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Промокод не найден")
     await promocode_dao.delete(promocode_id)
     await session.commit()
 
@@ -162,10 +162,10 @@ async def toggle_promocode(
 ) -> dict[str, Any]:
     promo = await promocode_dao.get_by_id(promocode_id)
     if not promo:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Promocode not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Промокод не найден")
     promo.is_active = body.is_active
     updated = await promocode_dao.update(promo)
     if not updated:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Update failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Не удалось обновить")
     await session.commit()
     return _promo_to_dict(updated)

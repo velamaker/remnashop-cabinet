@@ -91,7 +91,7 @@ def _signing_secret(config: AppConfig) -> str:
     if not env:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="JWT secret not configured",
+            detail="JWT-секрет не настроен",
         )
     return env
 

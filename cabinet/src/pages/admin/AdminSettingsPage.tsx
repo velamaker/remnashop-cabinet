@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Save, AlertCircle, CheckCircle2, Bell, Lock, Coins, SlidersHorizontal } from "lucide-react";
+import { Save, AlertCircle, CheckCircle2, Bell, Lock, Coins, SlidersHorizontal, Sunrise } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { settingsAdminApi, type AdminSettings } from "@/api/admin";
+import { settingsAdminApi, topupAdminApi, morningSummaryAdminApi, type AdminSettings, type TopupAdminConfig, type MorningSummaryConfig } from "@/api/admin";
 import { ApiError } from "@/types/api";
 
 // Крупный блок настроек: заголовок с иконкой + вложенные секции (карточки).
@@ -163,12 +163,6 @@ export default function AdminSettingsPage() {
         channel_required: settings.requirements.channel_required,
         channel_link: settings.requirements.channel_link,
         rules_link: settings.requirements.rules_link,
-        referral: {
-          enable: settings.referral.enable,
-          reward_type: settings.referral.reward.type,
-          reward_value: Object.values(settings.referral.reward.config)[0] ?? 0,
-          accrual_strategy: settings.referral.accrual_strategy,
-        },
         backup: settings.backup,
         trial_channel_guard: settings.extra.trial_channel_guard,
         mini_app_reserve: settings.extra.mini_app_reserve,
@@ -222,7 +216,6 @@ export default function AdminSettingsPage() {
     );
   if (!settings) return null;
 
-  const firstRewardValue = Object.values(settings.referral.reward.config)[0] ?? 0;
 
   return (
     <div className="mx-auto max-w-3xl space-y-8">
@@ -276,44 +269,6 @@ export default function AdminSettingsPage() {
         <div className="grid gap-4 pt-1 sm:grid-cols-2">
           <Field label="Ссылка на канал" value={settings.requirements.channel_link} onChange={(v) => upd(["requirements", "channel_link"], v)} />
           <Field label="Ссылка на правила" value={settings.requirements.rules_link} onChange={(v) => upd(["requirements", "rules_link"], v)} />
-        </div>
-      </Section>
-
-      </Group>
-
-      <Group title="Монетизация и рефералы" icon={Coins}>
-      {/* Referral */}
-      <Section title="Реферальная программа">
-        <Toggle label="Реферальная программа" sub="Включить начисление наград за приглашённых" checked={settings.referral.enable} onChange={(v) => upd(["referral", "enable"], v)} />
-        <div className="grid gap-4 pt-1 sm:grid-cols-2">
-          <div>
-            <label className="mb-1 block text-xs font-medium text-fg-muted">Тип награды</label>
-            <select
-              value={settings.referral.reward.type}
-              onChange={(e) => upd(["referral", "reward", "type"], e.target.value)}
-              className="w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent"
-            >
-              <option value="EXTRA_DAYS">Дополнительные дни</option>
-              <option value="POINTS">Баллы</option>
-            </select>
-          </div>
-          <Field
-            label={settings.referral.reward.type === "EXTRA_DAYS" ? "Дней за реферала" : "Баллов за реферала"}
-            type="number"
-            value={String(firstRewardValue)}
-            onChange={(v) => upd(["referral", "reward", "config"], { FIRST: Number(v) })}
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-xs font-medium text-fg-muted">Стратегия начисления</label>
-          <select
-            value={settings.referral.accrual_strategy}
-            onChange={(e) => upd(["referral", "accrual_strategy"], e.target.value)}
-            className="w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent"
-          >
-            <option value="ON_FIRST_PAYMENT">При первой оплате реферала</option>
-            <option value="ON_REGISTRATION">При регистрации</option>
-          </select>
         </div>
       </Section>
 
@@ -377,6 +332,156 @@ export default function AdminSettingsPage() {
         </div>
       </section>
       </Group>
+
+      <Group title="Пополнение баланса" icon={Coins}>
+        <TopupSettingsCard />
+      </Group>
+
+      <Group title="Утренняя сводка" icon={Sunrise}>
+        <MorningSummaryCard />
+      </Group>
     </div>
+  );
+}
+
+function MorningSummaryCard() {
+  const [cfg, setCfg] = useState<MorningSummaryConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    morningSummaryAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+  }, []);
+
+  const patch = (p: Partial<MorningSummaryConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
+
+  const save = async () => {
+    if (!cfg) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await morningSummaryAdminApi.update({
+        enabled: cfg.enabled,
+        hour: Math.min(23, Math.max(0, Number(cfg.hour) || 0)),
+        expiring_days: Math.max(1, Number(cfg.expiring_days) || 1),
+      });
+      setCfg(updated);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return null;
+  if (!cfg) return <Section title="Утренняя сводка">{error ?? "Ошибка"}</Section>;
+
+  const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
+
+  return (
+    <Section title="Сводка владельцу в Telegram" desc="Раз в сутки владельцу приходит сообщение: выручка, новые регистрации, активные подписки, сколько истекает в ближайшие дни.">
+      <Toggle label="Включить сводку" sub="Отправлять ежедневно в Telegram владельцу" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Час отправки (0–23, время сервера)</label>
+          <input type="number" min={0} max={23} value={String(cfg.hour)} onChange={(e) => patch({ hour: Number(e.target.value) })} className={inputCls} />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Окно «истекают в N дней»</label>
+          <input type="number" min={1} value={String(cfg.expiring_days)} onChange={(e) => patch({ expiring_days: Number(e.target.value) })} className={inputCls} />
+        </div>
+      </div>
+      <div className="flex items-center justify-between gap-3 pt-1">
+        <span className="text-xs">
+          {error && <span className="text-danger">{error}</span>}
+          {saved && <span className="text-success">Сохранено</span>}
+        </span>
+        <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
+          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+        </button>
+      </div>
+    </Section>
+  );
+}
+
+function TopupSettingsCard() {
+  const [cfg, setCfg] = useState<TopupAdminConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    topupAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+  }, []);
+
+  const patch = (p: Partial<TopupAdminConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
+
+  const save = async () => {
+    if (!cfg) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const presets = String(cfg.presets.join(","))
+        .split(",")
+        .map((s) => Number(s.trim()))
+        .filter((n) => Number.isFinite(n) && n >= 1);
+      const updated = await topupAdminApi.update({
+        enabled: cfg.enabled,
+        bonus_percent: Number(cfg.bonus_percent) || 0,
+        min_amount: Number(cfg.min_amount) || 1,
+        max_amount: Number(cfg.max_amount) || 1,
+        presets,
+      });
+      setCfg(updated);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return null;
+  if (!cfg) return <Section title="Пополнение баланса">{error ?? "Ошибка"}</Section>;
+
+  const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
+
+  return (
+    <Section title="Пополнение через шлюзы" desc="Пользователь платит через платёжный шлюз, сумма (+бонус) зачисляется на ₽-баланс. Только рублёвые шлюзы.">
+      <Toggle label="Включить пополнение" sub="Показывать блок пополнения в кабинете" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Бонус, %</label>
+          <input type="number" min={0} max={100} value={String(cfg.bonus_percent)} onChange={(e) => patch({ bonus_percent: Number(e.target.value) })} className={inputCls} />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Мин. сумма, ₽</label>
+          <input type="number" min={1} value={String(cfg.min_amount)} onChange={(e) => patch({ min_amount: Number(e.target.value) })} className={inputCls} />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Макс. сумма, ₽</label>
+          <input type="number" min={1} value={String(cfg.max_amount)} onChange={(e) => patch({ max_amount: Number(e.target.value) })} className={inputCls} />
+        </div>
+      </div>
+      <div>
+        <label className="mb-1 block text-xs text-fg-muted">Пресеты сумм (через запятую)</label>
+        <input type="text" value={cfg.presets.join(", ")} onChange={(e) => patch({ presets: e.target.value.split(",").map((s) => Number(s.trim())).filter((n) => !Number.isNaN(n)) })} className={inputCls} />
+      </div>
+      <div className="flex items-center justify-between gap-3 pt-1">
+        <span className="text-xs">
+          {error && <span className="text-danger">{error}</span>}
+          {saved && <span className="text-success">Сохранено</span>}
+        </span>
+        <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
+          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+        </button>
+      </div>
+    </Section>
   );
 }

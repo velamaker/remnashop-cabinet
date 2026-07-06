@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import {
-  Search, ChevronLeft, ChevronRight, AlertCircle, X,
-  CalendarPlus, Trash2, Ban, CheckCircle, Gift, RefreshCw, Star, ChevronDown, ChevronUp, LogIn, Gauge,
+  Search, ChevronLeft, ChevronRight, AlertCircle, X, Download,
+  CalendarPlus, Trash2, Ban, CheckCircle, Gift, RefreshCw, Star, ChevronDown, ChevronUp, LogIn, Gauge, Wallet,
 } from "lucide-react";
 import {
   usersAdminApi, subscriptionsAdminApi, plansAdminApi, grantsAdminApi,
@@ -44,7 +44,7 @@ function Tag({ children, cls }: { children: React.ReactNode; cls?: string }) {
 
 // ─── Subscription Panel ────────────────────────────────────────────────────
 
-function SubscriptionPanel({ userId, onUpdated }: { userId: number; onUpdated: () => void }) {
+function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: number; points: number; balance: number; onUpdated: () => void }) {
   const [data, setData] = useState<{ current: AdminSubscription | null; history: AdminSubscription[] } | null>(null);
   const [plans, setPlans] = useState<AdminPlan[]>([]);
   const [loading, setLoading] = useState(true);
@@ -53,6 +53,7 @@ function SubscriptionPanel({ userId, onUpdated }: { userId: number; onUpdated: (
   const [grantPlanId, setGrantPlanId] = useState("");
   const [grantDays, setGrantDays] = useState("30");
   const [pointsDelta, setPointsDelta] = useState("0");
+  const [balanceDelta, setBalanceDelta] = useState("0");
   const [showHistory, setShowHistory] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -163,7 +164,15 @@ function SubscriptionPanel({ userId, onUpdated }: { userId: number; onUpdated: (
 
         {/* Points */}
         <div className="rounded-xl border border-[var(--border)] p-4">
-          <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-fg"><Star className="h-3.5 w-3.5 text-warning" />Баллы</p>
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="flex items-center gap-1.5 text-xs font-semibold text-fg"><Star className="h-3.5 w-3.5 text-warning" />Баллы (рефералка)</p>
+            <span className="text-sm font-bold text-fg">
+              {points}
+              {Number(pointsDelta) !== 0 && !Number.isNaN(Number(pointsDelta)) && (
+                <span className="ml-1 text-xs font-medium text-fg-muted">→ {Math.max(0, points + Number(pointsDelta))}</span>
+              )}
+            </span>
+          </div>
           <div className="flex gap-2">
             <input type="number" value={pointsDelta} onChange={e => setPointsDelta(e.target.value)}
               className="h-8 w-24 rounded-lg border border-[var(--border)] bg-bg px-2 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent"
@@ -173,9 +182,35 @@ function SubscriptionPanel({ userId, onUpdated }: { userId: number; onUpdated: (
               disabled={action !== null || !pointsDelta || Number(pointsDelta) === 0}
               className="ml-auto rounded-lg bg-warning/10 px-3 py-1.5 text-xs font-medium text-warning hover:bg-warning/20 disabled:opacity-40 transition-colors"
             >
-              {action === "points" ? "…" : "Применить"}
+              {action === "points" ? "…" : Number(pointsDelta) < 0 ? "Списать" : "Начислить"}
             </button>
           </div>
+        </div>
+
+        {/* Balance (₽) */}
+        <div className="rounded-xl border border-[var(--border)] p-4">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="flex items-center gap-1.5 text-xs font-semibold text-fg"><Wallet className="h-3.5 w-3.5 text-accent" />Баланс ₽</p>
+            <span className="text-sm font-bold text-fg">
+              {balance.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} ₽
+              {Number(balanceDelta) !== 0 && !Number.isNaN(Number(balanceDelta)) && (
+                <span className="ml-1 text-xs font-medium text-fg-muted">→ {Math.max(0, balance + Number(balanceDelta)).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} ₽</span>
+              )}
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <input type="number" value={balanceDelta} onChange={e => setBalanceDelta(e.target.value)}
+              className="h-8 w-24 rounded-lg border border-[var(--border)] bg-bg px-2 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent"
+              placeholder="+500 или -100" />
+            <button
+              onClick={() => run(() => subscriptionsAdminApi.adjustBalance(userId, Number(balanceDelta)), "balance")}
+              disabled={action !== null || !balanceDelta || Number(balanceDelta) === 0}
+              className="ml-auto rounded-lg bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/20 disabled:opacity-40 transition-colors"
+            >
+              {action === "balance" ? "…" : Number(balanceDelta) < 0 ? "Списать" : "Начислить"}
+            </button>
+          </div>
+          <p className="mt-1.5 text-[11px] text-fg-subtle">В рублях. Положительное — начислить, отрицательное — списать (ниже 0 не уходит).</p>
         </div>
 
         {/* Danger actions */}
@@ -558,7 +593,7 @@ function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClo
 
             <div className="p-5">
               {/* Subscription tab */}
-              {tab === "sub" && <SubscriptionPanel userId={userId} onUpdated={() => { load(); onUpdated(); }} />}
+              {tab === "sub" && <SubscriptionPanel userId={userId} points={detail?.user.points ?? 0} balance={detail?.user.cabinet_balance ?? 0} onUpdated={() => { load(); onUpdated(); }} />}
 
               {/* Info tab */}
               {tab === "info" && (
@@ -686,14 +721,43 @@ export default function AdminUsersPage() {
   const handleSearch = (v: string) => { setSearch(v); setOffset(0); };
   const setFilter = (fn: () => void) => { fn(); setOffset(0); };
 
+  const [exporting, setExporting] = useState(false);
+  const handleExport = async () => {
+    setExporting(true);
+    setError(null);
+    try {
+      await usersAdminApi.exportXlsx({
+        search: search || undefined,
+        role: roleFilter ? Number(roleFilter) : undefined,
+        blocked: statusFilter === "blocked" ? true : statusFilter === "active" ? false : undefined,
+        sort: sortBy, order: sortOrder,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Экспорт не удался");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const totalPages = Math.ceil(total / LIMIT);
   const page = Math.floor(offset / LIMIT) + 1;
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <h1 className="text-2xl font-bold tracking-tight text-fg">Пользователи</h1>
-        <span className="text-sm text-fg-muted">{total} всего</span>
+        <div className="flex items-center gap-3">
+          <span className="hidden text-sm text-fg-muted sm:inline">{total} всего</span>
+          <button
+            onClick={handleExport}
+            disabled={exporting || total === 0}
+            className="inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-overlay disabled:opacity-50"
+            title="Скачать Excel (.xlsx) с учётом фильтров"
+          >
+            <Download className="h-4 w-4" />
+            {exporting ? "Готовим…" : "Экспорт Excel"}
+          </button>
+        </div>
       </div>
 
       {/* Search */}

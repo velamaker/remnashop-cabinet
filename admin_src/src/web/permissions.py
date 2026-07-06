@@ -42,10 +42,12 @@ SECTIONS: list[dict[str, Any]] = [
     {
         "key": "settings",
         "label": "Настройки",
-        "prefixes": ["settings", "email-settings", "email-template", "auth-settings"],
+        "prefixes": ["settings", "email-settings", "email-template", "auth-settings", "cashback", "topup", "morning-summary"],
     },
     {"key": "audit", "label": "Журнал действий", "prefixes": ["audit"]},
     {"key": "updates", "label": "Обновления", "prefixes": ["updates"]},
+    {"key": "abuse", "label": "Детект абьюза", "prefixes": ["abuse"]},
+    {"key": "import", "label": "Импорт пользователей", "prefixes": ["import"]},
 ]
 
 ALL_SECTION_KEYS: list[str] = [s["key"] for s in SECTIONS]

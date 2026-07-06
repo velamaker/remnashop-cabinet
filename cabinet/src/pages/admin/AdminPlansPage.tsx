@@ -1,12 +1,28 @@
 import { useEffect, useState, useCallback } from "react";
 import { Plus, Trash2, ToggleLeft, ToggleRight, Edit2, AlertCircle, X, ChevronDown, ChevronUp } from "lucide-react";
-import { plansAdminApi, type AdminPlan, type AdminPlanDuration } from "@/api/admin";
+import { plansAdminApi, type AdminPlan, type AdminPlanDuration, type AdminSquadsResponse } from "@/api/admin";
 import { ApiError } from "@/types/api";
 
-const PLAN_TYPES = ["BOTH", "TRAFFIC", "DEVICES"];
-const AVAILABILITIES = ["ALL", "NEW", "EXISTING"];
+const PLAN_TYPES: { value: string; label: string }[] = [
+  { value: "BOTH", label: "Трафик + устройства" },
+  { value: "TRAFFIC", label: "Только трафик" },
+  { value: "DEVICES", label: "Только устройства" },
+];
+const AVAILABILITIES: { value: string; label: string }[] = [
+  { value: "ALL", label: "Для всех" },
+  { value: "NEW", label: "Для новых" },
+  { value: "EXISTING", label: "Для клиентов" },
+  { value: "INVITED", label: "Для приглашённых" },
+  { value: "ALLOWED", label: "Для разрешённых" },
+  { value: "LINK", label: "По ссылке" },
+];
 const CURRENCIES = ["RUB", "XTR", "USD"];
-const TRAFFIC_STRATEGIES = ["NO_RESET", "MONTHLY_RESET", "WEEKLY_RESET", "DAILY_RESET"];
+const TRAFFIC_STRATEGIES: { value: string; label: string }[] = [
+  { value: "NO_RESET", label: "Без сброса" },
+  { value: "MONTHLY_RESET", label: "Ежемесячно" },
+  { value: "WEEKLY_RESET", label: "Еженедельно" },
+  { value: "DAILY_RESET", label: "Ежедневно" },
+];
 
 // В тарифах traffic_limit хранится в ГБ (не в байтах) — конвертация не нужна.
 function formatTraffic(gb: number): string {
@@ -36,8 +52,23 @@ function PlanModal({
   const [isActive, setIsActive] = useState(plan?.is_active ?? false);
   const [isTrial, setIsTrial] = useState(plan?.is_trial ?? false);
   const [durations, setDurations] = useState<AdminPlanDuration[]>(plan?.durations ?? []);
+  // Разрешённые пользователи (по одному в строке) — как в боте: tg-id и email раздельно
+  const [allowedTgText, setAllowedTgText] = useState((plan?.allowed_telegram_ids ?? []).join("\n"));
+  const [allowedEmailText, setAllowedEmailText] = useState((plan?.allowed_emails ?? []).join("\n"));
+  // Сквады Remnawave
+  const [internalSquads, setInternalSquads] = useState<string[]>(plan?.internal_squads ?? []);
+  const [externalSquad, setExternalSquad] = useState<string>(plan?.external_squad ?? "");
+  const [squads, setSquads] = useState<AdminSquadsResponse | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    plansAdminApi.squads().then(setSquads).catch(() => setSquads(null));
+  }, []);
+
+  const toggleInternalSquad = (uuid: string) => {
+    setInternalSquads((prev) => (prev.includes(uuid) ? prev.filter((x) => x !== uuid) : [...prev, uuid]));
+  };
 
   const addDuration = () => {
     setDurations([...durations, { days: 30, order_index: durations.length, prices: [{ currency: "RUB", price: "0" }] }]);
@@ -74,11 +105,23 @@ function PlanModal({
     e.preventDefault();
     setSaving(true);
     setError(null);
+    const allowed_telegram_ids = allowedTgText
+      .split(/[\s,]+/)
+      .map((x) => Number(x.trim()))
+      .filter((n) => Number.isInteger(n) && n > 0);
+    const allowed_emails = allowedEmailText
+      .split(/[\s,]+/)
+      .map((x) => x.trim())
+      .filter((x) => x.length > 0);
     const payload = {
       name, description: description || null, tag: tag || null, public_code: publicCode || null,
       type, availability, traffic_limit_strategy: trafficStrategy,
       traffic_limit: Number(trafficLimit), device_limit: Number(deviceLimit),
       is_active: isActive, is_trial: isTrial, durations,
+      allowed_telegram_ids, allowed_emails,
+      internal_squads: internalSquads,
+      external_squad: externalSquad || null,
+      clear_external_squad: !externalSquad,
     };
     try {
       if (isEdit) await plansAdminApi.update(plan!.id, payload);
@@ -110,27 +153,33 @@ function PlanModal({
               <input value={publicCode} onChange={e => setPublicCode(e.target.value)} className="input w-full" placeholder="basic" />
             </div>
           </div>
-          <div>
-            <label className="mb-1 block text-xs font-medium text-fg-muted">Описание</label>
-            <input value={description} onChange={e => setDescription(e.target.value)} className="input w-full" placeholder="..." />
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-fg-muted">Описание</label>
+              <input value={description} onChange={e => setDescription(e.target.value)} className="input w-full" placeholder="..." />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-fg-muted">Тег</label>
+              <input value={tag} onChange={e => setTag(e.target.value)} className="input w-full" placeholder="напр. hit / популярный" />
+            </div>
           </div>
           <div className="grid grid-cols-3 gap-4">
             <div>
               <label className="mb-1 block text-xs font-medium text-fg-muted">Тип</label>
               <select value={type} onChange={e => setType(e.target.value)} className="input w-full">
-                {PLAN_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                {PLAN_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
               </select>
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-fg-muted">Доступность</label>
               <select value={availability} onChange={e => setAvailability(e.target.value)} className="input w-full">
-                {AVAILABILITIES.map(a => <option key={a} value={a}>{a}</option>)}
+                {AVAILABILITIES.map(a => <option key={a.value} value={a.value}>{a.label}</option>)}
               </select>
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-fg-muted">Сброс трафика</label>
               <select value={trafficStrategy} onChange={e => setTrafficStrategy(e.target.value)} className="input w-full">
-                {TRAFFIC_STRATEGIES.map(s => <option key={s} value={s}>{s}</option>)}
+                {TRAFFIC_STRATEGIES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
               </select>
             </div>
           </div>
@@ -155,6 +204,63 @@ function PlanModal({
             </label>
           </div>
 
+          {/* Разрешённые пользователи — только для доступности «Для разрешённых» */}
+          {availability === "ALLOWED" && (
+            <div className="rounded-xl border border-border-subtle p-4">
+              <p className="mb-1 text-sm font-semibold text-fg">Разрешённые пользователи</p>
+              <p className="mb-3 text-xs text-fg-muted">Тариф увидят только они. По одному в строке (или через запятую).</p>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-fg-muted">Telegram ID</label>
+                  <textarea value={allowedTgText} onChange={e => setAllowedTgText(e.target.value)} rows={3} className="input w-full font-mono-tech text-xs" placeholder="123456789&#10;987654321" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-fg-muted">Email</label>
+                  <textarea value={allowedEmailText} onChange={e => setAllowedEmailText(e.target.value)} rows={3} className="input w-full font-mono-tech text-xs" placeholder="user@mail.com" />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Сквады Remnawave */}
+          {squads && (squads.internal.length > 0 || squads.external.length > 0) && (
+            <div className="rounded-xl border border-border-subtle p-4">
+              <p className="mb-1 text-sm font-semibold text-fg">Сквады</p>
+              <p className="mb-3 text-xs text-fg-muted">Инбаунды/выходные ноды для этого тарифа (как в боте).</p>
+              {squads.internal.length > 0 && (
+                <div className="mb-4">
+                  <label className="mb-1.5 block text-xs font-medium text-fg-muted">Внутренние (можно несколько)</label>
+                  <div className="flex flex-wrap gap-2">
+                    {squads.internal.map((s) => {
+                      const on = internalSquads.includes(s.uuid);
+                      return (
+                        <button
+                          key={s.uuid}
+                          type="button"
+                          onClick={() => toggleInternalSquad(s.uuid)}
+                          className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                            on ? "border-accent bg-accent-subtle text-accent" : "border-border-subtle text-fg-muted hover:text-fg"
+                          }`}
+                        >
+                          {s.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {squads.external.length > 0 && (
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-fg-muted">Внешний сквад (каскад, один)</label>
+                  <select value={externalSquad} onChange={e => setExternalSquad(e.target.value)} className="input w-full">
+                    <option value="">— нет —</option>
+                    {squads.external.map((s) => <option key={s.uuid} value={s.uuid}>{s.name}</option>)}
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Durations */}
           <div>
             <div className="mb-2 flex items-center justify-between">
@@ -178,10 +284,10 @@ function PlanModal({
                   <div className="space-y-2">
                     {d.prices.map((p, pi) => (
                       <div key={pi} className="flex items-center gap-2">
-                        <select value={p.currency} onChange={e => updatePrice(di, pi, "currency", e.target.value)} className="input w-24 flex-shrink-0">
+                        <select value={p.currency} onChange={e => updatePrice(di, pi, "currency", e.target.value)} className="input flex-shrink-0" style={{ width: "5.5rem" }}>
                           {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
                         </select>
-                        <input type="number" min={0} value={p.price} onChange={e => updatePrice(di, pi, "price", e.target.value)} className="input flex-1" placeholder="0" />
+                        <input type="number" min={0} value={p.price} onChange={e => updatePrice(di, pi, "price", e.target.value)} className="input min-w-0 flex-1" placeholder="Цена" />
                         <button type="button" onClick={() => removePrice(di, pi)} className="text-fg-muted hover:text-danger">
                           <X className="h-4 w-4" />
                         </button>

@@ -10,6 +10,7 @@ import {
 import { appearanceApi, type Appearance } from "@/api/appearance";
 import { lighten, darken, rgba, luminance, normalizeHex } from "@/lib/color";
 import { useTheme } from "@/contexts/ThemeContext";
+import { translate } from "@/i18n/translate";
 
 const DEFAULT_BRAND = "RemnaShop";
 
@@ -84,7 +85,7 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
       const a = await appearanceApi.get();
       setAppearance(a);
       applyAccent(a.accent);
-      if (a.brand_name) document.title = `${a.brand_name} — личный кабинет`;
+      if (a.brand_name) document.title = `${a.brand_name} — ${translate("common.personalCabinet")}`;
     } catch {
       // Оформление не критично — при ошибке остаются цвета темы.
     }

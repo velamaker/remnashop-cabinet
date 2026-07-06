@@ -35,6 +35,17 @@ assets/logo.*
 assets/menu.json
 assets/reminders.json
 assets/update_state.json
+# Секреты и рантайм-конфиги/стейт конкретной установки — НИКОГДА не коммитим
+# (push_vapid.json — приватный VAPID-ключ; email.json/auth.json — креды).
+assets/push_vapid.json
+assets/node_health.json
+assets/push_notify_state.json
+assets/cashback.json
+assets/topup.json
+assets/morning_summary.json
+assets/auth.json
+assets/email.json
+assets/info_content.json
 
 # Editor / OS
 .DS_Store

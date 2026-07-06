@@ -5,9 +5,12 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
+import { useT } from "@/i18n/I18nContext";
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ApiError } from "@/types/api";
 
 export default function ResetPasswordPage() {
+  const t = useT();
   const navigate = useNavigate();
   const [step, setStep] = useState<"request" | "confirm">("request");
   const [email, setEmail] = useState("");
@@ -25,12 +28,12 @@ export default function ResetPasswordPage() {
     try {
       await authApi.resetPasswordRequest(email.trim());
       setNotice(
-        "Если на этот email зарегистрирован аккаунт — мы отправили код. Проверьте почту (и папку «Спам»).",
+        t("reset.noticeSent"),
       );
       setStep("confirm");
     } catch (err) {
       setError(
-        err instanceof ApiError ? err.detail : "Не удалось отправить код. Попробуйте позже.",
+        err instanceof ApiError ? err.detail : t("reset.errSend"),
       );
     } finally {
       setIsLoading(false);
@@ -41,7 +44,7 @@ export default function ResetPasswordPage() {
     e.preventDefault();
     setError(null);
     if (password !== confirm) {
-      setError("Новый пароль и его повтор не совпадают");
+      setError(t("reset.errMismatch"));
       return;
     }
     setIsLoading(true);
@@ -50,7 +53,7 @@ export default function ResetPasswordPage() {
       navigate("/login?reset=ok");
     } catch (err) {
       setError(
-        err instanceof ApiError ? err.detail : "Не удалось сменить пароль. Проверьте код.",
+        err instanceof ApiError ? err.detail : t("reset.errChange"),
       );
     } finally {
       setIsLoading(false);
@@ -59,17 +62,18 @@ export default function ResetPasswordPage() {
 
   return (
     <div className="app-scroll bg-grain flex min-h-screen items-center justify-center bg-bg px-4">
-      <div className="absolute right-4 top-4">
+      <div className="absolute right-4 top-4 flex items-center gap-2">
+        <LanguageSwitcher />
         <ThemeSwitcher />
       </div>
 
       <Card className="w-full max-w-sm animate-fade-in">
         <div className="mb-6 text-center">
-          <h1 className="text-lg font-semibold text-fg">Восстановление пароля</h1>
+          <h1 className="text-lg font-semibold text-fg">{t("reset.title")}</h1>
           <p className="mt-1 text-sm text-fg-subtle">
             {step === "request"
-              ? "Укажите email — пришлём код для сброса"
-              : "Введите код из письма и новый пароль"}
+              ? t("reset.stepRequest")
+              : t("reset.stepConfirm")}
           </p>
         </div>
 
@@ -90,13 +94,13 @@ export default function ResetPasswordPage() {
             />
             {error && <p className="text-sm text-danger">{error}</p>}
             <Button type="submit" isLoading={isLoading} className="mt-1 w-full">
-              Отправить код
+              {t("reset.sendCode")}
             </Button>
           </form>
         ) : (
           <form onSubmit={confirmReset} className="flex flex-col gap-4">
             <Input
-              label="Код из письма"
+              label={t("reset.codeLabel")}
               name="code"
               inputMode="numeric"
               autoComplete="one-time-code"
@@ -105,7 +109,7 @@ export default function ResetPasswordPage() {
               onChange={(e) => setCode(e.target.value)}
             />
             <Input
-              label="Новый пароль"
+              label={t("reset.newPassword")}
               type="password"
               name="new-password"
               autoComplete="new-password"
@@ -115,7 +119,7 @@ export default function ResetPasswordPage() {
               onChange={(e) => setPassword(e.target.value)}
             />
             <Input
-              label="Повторите новый пароль"
+              label={t("reset.repeatPassword")}
               type="password"
               name="confirm-password"
               autoComplete="new-password"
@@ -126,22 +130,22 @@ export default function ResetPasswordPage() {
             />
             {error && <p className="text-sm text-danger">{error}</p>}
             <Button type="submit" isLoading={isLoading} className="mt-1 w-full">
-              Сменить пароль
+              {t("reset.changePassword")}
             </Button>
             <button
               type="button"
               onClick={() => { setStep("request"); setError(null); setNotice(null); }}
               className="text-center text-xs text-fg-subtle hover:text-fg"
             >
-              Отправить код заново
+              {t("reset.resendCode")}
             </button>
           </form>
         )}
 
         <p className="mt-5 text-center text-sm text-fg-subtle">
-          Вспомнили пароль?{" "}
+          {t("reset.remembered")}{" "}
           <Link to="/login" className="font-medium text-accent hover:text-accent-hover">
-            Войти
+            {t("login.submit")}
           </Link>
         </p>
       </Card>

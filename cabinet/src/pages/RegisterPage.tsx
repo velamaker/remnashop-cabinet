@@ -5,9 +5,12 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
+import { useT } from "@/i18n/I18nContext";
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ApiError } from "@/types/api";
 
 export default function RegisterPage() {
+  const t = useT();
   const { register } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -33,7 +36,7 @@ export default function RegisterPage() {
       navigate("/");
     } catch (err) {
       setError(
-        err instanceof ApiError ? err.detail : "Не удалось зарегистрироваться.",
+        err instanceof ApiError ? err.detail : t("register.error"),
       );
     } finally {
       setIsLoading(false);
@@ -42,7 +45,8 @@ export default function RegisterPage() {
 
   return (
     <div className="app-scroll bg-grain flex min-h-screen items-center justify-center bg-bg px-4">
-      <div className="absolute right-4 top-4">
+      <div className="absolute right-4 top-4 flex items-center gap-2">
+        <LanguageSwitcher />
         <ThemeSwitcher />
       </div>
 
@@ -51,13 +55,13 @@ export default function RegisterPage() {
           <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-accent-fg shadow-glow">
             <span className="text-base font-bold">R</span>
           </div>
-          <h1 className="text-lg font-semibold text-fg">Создать аккаунт</h1>
-          <p className="mt-1 text-sm text-fg-subtle">Это займёт меньше минуты</p>
+          <h1 className="text-lg font-semibold text-fg">{t("register.title")}</h1>
+          <p className="mt-1 text-sm text-fg-subtle">{t("register.subtitle")}</p>
         </div>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <Input
-            label="Имя"
+            label={t("register.name")}
             name="name"
             autoComplete="name"
             value={name}
@@ -73,7 +77,7 @@ export default function RegisterPage() {
             onChange={(e) => setEmail(e.target.value)}
           />
           <Input
-            label="Пароль"
+            label={t("login.password")}
             type="password"
             name="password"
             autoComplete="new-password"
@@ -86,16 +90,25 @@ export default function RegisterPage() {
           {error && <p className="text-sm text-danger">{error}</p>}
 
           <Button type="submit" isLoading={isLoading} className="mt-1 w-full">
-            Зарегистрироваться
+            {t("register.submit")}
           </Button>
         </form>
 
         <p className="mt-5 text-center text-sm text-fg-subtle">
-          Уже есть аккаунт?{" "}
+          {t("register.haveAccount")}{" "}
           <Link to="/login" className="font-medium text-accent hover:text-accent-hover">
-            Войти
+            {t("login.submit")}
           </Link>
         </p>
+        <div className="mt-5 flex justify-center">
+          <Link
+            to="/status"
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-border-subtle bg-bg-subtle px-5 py-2.5 text-sm font-medium text-fg-muted transition-colors hover:border-accent hover:text-accent"
+          >
+            <span className="h-2 w-2 rounded-full bg-success" />
+            {t("status.title")}
+          </Link>
+        </div>
       </Card>
     </div>
   );

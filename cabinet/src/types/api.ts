@@ -85,6 +85,8 @@ export interface DeviceResponse {
   device_model: string | null;
   os_version: string | null;
   user_agent: string | null;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 export interface DevicesResponse {
@@ -158,11 +160,6 @@ export interface PaymentInitResponse {
   is_free: boolean;
   final_amount: string;
   currency: string;
-}
-
-export interface PromocodeActivateResponse {
-  success: boolean;
-  reward_type: string;
 }
 
 // ---------- Public plans (landing, no auth) ----------

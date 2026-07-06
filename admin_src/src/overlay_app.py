@@ -40,8 +40,12 @@ from src.web.endpoints.public.password_reset import router as password_reset_rou
 from src.web.endpoints.public.server_stats import router as server_stats_router
 from src.web.endpoints.public.traffic_history import router as traffic_history_router
 from src.web.endpoints.public.service_status import router as service_status_router
+from src.web.endpoints.public.status_page import router as status_page_router
 from src.web.endpoints.public.set_password import router as set_password_router
 from src.web.endpoints.public.support import router as support_router
+from src.web.endpoints.public.push import router as push_router
+from src.web.endpoints.public.promocode import router as promocode_router
+from src.web.endpoints.public.referral_stats import router as referral_stats_router
 
 # DDL таблиц поддержки. Идемпотентно (IF NOT EXISTS) — повторный старт безопасен.
 _SUPPORT_TABLES_DDL = (
@@ -99,6 +103,73 @@ _SUPPORT_TABLES_DDL = (
         updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
     )
     """,
+    # Снимок HWID-устройств пользователей (для детекта абьюза «один девайс —
+    # разные аккаунты»). В нашей БД HWID нет — периодическая задача снимает их
+    # через Remnawave SDK (см. taskiq/tasks/abuse_hwid.py).
+    """
+    CREATE TABLE IF NOT EXISTS hwid_devices (
+        user_id    INTEGER      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        hwid       VARCHAR(256) NOT NULL,
+        updated_at TIMESTAMPTZ  NOT NULL DEFAULT now(),
+        PRIMARY KEY (user_id, hwid)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_hwid_devices_hwid ON hwid_devices (hwid)",
+    # История email-рассылок из кабинета (TG-рассылки живут в базовой таблице
+    # broadcasts; для email её enum-аудиторий не хватает — трекаем отдельно).
+    # Фактическую отправку делает taskiq/tasks/broadcast_email.py.
+    """
+    CREATE TABLE IF NOT EXISTS email_broadcasts (
+        id            SERIAL PRIMARY KEY,
+        subject       VARCHAR(300) NOT NULL,
+        body          TEXT         NOT NULL,
+        status        VARCHAR(20)  NOT NULL DEFAULT 'PROCESSING',
+        total_count   INTEGER      NOT NULL DEFAULT 0,
+        success_count INTEGER      NOT NULL DEFAULT 0,
+        failed_count  INTEGER      NOT NULL DEFAULT 0,
+        created_at    TIMESTAMPTZ  NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_email_broadcasts_created ON email_broadcasts (created_at DESC)",
+    # Web Push подписки PWA (браузерные push). Одна строка на устройство/endpoint.
+    # Отправка через pywebpush (см. services/overlay_push.py). Мёртвые (404/410)
+    # чистит send_to_user. VAPID-ключи — в assets/push_vapid.json.
+    """
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id          BIGSERIAL PRIMARY KEY,
+        user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        endpoint    VARCHAR(1000) NOT NULL UNIQUE,
+        p256dh      VARCHAR(200)  NOT NULL,
+        auth        VARCHAR(100)  NOT NULL,
+        created_at  TIMESTAMPTZ   NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_push_subscriptions_user ON push_subscriptions (user_id)",
+    # Рублёвый баланс-кошелёк пользователя (ОТДЕЛЬНО от User.points/баллов рефералки).
+    # Пополняется (админ/картой) и тратится на продление по цене тарифа. Overlay-колонка.
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS cabinet_balance NUMERIC(12,2) NOT NULL DEFAULT 0",
+    # Автопродление с баланса: если включено, cron за N дней до конца подписки
+    # продлевает её, списывая ₽ с cabinet_balance. См. taskiq/tasks/autopay.py.
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS autopay_enabled BOOLEAN NOT NULL DEFAULT false",
+    # Сегмент аудитории email-рассылки (EMAIL_ALL / EMAIL_SUBSCRIBED / EMAIL_TRIAL /
+    # EMAIL_EXPIRING / EMAIL_EXPIRED). ADD COLUMN IF NOT EXISTS — для уже созданной таблицы.
+    "ALTER TABLE email_broadcasts ADD COLUMN IF NOT EXISTS segment VARCHAR(30) NOT NULL DEFAULT 'EMAIL_ALL'",
+    # Пополнения ₽-баланса через платёжные шлюзы (+бонус). Строка пишется ДО отдачи
+    # URL шлюза (по payment_id базовой транзакции); на вебхуке base ProcessPayment
+    # (overlay, вариант B) зачисляет amount+bonus на users.cabinet_balance и ставит
+    # credited. См. services/overlay_topup.py. Идемпотентность — по флагу credited.
+    """
+    CREATE TABLE IF NOT EXISTS balance_topups (
+        payment_id  UUID PRIMARY KEY,
+        user_id     INTEGER       NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        amount      NUMERIC(12,2) NOT NULL,
+        bonus       NUMERIC(12,2) NOT NULL DEFAULT 0,
+        credited    BOOLEAN       NOT NULL DEFAULT false,
+        created_at  TIMESTAMPTZ   NOT NULL DEFAULT now(),
+        credited_at TIMESTAMPTZ
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_balance_topups_user ON balance_topups (user_id)",
 )
 
 
@@ -117,11 +188,15 @@ def _overlay_public_router() -> APIRouter:
     router.include_router(server_stats_router)
     router.include_router(traffic_history_router)
     router.include_router(service_status_router)
+    router.include_router(status_page_router)
     router.include_router(appearance_router)
     router.include_router(apps_router)
     router.include_router(info_content_router)
     router.include_router(auth_oidc_router)
     router.include_router(email_manage_router)
+    router.include_router(push_router)
+    router.include_router(promocode_router)
+    router.include_router(referral_stats_router)
     return router
 
 

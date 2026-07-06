@@ -11,7 +11,7 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(
       <div
         ref={ref}
         className={clsx(
-          "rounded-xl p-5",
+          "rounded-xl p-5 transition-[border-color,box-shadow,transform] duration-200",
           variant === "raised" && "border border-[var(--border)] bg-bg-raised",
           variant === "subtle" && "bg-bg-subtle",
           variant === "bordered" && "border border-[var(--border)] bg-transparent",

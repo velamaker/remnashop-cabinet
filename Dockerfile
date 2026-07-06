@@ -6,6 +6,16 @@
 ARG BASE_TAG=v0.8.2
 FROM ghcr.io/snoups/remnashop:${BASE_TAG}
 
+# Экспорт в Excel (.xlsx с автофильтром) — лёгкая write-only библиотека.
+# ВАЖНО: приложение крутится из venv /opt/remnashop/.venv (uv-managed, без pip),
+# поэтому ставим системным pip через --target прямо в site-packages venv
+# (XlsxWriter — чистый python, --target безопасен). Отдельным слоем — кэшируется.
+RUN pip install --no-cache-dir --target=/opt/remnashop/.venv/lib/python3.12/site-packages XlsxWriter==3.2.0
+
+# Web Push (браузерные push PWA): pywebpush тянет py-vapid + http-ece; cryptography
+# уже есть в базе. Тот же приём --target в site-packages venv. Отдельным слоем.
+RUN pip install --no-cache-dir --target=/opt/remnashop/.venv/lib/python3.12/site-packages pywebpush==2.3.0
+
 # Overlay admin API files on top of the base image
 COPY admin_src/src/ /opt/remnashop/src/
 

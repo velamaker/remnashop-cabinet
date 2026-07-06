@@ -1,18 +1,27 @@
+import uuid
+from datetime import datetime
+from decimal import Decimal
 from typing import Optional
 
 import httpx
 from dishka import FromDishka
 from dishka.integrations.fastapi import inject
 from fastapi import APIRouter, HTTPException, status
+from loguru import logger
+from pydantic import BaseModel, Field
 from remnapy.models.hwid import HwidDeviceDto
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common import Remnawave
 from src.application.common.dao import (
     PaymentGatewayDao,
     PlanDao,
     SubscriptionDao,
+    TransactionDao,
 )
-from src.application.dto import PlanDto, PlanSnapshotDto, UserDto
+from src.application.common.uow import UnitOfWork
+from src.application.dto import PlanDto, PlanSnapshotDto, TransactionDto, UserDto
 from src.application.services import PricingService
 from src.application.use_cases.gateways.commands.payment import (
     CreatePayment,
@@ -38,6 +47,7 @@ from src.application.use_cases.subscription.commands.purchase import (
 from src.application.use_cases.user.queries.plans import GetAvailablePlans
 from src.core.enums import (
     AuthType,
+    Currency,
     PaymentGatewayType,
     PurchaseType,
     TransactionStatus,
@@ -54,7 +64,6 @@ from src.web.schemas import (
     DeviceDeleteResponse,
     DeviceResponse,
     DevicesDeleteAllResponse,
-    DevicesResponse,
     DurationGatewayPriceResponse,
     DurationOfferResponse,
     ExtendRequest,
@@ -75,13 +84,29 @@ from ._common import CurrentUser
 router = APIRouter(prefix="/subscription", tags=["Public - Subscription"])
 
 
-def _to_device_response(device: HwidDeviceDto) -> DeviceResponse:
-    return DeviceResponse(
+# Оверлей-схемы: базовый DeviceResponse не отдаёт время активности.
+# Добавляем created_at/updated_at (Remnawave отдаёт их в HwidDeviceDto),
+# чтобы кабинет показывал «последнюю активность» устройства.
+class DeviceActivityResponse(DeviceResponse):
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class DevicesActivityResponse(BaseModel):
+    devices: list[DeviceActivityResponse]
+    current_count: int
+    max_count: int
+
+
+def _to_device_response(device: HwidDeviceDto) -> DeviceActivityResponse:
+    return DeviceActivityResponse(
         hwid=device.hwid,
         platform=device.platform,
         device_model=device.device_model,
         os_version=device.os_version,
         user_agent=device.user_agent,
+        created_at=getattr(device, "created_at", None),
+        updated_at=getattr(device, "updated_at", None),
     )
 
 
@@ -89,7 +114,7 @@ def _assert_web_gateway(gateway_type: PaymentGatewayType) -> None:
     if gateway_type == PaymentGatewayType.TELEGRAM_STARS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="TELEGRAM_STARS gateway is not available for web purchase",
+            detail="Оплата через Telegram Stars недоступна в веб-кабинете",
         )
 
 
@@ -107,7 +132,7 @@ def _assert_web_purchase_email_verified(user: UserDto) -> None:
 
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
-        detail="Email must be verified before purchasing or extending a subscription",
+        detail="Подтвердите email перед покупкой или продлением подписки",
     )
 
 
@@ -175,19 +200,19 @@ async def get_current_subscription(
     )
 
 
-@router.get("/devices", response_model=DevicesResponse)
+@router.get("/devices", response_model=DevicesActivityResponse)
 @inject
 async def get_subscription_devices(
     user: CurrentUser,
     subscription_dao: FromDishka[SubscriptionDao],
     remnawave: FromDishka[Remnawave],
-) -> DevicesResponse:
+) -> DevicesActivityResponse:
     current_subscription = await subscription_dao.get_current(user.id)
     if not current_subscription:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscription not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Подписка не найдена")
 
     devices = await remnawave.get_devices(current_subscription.user_remna_id)
-    return DevicesResponse(
+    return DevicesActivityResponse(
         devices=[_to_device_response(device) for device in devices],
         current_count=len(devices),
         max_count=current_subscription.device_limit,
@@ -269,11 +294,11 @@ async def activate_trial_web(
     _assert_web_purchase_email_verified(user)
 
     if not user.is_trial_available:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Trial is not available")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Пробный период недоступен")
 
     plan = await _resolve_trial_plan(plan_dao)
     if not plan or not plan.durations:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active trial plan")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Нет активного пробного тарифа")
 
     duration_days = plan.durations[0].days
     plan_snapshot = PlanSnapshotDto.from_plan(plan, duration_days)
@@ -321,18 +346,18 @@ async def purchase_subscription(
 
     plan = await _get_available_plan_by_code(user, body.plan_code, get_available_plans)
     if not plan:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Тариф не найден")
 
     duration = plan.get_duration(body.duration_days)
     if not duration:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Plan duration not found",
+            detail="Срок тарифа не найден",
         )
 
     gateway = await payment_gateway_dao.get_by_type(body.gateway_type)
     if not gateway:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gateway not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Платёжный шлюз не найден")
 
     current_subscription = await subscription_dao.get_current(user.id)
     purchase_type = PurchaseType.CHANGE if current_subscription else PurchaseType.NEW
@@ -399,7 +424,7 @@ async def extend_subscription(
 
     current_subscription = await subscription_dao.get_current(user.id)
     if not current_subscription:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscription not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Подписка не найдена")
 
     available_plans = await get_available_plans.system(user)
     matched_plan = await match_plan.system(
@@ -408,19 +433,19 @@ async def extend_subscription(
     if not matched_plan:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Matching plan for renewal is not available",
+            detail="Тариф для продления недоступен",
         )
 
     duration = matched_plan.get_duration(body.duration_days)
     if not duration:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Plan duration not found",
+            detail="Срок тарифа не найден",
         )
 
     gateway = await payment_gateway_dao.get_by_type(body.gateway_type)
     if not gateway:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gateway not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Платёжный шлюз не найден")
 
     pricing = pricing_service.calculate(
         user,
@@ -464,6 +489,127 @@ async def extend_subscription(
         final_amount=str(pricing.final_amount),
         currency=gateway.currency.symbol,
     )
+
+
+class PayWithBalanceRequest(BaseModel):
+    plan_code: str
+    duration_days: int = Field(gt=0, le=3650)
+    gateway_type: PaymentGatewayType
+
+
+@router.post("/pay-with-balance")
+@inject
+async def pay_with_balance(
+    body: PayWithBalanceRequest,
+    user: CurrentUser,
+    session: FromDishka[AsyncSession],
+    uow: FromDishka[UnitOfWork],
+    subscription_dao: FromDishka[SubscriptionDao],
+    payment_gateway_dao: FromDishka[PaymentGatewayDao],
+    pricing_service: FromDishka[PricingService],
+    get_available_plans: FromDishka[GetAvailablePlans],
+    match_plan: FromDishka[MatchPlan],
+    transaction_dao: FromDishka[TransactionDao],
+    process_payment: FromDishka[ProcessPayment],
+) -> dict:
+    """Оплата тарифа с рублёвого баланса-кошелька (NEW/CHANGE/RENEW).
+
+    Списываем ₽ атомарно, создаём завершённую транзакцию (без обращения к шлюзу,
+    display_name «Баланс») и отдаём её базовому ProcessPayment — он выдаёт/меняет/
+    продлевает подписку и начисляет реферальные, как при обычной оплате. При
+    ошибке — возвращаем деньги на баланс.
+    """
+    _assert_web_purchase_email_verified(user)
+
+    plan = await _get_available_plan_by_code(user, body.plan_code, get_available_plans)
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Тариф не найден")
+
+    duration = plan.get_duration(body.duration_days)
+    if not duration:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Срок тарифа не найден")
+
+    gateway = await payment_gateway_dao.get_by_type(body.gateway_type)
+    if not gateway:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Платёжный шлюз не найден")
+    if gateway.currency != Currency.RUB:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Оплата с баланса доступна только в рублях",
+        )
+
+    pricing = pricing_service.calculate(
+        user, duration.get_price(gateway.currency), gateway.currency
+    )
+    price = Decimal(str(pricing.final_amount))
+
+    current = await subscription_dao.get_current(user.id)
+    if not current:
+        purchase_type = PurchaseType.NEW
+    else:
+        matched = await match_plan.system(
+            MatchPlanDto(plan_snapshot=current.plan_snapshot, plans=[plan])
+        )
+        purchase_type = PurchaseType.RENEW if matched else PurchaseType.CHANGE
+
+    # Атомарное списание баланса (спишется только если хватает).
+    new_balance = (
+        await session.execute(
+            text(
+                "UPDATE users SET cabinet_balance = cabinet_balance - :amt "
+                "WHERE id = :id AND cabinet_balance >= :amt RETURNING cabinet_balance"
+            ),
+            {"amt": price, "id": user.id},
+        )
+    ).scalar_one_or_none()
+    if new_balance is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Недостаточно средств на балансе: нужно {price} ₽",
+        )
+    await session.commit()
+
+    try:
+        transaction = TransactionDto(
+            payment_id=uuid.uuid4(),
+            user_id=user.id,
+            status=TransactionStatus.PENDING,
+            purchase_type=purchase_type,
+            gateway_type=gateway.type,
+            gateway_display_name="Баланс",
+            pricing=pricing,
+            currency=gateway.currency,
+            plan_snapshot=PlanSnapshotDto.from_plan(plan, duration.days),
+        )
+        async with uow:
+            await transaction_dao.create(transaction)
+            await uow.commit()
+
+        await process_payment.system(
+            ProcessPaymentDto(
+                payment_id=transaction.payment_id,
+                new_transaction_status=TransactionStatus.COMPLETED,
+                gateway_type=body.gateway_type,
+            ),
+        )
+    except Exception as e:  # noqa: BLE001
+        await session.execute(
+            text("UPDATE users SET cabinet_balance = cabinet_balance + :amt WHERE id = :id"),
+            {"amt": price, "id": user.id},
+        )
+        await session.commit()
+        logger.warning(f"pay_with_balance: выдача user_id={user.id} упала ({e}), деньги возвращены")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Не удалось активировать тариф — деньги возвращены на баланс. Попробуйте позже.",
+        )
+
+    return {
+        "success": True,
+        "purchase_type": purchase_type.value,
+        "spent": float(price),
+        "balance": float(Decimal(str(new_balance))),
+    }
 
 
 @router.get("/offers", response_model=SubscriptionOffersResponse)

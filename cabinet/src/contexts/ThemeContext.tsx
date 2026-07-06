@@ -52,20 +52,17 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const tgTheme = useTelegramTheme();
 
   const setMode = useCallback((next: ThemeMode) => {
-    if (tgTheme) return; // в Mini App тема управляется Telegram
+    // Ручной выбор работает и в Mini App: явный dark/light перекрывает тему
+    // Telegram, «system» = следовать Telegram (Mini App) / устройству (веб).
     setModeState(next);
     localStorage.setItem(STORAGE_KEY, next);
     document.documentElement.dataset.themeMode = next;
-  }, [tgTheme]);
+  }, []);
 
-  // Синхронизируем тему с Telegram когда в Mini App.
+  // Резолвим тему: явные dark/light — как выбрано; «system» = тема Telegram
+  // (в Mini App) либо системная тема устройства (обычный веб).
   useEffect(() => {
-    if (tgTheme) {
-      setResolved(tgTheme);
-      applyTheme(tgTheme);
-      return;
-    }
-    const next = mode === "system" ? resolveSystemTheme() : mode;
+    const next = mode === "system" ? (tgTheme ?? resolveSystemTheme()) : mode;
     setResolved(next);
     applyTheme(next);
   }, [mode, tgTheme]);

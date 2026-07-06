@@ -90,7 +90,7 @@ export default function AdminSupportPage() {
 
       <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
         {/* List */}
-        <div className={`surface p-4 ${active ? "hidden lg:block" : ""}`}>
+        <div className={`surface min-w-0 p-4 ${active ? "hidden lg:block" : ""}`}>
           <h2 className="mb-3 text-sm font-semibold text-fg">
             Тикеты {tickets.length > 0 && <span className="text-fg-subtle">({tickets.length})</span>}
           </h2>
@@ -124,7 +124,7 @@ export default function AdminSupportPage() {
         </div>
 
         {/* Conversation */}
-        <div className={`surface flex min-h-[460px] flex-col p-4 ${active ? "" : "hidden lg:flex"}`}>
+        <div className={`surface flex min-h-[460px] min-w-0 flex-col overflow-hidden p-4 ${active ? "" : "hidden lg:flex"}`}>
           {active ? (
             <>
               <div className="mb-3 flex items-center gap-2 border-b border-[var(--border-subtle)] pb-3">

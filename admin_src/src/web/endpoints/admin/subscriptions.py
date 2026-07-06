@@ -6,6 +6,7 @@ from dishka import FromDishka
 from dishka.integrations.fastapi import inject
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common import Remnawave
@@ -88,15 +89,15 @@ async def extend_subscription(
     session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     if body.days == 0 or abs(body.days) > 3650:
-        raise HTTPException(status_code=400, detail="days must be between -3650 and 3650 (not 0)")
+        raise HTTPException(status_code=400, detail="Дней должно быть от -3650 до 3650 (не 0)")
 
     sub = await subscription_dao.get_current(user_id)
     if not sub:
-        raise HTTPException(status_code=404, detail="No active subscription found")
+        raise HTTPException(status_code=404, detail="Активная подписка не найдена")
 
     user = await user_dao.get_by_id(user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
 
     now = datetime.now(timezone.utc)
     # Продление (+): считаем от текущего срока или от now, если уже истёк.
@@ -113,7 +114,7 @@ async def extend_subscription(
 
     updated = await subscription_dao.update(sub)
     if not updated:
-        raise HTTPException(status_code=500, detail="Failed to update subscription")
+        raise HTTPException(status_code=500, detail="Не удалось обновить подписку")
     await session.commit()
     return {"success": True, "subscription": _sub_to_dict(updated)}
 
@@ -131,14 +132,14 @@ async def disable_subscription(
 ) -> dict[str, Any]:
     sub = await subscription_dao.get_current(user_id)
     if not sub:
-        raise HTTPException(status_code=404, detail="No subscription found")
+        raise HTTPException(status_code=404, detail="Подписка не найдена")
 
     # Отключаем доступ в панели Remnawave.
     await _sync_remnawave(remnawave.disable_user(sub.user_remna_id))
 
     updated = await subscription_dao.update_status(sub.id, SubscriptionStatus.DISABLED)
     if not updated:
-        raise HTTPException(status_code=500, detail="Failed to update subscription")
+        raise HTTPException(status_code=500, detail="Не удалось обновить подписку")
     await session.commit()
     return {"success": True, "subscription": _sub_to_dict(updated)}
 
@@ -156,14 +157,14 @@ async def delete_subscription(
 ) -> dict[str, Any]:
     sub = await subscription_dao.get_current(user_id)
     if not sub:
-        raise HTTPException(status_code=404, detail="No subscription found")
+        raise HTTPException(status_code=404, detail="Подписка не найдена")
 
     # Удаляем пользователя из панели Remnawave (доступ к VPN прекращается).
     await _sync_remnawave(remnawave.delete_user(sub.user_remna_id))
 
     updated = await subscription_dao.update_status(sub.id, SubscriptionStatus.DELETED)
     if not updated:
-        raise HTTPException(status_code=500, detail="Failed to delete subscription")
+        raise HTTPException(status_code=500, detail="Не удалось удалить подписку")
     await session.commit()
     return {"success": True}
 
@@ -189,15 +190,15 @@ async def grant_subscription(
     session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     if body.days <= 0 or body.days > 3650:
-        raise HTTPException(status_code=400, detail="days must be between 1 and 3650")
+        raise HTTPException(status_code=400, detail="Дней должно быть от 1 до 3650")
 
     user = await user_dao.get_by_id(user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
 
     plan = await plan_dao.get_by_id(body.plan_id)
     if not plan:
-        raise HTTPException(status_code=404, detail="Plan not found")
+        raise HTTPException(status_code=404, detail="Тариф не найден")
 
     snapshot = PlanSnapshotDto.from_plan(plan, duration=body.days)
     snapshot.is_trial = body.is_trial
@@ -220,7 +221,7 @@ async def grant_subscription(
         )
         updated = await subscription_dao.update(existing)
         if not updated:
-            raise HTTPException(status_code=500, detail="Failed to update subscription")
+            raise HTTPException(status_code=500, detail="Не удалось обновить подписку")
         await session.commit()
         return {"success": True, "subscription": _sub_to_dict(updated), "action": "extended"}
 
@@ -267,7 +268,7 @@ async def grant_subscription(
 
     created = await subscription_dao.create(new_sub, user_id)
     if not created:
-        raise HTTPException(status_code=500, detail="Failed to create subscription")
+        raise HTTPException(status_code=500, detail="Не удалось создать подписку")
     await session.commit()
     return {"success": True, "subscription": _sub_to_dict(created), "action": "created"}
 
@@ -284,12 +285,12 @@ async def reset_trial(
 ) -> dict[str, Any]:
     user = await user_dao.get_by_id(user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
 
     user.is_trial_available = True
     updated = await user_dao.update(user)
     if not updated:
-        raise HTTPException(status_code=500, detail="Failed to update user")
+        raise HTTPException(status_code=500, detail="Не удалось обновить пользователя")
     await session.commit()
     return {"success": True, "is_trial_available": True}
 
@@ -311,11 +312,47 @@ async def add_points(
 ) -> dict[str, Any]:
     user = await user_dao.get_by_id(user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
 
     user.points = max(0, (user.points or 0) + body.points)
     updated = await user_dao.update(user)
     if not updated:
-        raise HTTPException(status_code=500, detail="Failed to update user")
+        raise HTTPException(status_code=500, detail="Не удалось обновить пользователя")
     await session.commit()
     return {"success": True, "points": updated.points}
+
+
+# ─── Рублёвый баланс-кошелёк (отдельно от баллов) ─────────────────────────────
+
+class AdjustBalanceRequest(BaseModel):
+    amount: float  # ₽: положительное — начислить, отрицательное — списать
+
+
+@router.post("/user/{user_id}/balance")
+@inject
+async def adjust_balance(
+    user_id: int,
+    body: AdjustBalanceRequest,
+    _admin: AdminUser,
+    user_dao: FromDishka[UserDao],
+    session: FromDishka[AsyncSession],
+) -> dict[str, Any]:
+    from decimal import Decimal
+
+    user = await user_dao.get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    amount = Decimal(str(body.amount))
+    # GREATEST(0, …) — не уходим в минус при списании.
+    new_balance = (
+        await session.execute(
+            text(
+                "UPDATE users SET cabinet_balance = GREATEST(0, cabinet_balance + :amt) "
+                "WHERE id = :id RETURNING cabinet_balance"
+            ),
+            {"amt": amount, "id": user_id},
+        )
+    ).scalar_one()
+    await session.commit()
+    return {"success": True, "cabinet_balance": float(new_balance)}

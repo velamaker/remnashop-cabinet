@@ -152,6 +152,6 @@ async def get_logo() -> FileResponse:
     """Отдаёт загруженный логотип кабинета (публично, для тега <img>)."""
     path = logo_path(load_branding().get("logo_file"))
     if path is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Logo not set")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Логотип не задан")
     media = LOGO_MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
     return FileResponse(path, media_type=media)

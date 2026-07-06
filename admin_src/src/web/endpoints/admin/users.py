@@ -1,9 +1,10 @@
+import io
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from dishka import FromDishka
 from dishka.integrations.fastapi import inject
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,6 +42,28 @@ def _user_to_dict(user: UserDto) -> dict[str, Any]:
     }
 
 
+def _build_user_where(
+    search: Optional[str], blocked: Optional[bool], role: Optional[int]
+) -> tuple[str, dict[str, Any]]:
+    """Одни и те же фильтры для списка и экспорта (чтобы не разъезжались)."""
+    where: list[str] = []
+    params: dict[str, Any] = {}
+    if search:
+        where.append("(u.name ILIKE :s OR u.email ILIKE :s OR u.username ILIKE :s)")
+        params["s"] = f"%{search.strip()}%"
+    if blocked is not None:
+        where.append("u.is_blocked = :bl")
+        params["bl"] = blocked
+    if role is not None:
+        try:
+            params["r"] = Role(role).name
+            where.append("u.role = :r")
+        except ValueError:
+            pass
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    return where_sql, params
+
+
 @router.get("")
 @inject
 async def list_users(
@@ -57,21 +80,7 @@ async def list_users(
 ) -> dict[str, Any]:
     # Гибкий фильтр+сортировка. last_login берём из login_events (LEFT JOIN),
     # чтобы можно было сортировать по дате последнего входа.
-    where: list[str] = []
-    params: dict[str, Any] = {}
-    if search:
-        where.append("(u.name ILIKE :s OR u.email ILIKE :s OR u.username ILIKE :s)")
-        params["s"] = f"%{search.strip()}%"
-    if blocked is not None:
-        where.append("u.is_blocked = :bl")
-        params["bl"] = blocked
-    if role is not None:
-        try:
-            params["r"] = Role(role).name
-            where.append("u.role = :r")
-        except ValueError:
-            pass
-    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    where_sql, params = _build_user_where(search, blocked, role)
 
     # Колонка сортировки — строго из белого списка (без SQL-инъекций).
     sort_col = {
@@ -128,6 +137,116 @@ async def list_users(
     return {"total": total, "limit": limit, "offset": offset, "items": items}
 
 
+@router.get("/export.xlsx")
+@inject
+async def export_users_xlsx(
+    admin: AdminUser,
+    user_dao: FromDishka[UserDao],
+    session: FromDishka[AsyncSession],
+    search: Optional[str] = Query(default=None),
+    blocked: Optional[bool] = Query(default=None),
+    role: Optional[int] = Query(default=None),
+    sort: str = Query(default="created_at"),
+    order: str = Query(default="desc"),
+) -> Response:
+    """Экспорт пользователей в Excel (.xlsx) с колонками, автофильтром и
+    закреплённой шапкой. Те же фильтры/сортировка, что и в списке. Кап 50000
+    строк. Для readonly-админа email/username/telegram_id/реф-код маскируются."""
+    where_sql, params = _build_user_where(search, blocked, role)
+
+    sort_col = {
+        "created_at": "u.created_at",
+        "last_login": "ll.last_login",
+        "name": "lower(u.name)",
+    }.get(sort, "u.created_at")
+    direction = "ASC" if str(order).lower() == "asc" else "DESC"
+    nulls = "NULLS LAST" if direction == "DESC" else "NULLS FIRST"
+
+    rows = (
+        await session.execute(
+            text(
+                f"""
+                SELECT u.id AS id, ll.last_login AS last_login
+                FROM users u
+                LEFT JOIN (
+                    SELECT user_id, max(created_at) AS last_login
+                    FROM login_events GROUP BY user_id
+                ) ll ON ll.user_id = u.id
+                {where_sql}
+                ORDER BY {sort_col} {direction} {nulls}, u.id DESC
+                LIMIT 50000
+                """
+            ),
+            params,
+        )
+    ).all()
+
+    ids = [r.id for r in rows]
+    last_map = {r.id: r.last_login for r in rows}
+    by_id: dict[int, UserDto] = {}
+    if ids:
+        for u in await user_dao.get_by_ids(ids):
+            by_id[u.id] = u
+    readonly = is_readonly_admin(admin)
+
+    import xlsxwriter  # локальный импорт — тяжёлое только при экспорте
+
+    headers = ["Дата рег.", "ID", "Имя", "Username", "Email", "Telegram ID",
+               "Роль", "Язык", "Баллы", "Скидка %", "Заблокирован",
+               "Пробник доступен", "Реф-код", "Последний вход"]
+    widths = [17, 8, 22, 18, 26, 15, 10, 7, 8, 9, 13, 16, 12, 17]
+
+    buf = io.BytesIO()
+    wb = xlsxwriter.Workbook(buf, {"in_memory": True, "default_date_format": "yyyy-mm-dd hh:mm"})
+    ws = wb.add_worksheet("Пользователи")
+    f_header = wb.add_format({"bold": True, "bg_color": "#EEF0F2", "border": 1, "align": "left"})
+    f_date = wb.add_format({"num_format": "yyyy-mm-dd hh:mm"})
+
+    for c, (h, wdt) in enumerate(zip(headers, widths)):
+        ws.set_column(c, c, wdt)
+        ws.write(0, c, h, f_header)
+
+    for i, uid in enumerate(ids, start=1):
+        u = by_id.get(uid)
+        if u is None:
+            continue
+        d = _user_to_dict(u)
+        if readonly:
+            d = redact_user(d)
+        try:
+            role_name = Role(u.role).name
+        except (ValueError, TypeError):
+            role_name = getattr(u.role, "name", str(u.role))
+        # Дата — datetime, чтобы Excel сортировал/фильтровал по-настоящему.
+        if u.created_at is not None:
+            ws.write_datetime(i, 0, u.created_at.replace(tzinfo=None), f_date)
+        ws.write(i, 1, "" if d.get("id") is None else d["id"])
+        ws.write(i, 2, u.name or "")
+        ws.write(i, 3, d.get("username") or "")
+        ws.write(i, 4, d.get("email") or "")
+        ws.write(i, 5, "" if d.get("telegram_id") is None else str(d["telegram_id"]))
+        ws.write(i, 6, role_name)
+        ws.write(i, 7, u.language or "")
+        ws.write_number(i, 8, int(u.points or 0))
+        ws.write_number(i, 9, int(u.personal_discount or 0))
+        ws.write(i, 10, "да" if u.is_blocked else "")
+        ws.write(i, 11, "да" if u.is_trial_available else "")
+        ws.write(i, 12, d.get("referral_code") or "")
+        m = last_map.get(uid)
+        if m is not None:
+            ws.write_datetime(i, 13, m.replace(tzinfo=None), f_date)
+
+    ws.autofilter(0, 0, len(ids), len(headers) - 1)  # фильтр по всем колонкам
+    ws.freeze_panes(1, 0)  # закрепить шапку
+    wb.close()
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="users.xlsx"'},
+    )
+
+
 @router.get("/{user_id}")
 @inject
 async def get_user(
@@ -140,7 +259,7 @@ async def get_user(
 ) -> dict[str, Any]:
     user = await user_dao.get_by_id(user_id)
     if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
 
     current_sub = await subscription_dao.get_current(user_id)
     all_subs = await subscription_dao.get_all_by_user(user_id)
@@ -160,6 +279,13 @@ async def get_user(
     user_dict = _user_to_dict(user)
     if readonly:
         user_dict = redact_user(user_dict)
+    # Рублёвый баланс-кошелёк (overlay-колонка, в UserDto его нет).
+    bal = (
+        await session.execute(
+            text("SELECT cabinet_balance FROM users WHERE id = :id"), {"id": user_id}
+        )
+    ).scalar_one_or_none()
+    user_dict["cabinet_balance"] = float(bal) if bal is not None else 0.0
 
     return {
         "user": user_dict,
@@ -311,20 +437,47 @@ async def toggle_block_user(
 ) -> dict[str, Any]:
     user = await user_dao.get_by_id(user_id)
     if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
     if user.id == admin.id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot block yourself")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя заблокировать себя")
     if user.role >= Role.OWNER:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot block owner"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Нельзя заблокировать владельца"
         )
 
     user.is_blocked = body.is_blocked
     updated = await user_dao.update(user)
     if not updated:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Update failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Не удалось обновить")
     await session.commit()
     return {"success": True, "is_blocked": updated.is_blocked}
+
+
+class SetTrialRequest(BaseModel):
+    is_trial_available: bool
+
+
+@router.put("/{user_id}/trial")
+@inject
+async def set_trial_available(
+    user_id: int,
+    body: SetTrialRequest,
+    _admin: AdminUser,
+    user_dao: FromDishka[UserDao],
+    session: FromDishka[AsyncSession],
+) -> dict[str, Any]:
+    """Снять/вернуть право на пробник. Основное применение — детект абьюза:
+    отобрать триал у мультиаккаунта (is_trial_available=false) без блокировки."""
+    user = await user_dao.get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
+
+    user.is_trial_available = body.is_trial_available
+    updated = await user_dao.update(user)
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Не удалось обновить")
+    await session.commit()
+    return {"success": True, "is_trial_available": updated.is_trial_available}
 
 
 class ChangeRoleRequest(BaseModel):
@@ -343,23 +496,23 @@ async def change_user_role(
     if admin.role < Role.OWNER:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only owner can change roles",
+            detail="Менять роли может только владелец",
         )
     user = await user_dao.get_by_id(user_id)
     if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
     if user.id == admin.id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot change own role")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя менять свою роль")
 
     try:
         new_role = Role(body.role)
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role value")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Недопустимое значение роли")
 
     user.role = new_role
     updated = await user_dao.update(user)
     if not updated:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Update failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Не удалось обновить")
     await session.commit()
     return {"success": True, "role": updated.role}
 
@@ -380,13 +533,13 @@ async def set_user_discount(
 ) -> dict[str, Any]:
     user = await user_dao.get_by_id(user_id)
     if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
 
     user.personal_discount = max(0, min(100, body.personal_discount))
     user.purchase_discount = max(0, min(100, body.purchase_discount))
     updated = await user_dao.update(user)
     if not updated:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Update failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Не удалось обновить")
     await session.commit()
     return {
         "success": True,

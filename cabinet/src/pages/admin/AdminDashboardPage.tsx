@@ -7,6 +7,7 @@ import {
   type SalesStatsResponse,
 } from "@/api/admin";
 import { ApiError } from "@/types/api";
+import { DailyCharts } from "@/components/admin/DailyCharts";
 
 // Форматирование выручки по валюте (RUB → ₽, USD → $, XTR → ⭐ звёзды Telegram).
 function fmtMoney(currency: string, amount: number): string {
@@ -118,7 +119,7 @@ export default function AdminDashboardPage() {
 
   return (
     <div className="space-y-8">
-      <h1 className="text-2xl font-bold text-fg">Обзор</h1>
+      <h1 className="text-2xl font-bold text-fg">Статистика</h1>
 
       {/* Users */}
       <section>
@@ -193,6 +194,9 @@ export default function AdminDashboardPage() {
           </div>
         </section>
       )}
+
+      {/* Динамика по дням (графики) */}
+      <DailyCharts />
 
       {/* Gateways */}
       {transactions.gateways.length > 0 && (

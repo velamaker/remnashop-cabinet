@@ -43,7 +43,7 @@ async def get_ad_link_stats(
 ) -> dict[str, Any]:
     link = await ad_link_dao.get_by_id(link_id)
     if not link:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ad link not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Рекламная ссылка не найдена")
     stats = await ad_link_dao.get_stats(link_id)
     return {
         **_link_to_dict(link),
@@ -79,7 +79,7 @@ async def create_ad_link(
 ) -> dict[str, Any]:
     existing = await ad_link_dao.get_by_code(body.code)
     if existing:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Code already exists")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Такой код уже существует")
     link = AdLinkDto(id=0, name=body.name, code=body.code, is_active=True)
     created = await ad_link_dao.create(link)
     await session.commit()
@@ -97,14 +97,14 @@ async def update_ad_link(
 ) -> dict[str, Any]:
     link = await ad_link_dao.get_by_id(link_id)
     if not link:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ad link not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Рекламная ссылка не найдена")
     if body.name is not None:
         link.name = body.name
     if body.is_active is not None:
         link.is_active = body.is_active
     updated = await ad_link_dao.update(link)
     if not updated:
-        raise HTTPException(status_code=500, detail="Update failed")
+        raise HTTPException(status_code=500, detail="Не удалось обновить")
     await session.commit()
     return _link_to_dict(updated)
 
@@ -119,6 +119,6 @@ async def delete_ad_link(
 ) -> None:
     link = await ad_link_dao.get_by_id(link_id)
     if not link:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ad link not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Рекламная ссылка не найдена")
     await ad_link_dao.delete(link_id)
     await session.commit()

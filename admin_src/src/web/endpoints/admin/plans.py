@@ -1,5 +1,6 @@
 from decimal import Decimal
 from typing import Any, Optional
+from uuid import UUID
 
 from dishka import FromDishka
 from dishka.integrations.fastapi import inject
@@ -8,6 +9,7 @@ from pydantic import BaseModel
 from remnapy.enums.users import TrafficLimitStrategy
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.application.common import Remnawave
 from src.application.common.dao import PlanDao
 from src.application.dto import PlanDto, PlanDurationDto, PlanPriceDto
 from src.core.enums import Currency, PlanAvailability, PlanType
@@ -37,6 +39,10 @@ def _plan_to_dict(plan: PlanDto) -> dict[str, Any]:
         "traffic_limit_strategy": plan.traffic_limit_strategy.value if hasattr(plan.traffic_limit_strategy, "value") else str(plan.traffic_limit_strategy),
         "traffic_limit": plan.traffic_limit,
         "device_limit": plan.device_limit,
+        "allowed_telegram_ids": list(plan.allowed_telegram_ids or []),
+        "allowed_emails": list(plan.allowed_emails or []),
+        "internal_squads": [str(u) for u in (plan.internal_squads or [])],
+        "external_squad": str(plan.external_squad) if plan.external_squad else None,
         "order_index": plan.order_index,
         "is_active": plan.is_active,
         "is_trial": plan.is_trial,
@@ -55,6 +61,26 @@ async def list_plans(
     return {"items": [_plan_to_dict(p) for p in plans], "total": len(plans)}
 
 
+@router.get("/meta/squads")
+@inject
+async def list_squads(
+    _admin: AdminUser,
+    remnawave: FromDishka[Remnawave],
+) -> dict[str, Any]:
+    """Сквады из панели Remnawave для конфигуратора тарифа (как в боте)."""
+    try:
+        internal = await remnawave.get_internal_squads()
+        external = await remnawave.get_external_squads()
+        available = await remnawave.get_squads_available()
+    except Exception:
+        return {"internal": [], "external": [], "available": False}
+    return {
+        "internal": [{"uuid": str(s.uuid), "name": s.name} for s in internal],
+        "external": [{"uuid": str(s.uuid), "name": s.name} for s in external],
+        "available": bool(available),
+    }
+
+
 @router.get("/{plan_id}")
 @inject
 async def get_plan(
@@ -64,7 +90,7 @@ async def get_plan(
 ) -> dict[str, Any]:
     plan = await plan_dao.get_by_id(plan_id)
     if not plan:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Тариф не найден")
     return _plan_to_dict(plan)
 
 
@@ -89,6 +115,10 @@ class CreatePlanRequest(BaseModel):
     traffic_limit_strategy: str = "NO_RESET"
     traffic_limit: int = 0
     device_limit: int = 1
+    allowed_telegram_ids: list[int] = []
+    allowed_emails: list[str] = []
+    internal_squads: list[str] = []
+    external_squad: Optional[str] = None
     order_index: int = 0
     is_active: bool = False
     is_trial: bool = False
@@ -105,10 +135,32 @@ class UpdatePlanRequest(BaseModel):
     traffic_limit_strategy: Optional[str] = None
     traffic_limit: Optional[int] = None
     device_limit: Optional[int] = None
+    allowed_telegram_ids: Optional[list[int]] = None
+    allowed_emails: Optional[list[str]] = None
+    internal_squads: Optional[list[str]] = None
+    external_squad: Optional[str] = None
+    # external_squad=None неоднозначен (не задан vs. сброс) — используем sentinel-флаг
+    clear_external_squad: bool = False
     order_index: Optional[int] = None
     is_active: Optional[bool] = None
     is_trial: Optional[bool] = None
     durations: Optional[list[PlanDurationRequest]] = None
+
+
+def _parse_uuids(raw: list[str]) -> list[UUID]:
+    try:
+        return [UUID(str(x)) for x in raw]
+    except (ValueError, AttributeError, TypeError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Некорректный UUID сквада: {e}")
+
+
+def _parse_uuid(raw: Optional[str]) -> Optional[UUID]:
+    if not raw:
+        return None
+    try:
+        return UUID(str(raw))
+    except (ValueError, AttributeError, TypeError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Некорректный UUID сквада: {e}")
 
 
 def _build_durations(raw: list[PlanDurationRequest]) -> list[PlanDurationDto]:
@@ -151,6 +203,10 @@ async def create_plan(
         traffic_limit_strategy=tls,
         traffic_limit=body.traffic_limit,
         device_limit=body.device_limit,
+        allowed_telegram_ids=body.allowed_telegram_ids,
+        allowed_emails=body.allowed_emails,
+        internal_squads=_parse_uuids(body.internal_squads),
+        external_squad=_parse_uuid(body.external_squad),
         order_index=body.order_index,
         is_active=body.is_active,
         is_trial=body.is_trial,
@@ -172,7 +228,7 @@ async def update_plan(
 ) -> dict[str, Any]:
     plan = await plan_dao.get_by_id(plan_id)
     if not plan:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Тариф не найден")
 
     if body.name is not None:
         plan.name = body.name
@@ -192,6 +248,16 @@ async def update_plan(
         plan.traffic_limit = body.traffic_limit
     if body.device_limit is not None:
         plan.device_limit = body.device_limit
+    if body.allowed_telegram_ids is not None:
+        plan.allowed_telegram_ids = body.allowed_telegram_ids
+    if body.allowed_emails is not None:
+        plan.allowed_emails = body.allowed_emails
+    if body.internal_squads is not None:
+        plan.internal_squads = _parse_uuids(body.internal_squads)
+    if body.clear_external_squad:
+        plan.external_squad = None
+    elif body.external_squad is not None:
+        plan.external_squad = _parse_uuid(body.external_squad)
     if body.order_index is not None:
         plan.order_index = body.order_index
     if body.is_active is not None:
@@ -203,7 +269,7 @@ async def update_plan(
 
     updated = await plan_dao.update(plan)
     if not updated:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Update failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Не удалось обновить")
     await session.commit()
     return _plan_to_dict(updated)
 
@@ -218,10 +284,10 @@ async def toggle_plan(
 ) -> dict[str, Any]:
     plan = await plan_dao.get_by_id(plan_id)
     if not plan:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Тариф не найден")
     updated = await plan_dao.update_status(plan_id, not plan.is_active)
     if not updated:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Update failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Не удалось обновить")
     await session.commit()
     return {"id": plan_id, "is_active": updated.is_active}
 
@@ -236,6 +302,6 @@ async def delete_plan(
 ) -> None:
     plan = await plan_dao.get_by_id(plan_id)
     if not plan:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Тариф не найден")
     await plan_dao.delete(plan_id)
     await session.commit()

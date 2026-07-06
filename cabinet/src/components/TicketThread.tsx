@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Send } from "lucide-react";
 import type { TicketMessage } from "@/api/support";
+import { activeLocale } from "@/lib/format";
+import { useT } from "@/i18n/I18nContext";
 
 function formatTime(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
-  return d.toLocaleString("ru-RU", {
+  return d.toLocaleString(activeLocale(), {
     day: "2-digit",
     month: "2-digit",
     hour: "2-digit",
@@ -25,6 +27,7 @@ export function TicketThread({
   disabled?: boolean;
   onSend: (body: string) => Promise<void>;
 }) {
+  const t = useT();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
@@ -61,7 +64,7 @@ export function TicketThread({
               >
                 <p className="whitespace-pre-wrap break-words">{m.body}</p>
                 <p className={`mt-1 text-[10px] ${mine ? "text-accent-fg/70" : "text-fg-subtle"}`}>
-                  {m.sender === "admin" ? "Поддержка" : "Вы"} · {formatTime(m.created_at)}
+                  {m.sender === "admin" ? t("support.support") : t("support.you")} · {formatTime(m.created_at)}
                 </p>
               </div>
             </div>
@@ -71,7 +74,7 @@ export function TicketThread({
       </div>
 
       {!disabled && (
-        <div className="mt-3 flex items-end gap-2 border-t border-[var(--border-subtle)] pt-3">
+        <div className="mt-3 flex items-center gap-2 border-t border-[var(--border-subtle)] pt-3">
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
@@ -79,13 +82,14 @@ export function TicketThread({
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSend();
             }}
             rows={2}
-            placeholder="Напишите сообщение…"
-            className="min-h-[40px] flex-1 resize-none rounded-xl border border-[var(--border)] bg-bg-subtle px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus:outline-none focus:ring-2 focus:ring-accent"
+            placeholder={t("support.msgPlaceholder")}
+            className="h-11 max-h-32 min-h-11 flex-1 resize-none rounded-xl border border-[var(--border)] bg-bg-subtle px-3 py-2.5 text-sm text-fg placeholder:text-fg-subtle focus:outline-none focus:ring-2 focus:ring-accent"
           />
           <button
             onClick={handleSend}
             disabled={!text.trim() || sending}
-            className="btn-gradient inline-flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl transition-all active:scale-95 disabled:opacity-50"
+            aria-label={t("support.send")}
+            className="btn-gradient inline-flex h-11 w-11 flex-shrink-0 items-center justify-center self-stretch rounded-xl transition-all active:scale-95 disabled:opacity-50"
           >
             <Send className="h-4 w-4" />
           </button>

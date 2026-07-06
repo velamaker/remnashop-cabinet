@@ -12,6 +12,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useT } from "@/i18n/I18nContext";
 import { useSubscription } from "@/hooks/useSubscription";
 import { subscriptionApi } from "@/api/subscription";
 import { referralApi } from "@/api/referral";
@@ -20,6 +21,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { TelegramLinkPrompt } from "@/components/TelegramLinkPrompt";
 import { RenewalBanner } from "@/components/RenewalBanner";
 import { TrafficChart } from "@/components/TrafficChart";
+import { ServerStatusCard } from "@/components/ServerStatusCard";
 import { formatBytes, formatTrafficLimit, formatDate, daysUntil } from "@/lib/format";
 import { ApiError } from "@/types/api";
 
@@ -44,6 +46,7 @@ function CountryFlag({ code }: { code: string }) {
 
 export default function HomePage() {
   const { user } = useAuth();
+  const t = useT();
   const { subscription, isLoading, reload } = useSubscription();
   const [devices, setDevices] = useState<{ current: number; max: number } | null>(null);
   const [referrals, setReferrals] = useState<number | null>(null);
@@ -99,7 +102,7 @@ export default function HomePage() {
       await subscriptionApi.activateTrial();
       window.location.reload();
     } catch (e) {
-      setTrialError(e instanceof ApiError ? e.detail : "Не удалось активировать пробный период");
+      setTrialError(e instanceof ApiError ? e.detail : t("sub.trialErr"));
     } finally {
       setActivating(false);
     }
@@ -117,13 +120,13 @@ export default function HomePage() {
       {/* Приветствие */}
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-fg sm:text-[28px]">
-          Добро пожаловать{firstName ? `, ${firstName}` : ""}!
+          {t("home.welcome")}{firstName ? `, ${firstName}` : ""}!
         </h1>
         <div className="mt-1.5 flex items-center gap-2">
-          <span className="text-sm text-fg-muted">Ваша подписка</span>
+          <span className="text-sm text-fg-muted">{t("home.yourSubscription")}</span>
           {subscription && (
             <span className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent-subtle px-2.5 py-0.5 text-xs font-medium text-accent">
-              ★ {subscription.is_trial ? "Пробный период" : "Активная"}
+              ★ {subscription.is_trial ? t("home.trial") : t("home.active")}
             </span>
           )}
         </div>
@@ -143,7 +146,7 @@ export default function HomePage() {
           className="btn-gradient flex h-14 items-center justify-center gap-2.5 rounded-2xl px-6 text-base font-semibold transition-all active:scale-[0.99]"
         >
           <MonitorSmartphone className="h-5 w-5" />
-          Подключиться
+          {t("home.connect")}
           <ArrowRight className="h-5 w-5" />
         </Link>
       )}
@@ -156,22 +159,22 @@ export default function HomePage() {
             <Gift className="h-7 w-7" />
           </div>
           <h2 className="text-lg font-bold tracking-tight text-fg">
-            {trial?.available ? "Начните бесплатно" : "У вас пока нет подписки"}
+            {trial?.available ? t("home.startFree") : t("home.noSub.title")}
           </h2>
           <p className="mx-auto mt-1.5 max-w-sm text-sm text-fg-muted">
             {trial?.available
-              ? `Пробный период на ${trial.days} дн. — бесплатно, без карты и обязательств.`
-              : "Выберите подходящий тариф, чтобы начать пользоваться VPN."}
+              ? t("home.trialOffer", { days: trial.days })
+              : t("home.noSub.subtitle")}
           </p>
 
           {trial?.available && (
             <div className="mt-4 flex flex-wrap justify-center gap-2 text-xs font-medium text-fg-muted">
-              <span className="rounded-full border border-[var(--border)] bg-bg-raised px-3 py-1">🗓 {trial.days} дн.</span>
+              <span className="rounded-full border border-[var(--border)] bg-bg-raised px-3 py-1">🗓 {t("home.trialDays", { n: trial.days })}</span>
               <span className="rounded-full border border-[var(--border)] bg-bg-raised px-3 py-1">
-                📊 {trial.traffic_gb === 0 ? "Безлимит трафика" : `${trial.traffic_gb} ГБ`}
+                📊 {trial.traffic_gb === 0 ? t("home.trialUnlimited") : t("home.trafficGb", { n: trial.traffic_gb })}
               </span>
               <span className="rounded-full border border-[var(--border)] bg-bg-raised px-3 py-1">
-                📱 {trial.devices === 0 ? "Устройств: без лимита" : `До ${trial.devices} устройств`}
+                📱 {trial.devices === 0 ? t("home.devicesUnlimited") : t("billing.upToDevices", { n: trial.devices })}
               </span>
             </div>
           )}
@@ -185,12 +188,12 @@ export default function HomePage() {
                 disabled={activating}
                 className="btn-gradient inline-flex h-11 items-center justify-center gap-2 rounded-xl px-6 text-sm font-semibold transition-all active:scale-[0.98] disabled:opacity-60"
               >
-                {activating ? "Активируем…" : `🎁 Активировать ${trial.days} дн. бесплатно`}
+                {activating ? t("home.activating") : t("home.activateTrialDays", { days: trial.days })}
               </button>
             )}
             <Link to="/billing">
               <Button variant={trial?.available ? "secondary" : "primary"} size="lg" className="rounded-xl">
-                Выбрать тариф <ArrowRight className="h-4 w-4" />
+                {t("home.choosePlan")} <ArrowRight className="h-4 w-4" />
               </Button>
             </Link>
           </div>
@@ -202,13 +205,13 @@ export default function HomePage() {
             <div>
               <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-accent">
                 <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-                {isUnlimited ? "Безлимит" : "Активна"}
+                {isUnlimited ? t("home.unlimited") : t("home.active")}
               </span>
-              <h2 className="mt-1.5 text-xl font-bold tracking-tight text-fg">Расход трафика</h2>
+              <h2 className="mt-1.5 text-xl font-bold tracking-tight text-fg">{t("home.trafficUsage")}</h2>
             </div>
             <div className="flex items-center gap-3 text-right">
               <span className="tabular text-xs text-fg-subtle">
-                {formatBytes(used)} {isUnlimited ? "израсходовано" : `из ${formatTrafficLimit(subscription.traffic_limit)}`}
+                {isUnlimited ? t("home.trafficUnlimited", { used: formatBytes(used) }) : t("home.trafficOf", { used: formatBytes(used), limit: formatTrafficLimit(subscription.traffic_limit) })}
               </span>
               {isUnlimited && <InfinityIcon className="h-5 w-5 text-accent" />}
             </div>
@@ -231,9 +234,9 @@ export default function HomePage() {
               <MonitorSmartphone className="h-5 w-5" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-fg">Подключить устройство</p>
+              <p className="text-sm font-semibold text-fg">{t("home.connectDevice")}</p>
               <p className="tabular text-xs text-fg-muted">
-                {devices ? `${devices.current} из ${devices.max} подключено` : `до ${subscription.device_limit} устройств`}
+                {devices ? t("home.devicesConnected", { cur: devices.current, max: devices.max }) : t("home.devicesUpTo", { limit: subscription.device_limit })}
               </p>
             </div>
             {devices && (
@@ -253,19 +256,19 @@ export default function HomePage() {
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <div className="rounded-2xl border border-[var(--border-subtle)] bg-bg-subtle/60 p-4">
               <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-fg-subtle">
-                Тариф
+                {t("home.plan")}
               </p>
               <p className="mt-1.5 truncate text-[15px] font-semibold text-fg">{subscription.plan_name}</p>
-              <p className="tabular mt-0.5 text-xs text-fg-subtle">до {formatDate(subscription.expire_at)}</p>
+              <p className="tabular mt-0.5 text-xs text-fg-subtle">{t("home.until", { date: formatDate(subscription.expire_at) })}</p>
             </div>
             <div className="rounded-2xl border border-[var(--border-subtle)] bg-bg-subtle/60 p-4">
               <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-fg-subtle">
                 <CalendarClock className="h-3.5 w-3.5" />
-                Осталось
+                {t("home.remaining")}
               </p>
               <p className="tabular mt-1.5 text-2xl font-bold text-fg">
                 {remainingDays > 0 ? remainingDays : 0}
-                <span className="ml-1 text-sm font-medium text-fg-subtle">дн.</span>
+                <span className="ml-1 text-sm font-medium text-fg-subtle">{t("home.daysShort")}</span>
               </p>
             </div>
           </div>
@@ -274,13 +277,13 @@ export default function HomePage() {
           <div className="mt-5 flex items-center justify-between border-t border-[var(--border-subtle)] pt-4">
             <span className="tabular inline-flex items-center gap-1.5 text-xs text-fg-subtle">
               <RefreshCw className="h-3.5 w-3.5" />
-              {Math.ceil(countdown / 60)} мин
+              {t("home.minutes", { n: Math.ceil(countdown / 60) })}
             </span>
             <Link
               to="/subscription"
               className="inline-flex items-center gap-1 text-sm font-medium text-accent transition-opacity hover:opacity-80"
             >
-              Управление подпиской
+              {t("home.manageSubscription")}
               <ArrowRight className="h-4 w-4" />
             </Link>
           </div>
@@ -293,7 +296,7 @@ export default function HomePage() {
           <div className="min-w-0">
             <p className="flex items-center gap-2 text-sm font-medium text-fg-muted">
               <Server className="h-4 w-4" />
-              Любимый сервер
+              {t("home.favoriteServer")}
             </p>
             {favServer ? (
               <>
@@ -302,13 +305,13 @@ export default function HomePage() {
                   <span className="truncate">{favServer.name}</span>
                 </p>
                 <p className="tabular mt-0.5 text-xs text-fg-subtle">
-                  {formatBytes(favServer.total)} за 30 дней
+                  {t("home.per30days", { value: formatBytes(favServer.total) })}
                 </p>
               </>
             ) : (
               <>
                 <p className="mt-2 text-xl font-bold text-fg-subtle">—</p>
-                <p className="mt-0.5 text-xs text-fg-subtle">пока нет данных</p>
+                <p className="mt-0.5 text-xs text-fg-subtle">{t("home.noData")}</p>
               </>
             )}
           </div>
@@ -318,10 +321,10 @@ export default function HomePage() {
           <div>
             <p className="flex items-center gap-2 text-sm font-medium text-fg-muted">
               <Users className="h-4 w-4" />
-              Рефералы
+              {t("home.referrals")}
             </p>
             <p className="tabular mt-2 text-2xl font-bold text-fg">{referrals ?? 0}</p>
-            <p className="mt-0.5 text-xs text-fg-subtle">приглашено</p>
+            <p className="mt-0.5 text-xs text-fg-subtle">{t("home.invited")}</p>
           </div>
           <ChevronRight className="h-4 w-4 text-fg-subtle transition-colors group-hover:text-accent" />
         </Link>
@@ -333,9 +336,9 @@ export default function HomePage() {
           <div className="mb-3 flex items-center justify-between">
             <p className="flex items-center gap-2 text-sm font-medium text-fg-muted">
               <Server className="h-4 w-4" />
-              Наши серверы
+              {t("home.ourServers")}
             </p>
-            <span className="text-xs text-fg-subtle">{servers.length} активных</span>
+            <span className="text-xs text-fg-subtle">{t("home.activeCount", { n: servers.length })}</span>
           </div>
           <div className="flex flex-col gap-3">
             {servers.map((n, i) => {
@@ -357,9 +360,12 @@ export default function HomePage() {
               );
             })}
           </div>
-          <p className="mt-3 text-xs text-fg-subtle">Загрузка — по трафику за 30 дней</p>
+          <p className="mt-3 text-xs text-fg-subtle">{t("home.loadBy30days")}</p>
         </div>
       )}
+
+      {/* Статус серверов — онлайн/офлайн + пинг с устройства пользователя */}
+      <ServerStatusCard />
 
       {/* График расхода трафика по дням */}
       <TrafficChart />

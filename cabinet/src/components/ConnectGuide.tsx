@@ -4,6 +4,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { APPS, PLATFORMS, DEFAULT_PRIORITY, type AppEntry, type Platform } from "@/data/apps";
 import { appsApi, type AppsConfig } from "@/api/apps";
 import { openExternalLink, useIsMiniApp } from "@/hooks/useTelegramWebApp";
+import { useT } from "@/i18n/I18nContext";
 
 function detectPlatform(): Platform {
   const ua = (navigator.userAgent || "").toLowerCase();
@@ -25,6 +26,7 @@ function AppCard({
   sub: string;
   recommended?: boolean;
 }) {
+  const t = useT();
   const [connected, setConnected] = useState(false);
   const installUrl = app.install[platform];
 
@@ -42,11 +44,11 @@ function AppCard({
           {recommended && (
             <span className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent-subtle px-2 py-0.5 text-[10px] font-medium text-accent">
               <Star className="h-3 w-3" />
-              Рекомендуем
+              {t("connect.recommended")}
             </span>
           )}
         </div>
-        <p className="mt-0.5 text-xs text-fg-muted">{app.desc}</p>
+        <p className="mt-0.5 text-xs text-fg-muted">{t(app.desc)}</p>
       </div>
       <div className="flex flex-shrink-0 gap-2">
         {installUrl && (
@@ -57,7 +59,7 @@ function AppCard({
             className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] bg-bg-raised px-3 text-xs font-medium text-fg transition-colors hover:bg-bg-overlay"
           >
             <Download className="h-3.5 w-3.5" />
-            Установить
+            {t("connect.install")}
           </a>
         )}
         <button
@@ -65,7 +67,7 @@ function AppCard({
           className="btn-gradient inline-flex h-9 items-center justify-center gap-1.5 rounded-lg px-4 text-xs font-semibold transition-all active:scale-[0.98]"
         >
           {connected ? <Check className="h-3.5 w-3.5" /> : <Zap className="h-3.5 w-3.5" />}
-          {connected ? "Открываем…" : "Подключиться"}
+          {connected ? t("connect.opening") : t("connect.connect")}
         </button>
       </div>
     </div>
@@ -73,6 +75,7 @@ function AppCard({
 }
 
 export function ConnectGuide({ subUrl }: { subUrl: string }) {
+  const t = useT();
   const [platform, setPlatform] = useState<Platform>(detectPlatform);
   const [showQr, setShowQr] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -86,7 +89,7 @@ export function ConnectGuide({ subUrl }: { subUrl: string }) {
       await navigator.clipboard.writeText(subUrl);
     } catch {
       // clipboard недоступен (http/старый браузер) — выделяем через prompt-фолбэк
-      window.prompt("Скопируйте ссылку подписки:", subUrl);
+      window.prompt(t("connect.copyPrompt"), subUrl);
     }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -138,9 +141,9 @@ export function ConnectGuide({ subUrl }: { subUrl: string }) {
   return (
     <div className="surface p-5">
       <div className="mb-1">
-        <h3 className="text-sm font-semibold tracking-tight text-fg">Подключить устройство</h3>
+        <h3 className="text-sm font-semibold tracking-tight text-fg">{t("connect.title")}</h3>
         <p className="mt-0.5 text-xs text-fg-subtle">
-          Установите приложение и нажмите «Подключиться» — подписка добавится автоматически
+          {t("connect.subtitle")}
         </p>
       </div>
 
@@ -163,9 +166,7 @@ export function ConnectGuide({ subUrl }: { subUrl: string }) {
 
       {isMiniApp && (
         <p className="mt-3 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-fg">
-          Открыто внутри Telegram — если кнопка «Подключиться» не переключает в
-          приложение, скопируйте ссылку внизу страницы и вставьте её в приложении
-          вручную («Добавить подписку по URL»).
+          {t("connect.miniAppWarn")}
         </p>
       )}
 
@@ -182,7 +183,7 @@ export function ConnectGuide({ subUrl }: { subUrl: string }) {
         ))}
         {apps.length === 0 && (
           <p className="py-4 text-center text-sm text-fg-subtle">
-            Для этой платформы пока нет рекомендованных приложений
+            {t("connect.noApps")}
           </p>
         )}
       </div>
@@ -197,7 +198,7 @@ export function ConnectGuide({ subUrl }: { subUrl: string }) {
           className="inline-flex items-center gap-2 text-sm font-medium text-fg-muted transition-colors hover:text-fg"
         >
           {showQr ? <X className="h-4 w-4" /> : <QrCode className="h-4 w-4" />}
-          {showQr ? "Скрыть QR-код" : "QR для другого устройства"}
+          {showQr ? t("connect.hideQr") : t("connect.showQr")}
         </button>
         {showQr && (
           <div className="mt-3 flex flex-col items-center gap-2">
@@ -205,7 +206,7 @@ export function ConnectGuide({ subUrl }: { subUrl: string }) {
               <QRCodeSVG value={subUrl} size={180} />
             </div>
             <p className="max-w-xs text-center text-xs text-fg-subtle">
-              Отсканируйте камерой приложения на другом устройстве, чтобы добавить подписку
+              {t("connect.qrHint")}
             </p>
           </div>
         )}
@@ -216,11 +217,10 @@ export function ConnectGuide({ subUrl }: { subUrl: string }) {
       <div className="mt-4 border-t border-[var(--border)] pt-4">
         <p className="flex items-center gap-2 text-sm font-medium text-fg">
           <Link2 className="h-4 w-4 text-fg-muted" />
-          Прямая ссылка подписки
+          {t("connect.directLink")}
         </p>
         <p className="mt-0.5 text-xs text-fg-subtle">
-          Если приложение просит ввести ссылку вручную — скопируйте и вставьте её в
-          «Добавить подписку по URL».
+          {t("connect.directHint")}
         </p>
         <div className="mt-2 flex items-stretch gap-2">
           <input
@@ -235,7 +235,7 @@ export function ConnectGuide({ subUrl }: { subUrl: string }) {
             className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-accent-fg transition-opacity hover:opacity-90"
           >
             {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            {copied ? "Скопировано" : "Копировать"}
+            {copied ? t("connect.copied") : t("connect.copy")}
           </button>
         </div>
       </div>

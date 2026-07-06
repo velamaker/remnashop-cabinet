@@ -91,7 +91,10 @@ class ReferralUpdate(BaseModel):
     level: Optional[int] = None
     accrual_strategy: Optional[str] = None
     reward_type: Optional[str] = None
-    reward_value: Optional[int] = None
+    reward_strategy: Optional[str] = None  # AMOUNT | PERCENT
+    reward_value: Optional[int] = None  # legacy: значение L1
+    reward_l1: Optional[int] = None  # награда 1-го уровня (% или сумма)
+    reward_l2: Optional[int] = None  # награда 2-го уровня
 
 
 class BackupUpdate(BaseModel):
@@ -159,18 +162,35 @@ async def update_settings(
     if body.referral:
         if body.referral.enable is not None:
             s.referral.enable = body.referral.enable
+        if body.referral.level is not None:
+            try:
+                s.referral.level = ReferralLevel(body.referral.level)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Недопустимый уровень рефералки")
         if body.referral.reward_type is not None:
             try:
                 s.referral.reward.type = ReferralRewardType(body.referral.reward_type.upper())
             except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid reward type")
-        if body.referral.reward_value is not None:
-            s.referral.reward.config = {ReferralLevel.FIRST: body.referral.reward_value}
+                raise HTTPException(status_code=400, detail="Недопустимый тип награды")
+        if body.referral.reward_strategy is not None:
+            try:
+                s.referral.reward.strategy = ReferralRewardStrategy(body.referral.reward_strategy.upper())
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Недопустимая стратегия награды")
+        # Награды по уровням: reward_l1/reward_l2 (или legacy reward_value = L1).
+        l1 = body.referral.reward_l1 if body.referral.reward_l1 is not None else body.referral.reward_value
+        if l1 is not None or body.referral.reward_l2 is not None:
+            cfg = dict(s.referral.reward.config)
+            if l1 is not None:
+                cfg[ReferralLevel.FIRST] = max(0, l1)
+            if body.referral.reward_l2 is not None:
+                cfg[ReferralLevel.SECOND] = max(0, body.referral.reward_l2)
+            s.referral.reward.config = cfg
         if body.referral.accrual_strategy is not None:
             try:
                 s.referral.accrual_strategy = ReferralAccrualStrategy(body.referral.accrual_strategy.upper())
             except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid accrual strategy")
+                raise HTTPException(status_code=400, detail="Недопустимая стратегия начисления")
 
     if body.backup:
         if body.backup.enabled is not None:
@@ -189,6 +209,6 @@ async def update_settings(
 
     updated = await settings_dao.update(s)
     if not updated:
-        raise HTTPException(status_code=500, detail="Update failed")
+        raise HTTPException(status_code=500, detail="Не удалось обновить")
     await session.commit()
     return _settings_to_dict(updated)

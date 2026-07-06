@@ -15,6 +15,8 @@ RUN npm run build
 
 # ---- Serve stage ----
 FROM nginx:1.27-alpine
+# imagemagick — генерация PWA-иконок из логотипа бренда при старте (45-pwa-icons.sh).
+RUN apk add --no-cache imagemagick
 COPY --from=build /app/dist /usr/share/nginx/html
 
 # nginx.conf — это envsubst-ШАБЛОН. Кладём в templates/, чтобы официальный
@@ -24,7 +26,9 @@ COPY nginx.conf /etc/nginx/templates/default.conf.template
 # Подстановка бренда в index.html при старте (превью ссылок в мессенджерах без JS).
 # Запускается официальным entrypoint'ом nginx из /docker-entrypoint.d/.
 COPY docker-entrypoint.d/40-brand-title.sh /docker-entrypoint.d/40-brand-title.sh
-RUN chmod +x /docker-entrypoint.d/40-brand-title.sh
+# Генерация PWA-иконок бренда из логотипа (после 40-brand-title.sh).
+COPY docker-entrypoint.d/45-pwa-icons.sh /docker-entrypoint.d/45-pwa-icons.sh
+RUN chmod +x /docker-entrypoint.d/40-brand-title.sh /docker-entrypoint.d/45-pwa-icons.sh
 
 # Подставляем ТОЛЬКО переменные с префиксом API_ — рантайм-переменные nginx
 # ($host, $remote_addr, $binary_remote_addr, $request_uri, …) остаются нетронутыми.

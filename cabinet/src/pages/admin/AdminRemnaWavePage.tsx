@@ -4,6 +4,7 @@ import {
   Activity, Globe, Layers, AlertCircle, Users, Wifi, Info,
 } from "lucide-react";
 import { adminApi } from "@/api/admin";
+import { formatDate } from "@/lib/format";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -39,6 +40,8 @@ interface RwNode {
   xray_version?: string | null;
   node_version?: string | null;
   updated_at?: string;
+  cert_days?: number | null;        // из мониторинга node_health.json
+  cert_checked_at?: string | null;
 }
 
 interface RwHost {
@@ -163,6 +166,15 @@ function NodeCard({ node, onAction }: {
           <div className="rounded-lg bg-bg px-2.5 py-2">
             <p className="text-[10px] text-fg-subtle">ОЗУ</p>
             <p className="text-xs font-semibold text-fg">{fmtBytes(node.total_ram)}</p>
+          </div>
+        )}
+        {node.cert_days != null && (
+          <div className="rounded-lg bg-bg px-2.5 py-2"
+            title={node.cert_checked_at ? `Проверено: ${formatDate(node.cert_checked_at)}` : undefined}>
+            <p className="text-[10px] text-fg-subtle">Сертификат</p>
+            <p className={`text-xs font-semibold ${node.cert_days <= 10 ? "text-danger" : node.cert_days <= 30 ? "text-warning" : "text-fg"}`}>
+              {node.cert_days} дн.
+            </p>
           </div>
         )}
       </div>
@@ -418,7 +430,7 @@ export default function AdminRemnaWavePage() {
                   sub={s?.memory ? `из ${fmtBytes(s.memory.total)} (${Math.round(s.memory.used / s.memory.total * 100)}%)` : undefined} />
                 <StatCard icon={Clock} label="Аптайм сервера"
                   value={s?.uptime != null ? fmtUptime(s.uptime) : "—"} />
-                <StatCard icon={Activity} label="Нод онлайн"
+                <StatCard icon={Activity} label="Хостов онлайн"
                   value={String(s?.nodes?.total_online ?? "—")}
                   sub={s?.nodes?.total_bytes_lifetime ? `${fmtBytes(Number(s.nodes.total_bytes_lifetime))} lifetime` : undefined} />
               </div>

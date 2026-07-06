@@ -4,8 +4,16 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#0a0a0d" media="(prefers-color-scheme: dark)" />
-    <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0a0d15" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f6f4ee" media="(prefers-color-scheme: light)" />
+    <!-- PWA: установка «на экран Домой» + офлайн-оболочка. Имя в манифесте —
+         бренд установки (подставляется 40-brand-title.sh вместе с title). -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="__CABINET_BRAND__" />
     <!-- __CABINET_BRAND__ подставляется при старте контейнера (docker-entrypoint.d/
          40-brand-title.sh): бренд из API бота / env CABINET_BRAND / нейтральный дефолт.
          Нужно для превью ссылки в мессенджерах (они не исполняют JS). -->

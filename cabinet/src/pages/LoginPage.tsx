@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { useT } from "@/i18n/I18nContext";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { TelegramLoginButton } from "@/components/TelegramLoginButton";
 import { ApiError, type TelegramAuthRequest } from "@/types/api";
 import { getTelegramWebApp, whenTelegramReady } from "@/hooks/useTelegramWebApp";
@@ -20,6 +22,7 @@ function getTelegramInitData(): string | null {
 
 export default function LoginPage() {
   const { login, loginWithTelegram, loginWithTelegramWebApp, user } = useAuth();
+  const t = useT();
   const { telegramOidcEnabled } = useBranding();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -32,7 +35,7 @@ export default function LoginPage() {
   // ?error=telegram прилетает с OIDC-callback при сбое обмена/проверки токена.
   const [error, setError] = useState<string | null>(
     searchParams.get("error") === "telegram"
-      ? "Не удалось войти через Telegram. Попробуйте ещё раз."
+      ? t("login.errTelegram")
       : null,
   );
   const [isLoading, setIsLoading] = useState(false);
@@ -67,7 +70,7 @@ export default function LoginPage() {
           setError(
             err instanceof ApiError
               ? err.detail
-              : "Не удалось войти через Telegram.",
+              : t("login.errTelegramShort"),
           );
         })
         .finally(() => setIsLoading(false));
@@ -93,7 +96,7 @@ export default function LoginPage() {
       navigate(next);
     } catch (err) {
       setError(
-        err instanceof ApiError ? err.detail : "Не удалось войти. Попробуйте снова.",
+        err instanceof ApiError ? err.detail : t("login.errLogin"),
       );
     } finally {
       setIsLoading(false);
@@ -107,7 +110,7 @@ export default function LoginPage() {
       navigate(next);
     } catch (err) {
       setError(
-        err instanceof ApiError ? err.detail : "Не удалось войти через Telegram.",
+        err instanceof ApiError ? err.detail : t("login.errTelegramShort"),
       );
     }
   };
@@ -124,7 +127,7 @@ export default function LoginPage() {
           {error ? (
             <p className="text-sm text-danger">{error}</p>
           ) : (
-            <p className="text-sm text-fg-subtle">Выполняется вход...</p>
+            <p className="text-sm text-fg-subtle">{t("login.signingIn")}</p>
           )}
         </div>
       </div>
@@ -136,7 +139,8 @@ export default function LoginPage() {
       {/* Ambient background glow — single subtle accent */}
       <div aria-hidden className="ambient-glow -top-32 left-1/2 h-96 w-96 -translate-x-1/2" />
 
-      <div className="absolute right-4 top-4 z-10">
+      <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
+        <LanguageSwitcher />
         <ThemeSwitcher />
       </div>
 
@@ -148,7 +152,7 @@ export default function LoginPage() {
             <BrandWordmark className="text-2xl" />
           </div>
           <p className="mt-2 text-sm text-fg-muted">
-            Управляйте подпиской и устройствами
+            {t("login.subtitle")}
           </p>
         </div>
 
@@ -172,7 +176,7 @@ export default function LoginPage() {
                     <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current" aria-hidden>
                       <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z" />
                     </svg>
-                    Войти через Telegram
+                    {t("login.viaTelegram")}
                   </button>
                 )}
                 {!telegramOidcEnabled && TELEGRAM_BOT_USERNAME && (
@@ -186,7 +190,7 @@ export default function LoginPage() {
               </div>
               <div className="my-5 flex items-center gap-3">
                 <div className="h-px flex-1 bg-[var(--border)]" />
-                <span className="text-xs text-fg-subtle">или</span>
+                <span className="text-xs text-fg-subtle">{t("common.or")}</span>
                 <div className="h-px flex-1 bg-[var(--border)]" />
               </div>
             </>
@@ -194,7 +198,7 @@ export default function LoginPage() {
 
           {searchParams.get("reset") === "ok" && (
             <p className="mb-4 rounded-lg bg-success/10 px-3 py-2 text-sm text-success">
-              Пароль изменён. Войдите с новым паролем.
+              {t("login.resetOk")}
             </p>
           )}
 
@@ -209,7 +213,7 @@ export default function LoginPage() {
               onChange={(e) => setEmail(e.target.value)}
             />
             <Input
-              label="Пароль"
+              label={t("login.password")}
               type="password"
               name="password"
               autoComplete="current-password"
@@ -223,24 +227,33 @@ export default function LoginPage() {
                 to="/reset-password"
                 className="text-xs text-fg-subtle transition-colors hover:text-accent"
               >
-                Забыли пароль?
+                {t("login.forgot")}
               </Link>
             </div>
 
             {error && <p className="text-xs text-danger">{error}</p>}
 
             <Button type="submit" isLoading={isLoading} className="mt-1 h-9 w-full text-sm">
-              Войти
+              {t("login.submit")}
             </Button>
           </form>
         </div>
 
         <p className="mt-4 text-center text-sm text-fg-subtle">
-          Нет аккаунта?{" "}
+          {t("login.noAccount")}{" "}
           <Link to="/register" className="font-medium text-fg hover:text-accent transition-colors">
-            Зарегистрироваться
+            {t("login.register")}
           </Link>
         </p>
+        <div className="mt-5 flex justify-center">
+          <Link
+            to="/status"
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-border-subtle bg-bg-subtle px-5 py-2.5 text-sm font-medium text-fg-muted transition-colors hover:border-accent hover:text-accent"
+          >
+            <span className="h-2 w-2 rounded-full bg-success" />
+            {t("status.title")}
+          </Link>
+        </div>
       </div>
     </div>
   );

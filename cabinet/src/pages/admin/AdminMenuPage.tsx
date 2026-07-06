@@ -54,14 +54,67 @@ const COLOR_META: Record<string, { label: string; dot: string }> = {
 };
 
 // Палитра быстрой вставки эмодзи в текст кнопки (можно печатать/вставлять любые).
-const EMOJI_PALETTE = [
-  "🚀", "⚡", "🔥", "💳", "💰", "🎁", "⭐", "✅", "🔒", "🛡️",
-  "🌐", "📱", "⚙️", "👤", "📊", "💬", "❓", "🎯", "🏆", "❤️",
-  "🐘", "🦊", "🌟", "✨", "🔗", "📥", "🆕", "🎉",
+// Эмодзи по категориям (вкладка = первый эмодзи). Плюс поле «вставить любой».
+const EMOJI_CATS: { icon: string; list: string[] }[] = [
+  { icon: "😀", list: ["😀","😃","😄","😁","😆","😅","😂","🙂","😉","😊","😍","😘","😎","🤩","🥳","🤔","😐","😴","😇","🥺","😢","😭","😡","🤯","😱","🤗","🥰","😏","🙄","😬"] },
+  { icon: "👍", list: ["👍","👎","👌","✌️","🤝","🙏","👏","💪","👊","✊","☝️","👇","👉","👈","🖐️","🤟","🫶","👋","🤙","🫵","✍️","🤲"] },
+  { icon: "⚡", list: ["🚀","⚡","🔥","💥","✨","🌟","⭐","💫","🎯","🏆","🥇","🎁","🎉","🎊","💎","👑","🧨","🎈","🌈","☀️","🌙","🎀"] },
+  { icon: "💳", list: ["💳","💰","💵","💸","🪙","🏦","📈","📉","📊","🧾","🛒","🛍️","🏷️","💱","💲","🤑","🎫","🧧"] },
+  { icon: "🔒", list: ["🔒","🔓","🛡️","🔑","🗝️","🔐","🚨","⚠️","✅","❌","❗","❓","♻️","🆕","🆓","🔔","🔕","⛔","🚫","💠"] },
+  { icon: "📱", list: ["📱","💻","🖥️","⌨️","🌐","📡","🛰️","🔌","🔋","💾","📶","🖱️","🎧","📲","🖨️","💿","🕹️","📷"] },
+  { icon: "🐘", list: ["🐘","🦊","🐼","🦁","🐯","🐶","🐱","🦈","🐬","🦅","🦄","🐺","🐻","🐨","🐮","🦖","🐧","🦉","🐢","🐝"] },
+  { icon: "❤️", list: ["❤️","🧡","💛","💚","💙","💜","🖤","🤍","💗","💖","💘","💝","♥️","💯","🔗","📥","📤","💬","📣","📌"] },
 ];
 
+function EmojiPicker({ onPick, disabled }: { onPick: (em: string) => void; disabled?: boolean }) {
+  const [cat, setCat] = useState(0);
+  const [custom, setCustom] = useState("");
+  const insertCustom = () => {
+    const v = custom.trim();
+    if (v) { onPick(v); setCustom(""); }
+  };
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-0.5">
+        {EMOJI_CATS.map((c, i) => (
+          <button key={i} type="button" onClick={() => setCat(i)}
+            className={clsx("rounded-md px-1.5 py-1 text-base leading-none transition-colors", cat === i ? "bg-accent/15" : "hover:bg-bg-overlay")}>
+            {c.icon}
+          </button>
+        ))}
+      </div>
+      <div className="flex max-h-28 flex-wrap gap-0.5 overflow-y-auto">
+        {EMOJI_CATS[cat]!.list.map((em) => (
+          <button key={em} type="button" onClick={() => onPick(em)} disabled={disabled}
+            className="rounded-md px-1.5 py-1 text-base leading-none hover:bg-bg-overlay disabled:opacity-30">
+            {em}
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center gap-1.5 border-t border-[var(--border)] pt-2">
+        <input value={custom} onChange={(e) => setCustom(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); insertCustom(); } }}
+          placeholder="вставить любой эмодзи"
+          className="h-7 flex-1 rounded-md border border-[var(--border)] bg-bg px-2 text-sm text-fg outline-none focus:border-accent" />
+        <button type="button" onClick={insertCustom} disabled={disabled || !custom.trim()}
+          className="h-7 rounded-md border border-accent bg-accent/10 px-2.5 text-xs font-medium text-accent disabled:opacity-40">
+          Вставить
+        </button>
+      </div>
+      <p className="text-[10px] leading-snug text-fg-subtle">Любой эмодзи: вставьте из системного пикера — Win + . (Windows) или Ctrl+Cmd+Space (Mac).</p>
+    </div>
+  );
+}
+
 // Кол-во символов «по-телеграмному» (эмодзи = 1).
-const btnLen = (s: string) => Array.from(s).length;
+// Премиум-эмодзи в тексте кнопки: <tg-emoji emoji-id="123">⭐</tg-emoji>.
+// Бот парсит тег и ставит анимированный эмодзи премиум-юзерам, остальным — fallback.
+const TG_EMOJI_RE = /<tg-emoji emoji-id="\d+">([^<]*)<\/tg-emoji>/g;
+const cleanBtnText = (s: string) => s.replace(TG_EMOJI_RE, "$1");
+const hasPremiumEmoji = (s: string) => s.includes("<tg-emoji");
+// Длину считаем по ЧИСТОМУ тексту (Telegram лимит 64 — на отображаемый текст,
+// тег заменяется своим fallback при отправке).
+const btnLen = (s: string) => Array.from(cleanBtnText(s)).length;
 
 // Короткая метка «что уже настроено» рядом со свёрнутой строкой — чтобы не
 // раскрывать редактор ради проверки, задан ли уже свой текст/цвет.
@@ -79,6 +132,8 @@ export default function AdminMenuPage() {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [emojiFor, setEmojiFor] = useState<string | null>(null);
+  const [premiumId, setPremiumId] = useState("");
+  const [premiumFb, setPremiumFb] = useState("");
   // Аккордеон: раскрыт редактор текста/цвета не больше чем у одной кнопки сразу
   // (общий и для кнопок доступа, и для навигации).
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -114,8 +169,26 @@ export default function AdminMenuPage() {
   };
 
   // Кастомный текст/эмодзи/цвет для кнопок меню (веб-кабинет + навигация).
-  const setText = (key: string, val: string) =>
-    cfg && setCfg({ ...cfg, texts: { ...(cfg.texts ?? {}), [key]: Array.from(val).slice(0, 64).join("") } });
+  const setText = (key: string, val: string) => {
+    // Не режем сырой текст (в нём может быть <tg-emoji> тег) — ограничиваем по
+    // ЧИСТОЙ длине (btnLen игнорирует теги).
+    if (!cfg || btnLen(val) > 64) return;
+    setCfg({ ...cfg, texts: { ...(cfg.texts ?? {}), [key]: val } });
+  };
+  const addPremiumEmoji = (key: string, emojiId: string, fallback: string) => {
+    if (!cfg || !/^\d+$/.test(emojiId.trim())) return;
+    const fb = (fallback.trim() || "⭐").slice(0, 2);
+    const cur = cfg.texts?.[key] ?? cfg.defaults?.[key] ?? "";
+    const tag = `<tg-emoji emoji-id="${emojiId.trim()}">${fb}</tg-emoji>`;
+    const next = cur ? `${tag} ${cur}` : tag;
+    if (btnLen(next) > 64) return;
+    setCfg({ ...cfg, texts: { ...(cfg.texts ?? {}), [key]: next } });
+  };
+  const clearPremiumEmoji = (key: string) => {
+    if (!cfg) return;
+    const cur = cfg.texts?.[key] ?? "";
+    setCfg({ ...cfg, texts: { ...(cfg.texts ?? {}), [key]: cur.replace(TG_EMOJI_RE, "").replace(/\s{2,}/g, " ").trim() } });
+  };
   const addEmoji = (key: string, em: string) => {
     if (!cfg) return;
     // Если своей подписи ещё нет — начинаем от реального дефолтного текста,
@@ -164,14 +237,35 @@ export default function AdminMenuPage() {
         </div>
 
         {emojiFor === key && (
-          <div className="flex flex-wrap gap-1 rounded-lg border border-[var(--border)] bg-bg p-2">
-            {EMOJI_PALETTE.map((em) => (
-              <button key={em} type="button" onClick={() => addEmoji(key, em)}
-                disabled={btnLen(text) >= 64}
-                className="rounded-md px-1.5 py-1 text-base leading-none hover:bg-bg-overlay disabled:opacity-30">
-                {em}
-              </button>
-            ))}
+          <div className="space-y-2 rounded-lg border border-[var(--border)] bg-bg p-2">
+            <EmojiPicker onPick={(em) => addEmoji(key, em)} disabled={btnLen(text) >= 64} />
+            <div className="border-t border-[var(--border)] pt-2">
+              <p className="mb-1.5 text-[11px] font-semibold text-fg-muted">Премиум-эмодзи (Telegram Premium)</p>
+              {hasPremiumEmoji(text) ? (
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <span className="text-success">✓ добавлен · остальные видят fallback</span>
+                  <button type="button" onClick={() => clearPremiumEmoji(key)} className="font-medium text-danger hover:underline">Убрать</button>
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <input value={premiumId} onChange={(e) => setPremiumId(e.target.value.replace(/\D/g, ""))}
+                    placeholder="emoji-id" inputMode="numeric"
+                    className="h-7 w-32 rounded-md border border-[var(--border)] bg-bg px-2 text-xs text-fg outline-none focus:border-accent" />
+                  <input value={premiumFb} onChange={(e) => setPremiumFb(e.target.value)}
+                    placeholder="fallback ⭐" maxLength={2}
+                    className="h-7 w-20 rounded-md border border-[var(--border)] bg-bg px-2 text-xs text-fg outline-none focus:border-accent" />
+                  <button type="button"
+                    onClick={() => { addPremiumEmoji(key, premiumId, premiumFb); setPremiumId(""); setPremiumFb(""); }}
+                    disabled={!/^\d+$/.test(premiumId)}
+                    className="h-7 rounded-md border border-accent bg-accent/10 px-2.5 text-xs font-medium text-accent disabled:opacity-40">
+                    Вставить
+                  </button>
+                </div>
+              )}
+              <p className="mt-1 text-[10px] leading-snug text-fg-subtle">
+                emoji-id: перешлите премиум-эмодзи боту @userinfobot. В веб-кабинете и у не-Premium показывается fallback.
+              </p>
+            </div>
           </div>
         )}
 
@@ -367,6 +461,8 @@ function BotButtonColors() {
   const [texts, setTexts] = useState<Record<number, string>>({}); // index → текст кнопки
   const [expanded, setExpanded] = useState<number | null>(null); // какая строка раскрыта
   const [emojiOpen, setEmojiOpen] = useState(false); // палитра внутри раскрытой строки
+  const [premiumId, setPremiumId] = useState("");
+  const [premiumFb, setPremiumFb] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -392,6 +488,23 @@ function BotButtonColors() {
       if (btnLen(cur) >= 32) return p;
       return { ...p, [idx]: cur + emoji };
     });
+
+  const setBtnText = (idx: number, val: string) =>
+    setTexts((p) => (btnLen(val) > 32 ? p : { ...p, [idx]: val }));
+  const addPremium = (idx: number) => {
+    if (!/^\d+$/.test(premiumId.trim())) return;
+    const fb = (premiumFb.trim() || "⭐").slice(0, 2);
+    setTexts((p) => {
+      const cur = p[idx] ?? "";
+      const tag = `<tg-emoji emoji-id="${premiumId.trim()}">${fb}</tg-emoji>`;
+      const next = cur ? `${tag} ${cur}` : tag;
+      if (btnLen(next) > 32) return p;
+      return { ...p, [idx]: next };
+    });
+    setPremiumId(""); setPremiumFb("");
+  };
+  const clearPremium = (idx: number) =>
+    setTexts((p) => ({ ...p, [idx]: (p[idx] ?? "").replace(TG_EMOJI_RE, "").replace(/\s{2,}/g, " ").trim() }));
 
   const save = async () => {
     setSaving(true); setErr(null);
@@ -459,12 +572,7 @@ function BotButtonColors() {
                     <div className="relative flex min-w-0 flex-1 items-center">
                       <input
                         value={text}
-                        onChange={(e) =>
-                          setTexts((p) => ({
-                            ...p,
-                            [b.index]: Array.from(e.target.value).slice(0, 32).join(""),
-                          }))
-                        }
+                        onChange={(e) => setBtnText(b.index, e.target.value)}
                         placeholder={`Кнопка ${b.index}`}
                         className="w-full rounded-lg border border-[var(--border)] bg-bg-subtle px-2.5 py-1.5 text-sm text-fg outline-none focus:border-accent"
                       />
@@ -486,16 +594,35 @@ function BotButtonColors() {
                     </button>
                   </div>
 
-                  {/* Палитра эмодзи (раскрывается под кнопкой) */}
+                  {/* Палитра эмодзи + премиум-эмодзи (раскрывается под кнопкой) */}
                   {emojiOpen && (
-                    <div className="mt-2 flex flex-wrap gap-1 rounded-lg border border-[var(--border)] bg-bg-subtle p-2">
-                      {EMOJI_PALETTE.map((em) => (
-                        <button key={em} type="button" onClick={() => addEmoji(b.index, em)}
-                          className="rounded-md px-1.5 py-1 text-base leading-none hover:bg-bg-overlay disabled:opacity-30"
-                          disabled={len >= 32}>
-                          {em}
-                        </button>
-                      ))}
+                    <div className="mt-2 space-y-2 rounded-lg border border-[var(--border)] bg-bg-subtle p-2">
+                      <EmojiPicker onPick={(em) => addEmoji(b.index, em)} disabled={len >= 32} />
+                      <div className="border-t border-[var(--border)] pt-2">
+                        <p className="mb-1.5 text-[11px] font-semibold text-fg-muted">Премиум-эмодзи (Telegram Premium)</p>
+                        {hasPremiumEmoji(text) ? (
+                          <div className="flex items-center justify-between gap-2 text-xs">
+                            <span className="text-success">✓ добавлен · остальные видят fallback</span>
+                            <button type="button" onClick={() => clearPremium(b.index)} className="font-medium text-danger hover:underline">Убрать</button>
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <input value={premiumId} onChange={(e) => setPremiumId(e.target.value.replace(/\D/g, ""))}
+                              placeholder="emoji-id" inputMode="numeric"
+                              className="h-7 w-32 rounded-md border border-[var(--border)] bg-bg px-2 text-xs text-fg outline-none focus:border-accent" />
+                            <input value={premiumFb} onChange={(e) => setPremiumFb(e.target.value)}
+                              placeholder="fallback ⭐" maxLength={2}
+                              className="h-7 w-20 rounded-md border border-[var(--border)] bg-bg px-2 text-xs text-fg outline-none focus:border-accent" />
+                            <button type="button" onClick={() => addPremium(b.index)} disabled={!/^\d+$/.test(premiumId)}
+                              className="h-7 rounded-md border border-accent bg-accent/10 px-2.5 text-xs font-medium text-accent disabled:opacity-40">
+                              Вставить
+                            </button>
+                          </div>
+                        )}
+                        <p className="mt-1 text-[10px] leading-snug text-fg-subtle">
+                          emoji-id: перешлите премиум-эмодзи боту @userinfobot. В веб-кабинете и у не-Premium — fallback.
+                        </p>
+                      </div>
                     </div>
                   )}
 

@@ -82,8 +82,12 @@ class ButtonsUpdate(BaseModel):
     texts: Optional[dict[int, str]] = None
 
 
+import re
+
 # Лимит длины текста кнопки — как в авторском UpdateMenuButtonText.
 _BTN_TEXT_MAX = 32
+# Премиум-эмодзи <tg-emoji emoji-id="123">⭐</tg-emoji> — в лимит не считаем (см. ниже).
+_TG_EMOJI_RE = re.compile(r'<tg-emoji emoji-id="\d+">([^<]*)</tg-emoji>')
 
 
 @router.put("/buttons")
@@ -117,7 +121,10 @@ async def set_menu_buttons(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Текст кнопки {b.index} не может быть пустым",
                 )
-            if len(text) > _BTN_TEXT_MAX:
+            # Лимит 64 — по ЧИСТОМУ тексту (премиум-эмодзи <tg-emoji…> заменяется
+            # своим fallback при отправке, поэтому тег в длину не считаем).
+            clean = _TG_EMOJI_RE.sub(r"\1", text)
+            if len(clean) > _BTN_TEXT_MAX:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Текст кнопки {b.index} длиннее {_BTN_TEXT_MAX} символов",
@@ -125,7 +132,7 @@ async def set_menu_buttons(
             b.text = text
     updated = await settings_dao.update(s)
     if not updated:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Update failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Не удалось обновить")
     await session.commit()
     return {
         "buttons": [_bot_button_public(b) for b in updated.menu.buttons],

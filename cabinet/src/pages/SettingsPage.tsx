@@ -9,12 +9,15 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
 import { TelegramLoginButton } from "@/components/TelegramLoginButton";
+import { PushToggle } from "@/components/PushToggle";
 import { ApiError } from "@/types/api";
 import type { TelegramAuthRequest } from "@/types/api";
+import { useT } from "@/i18n/I18nContext";
 
 const TELEGRAM_BOT_USERNAME = import.meta.env.VITE_TELEGRAM_BOT_USERNAME || "";
 
 function EmailVerificationBlock() {
+  const t = useT();
   const { user, refreshMe } = useAuth();
   const [code, setCode] = useState("");
   const [isSending, setIsSending] = useState(false);
@@ -33,11 +36,11 @@ function EmailVerificationBlock() {
     try {
       await authApi.requestEmailVerification();
       setCodeSent(true);
-      setMessage({ type: "success", text: "Код отправлен на почту" });
+      setMessage({ type: "success", text: t("set.codeSentEmail") });
     } catch (e) {
       setMessage({
         type: "error",
-        text: e instanceof ApiError ? e.detail : "Не удалось отправить код",
+        text: e instanceof ApiError ? e.detail : t("set.errSendCode"),
       });
     } finally {
       setIsSending(false);
@@ -51,11 +54,11 @@ function EmailVerificationBlock() {
     try {
       await authApi.confirmEmailVerification({ code });
       await refreshMe();
-      setMessage({ type: "success", text: "Email подтверждён!" });
+      setMessage({ type: "success", text: t("set.emailConfirmedBang") });
     } catch (e) {
       setMessage({
         type: "error",
-        text: e instanceof ApiError ? e.detail : "Неверный код",
+        text: e instanceof ApiError ? e.detail : t("set.wrongCode"),
       });
     } finally {
       setIsConfirming(false);
@@ -65,12 +68,12 @@ function EmailVerificationBlock() {
   return (
     <Card variant="bordered">
       <CardHeader
-        title="Email не подтверждён"
-        subtitle="Подтвердите почту, чтобы покупать и продлевать подписку"
+        title={t("set.emailNotConfirmed")}
+        subtitle={t("set.emailNotConfirmedSub")}
       />
       {!codeSent ? (
         <Button size="sm" variant="secondary" onClick={handleSendCode} isLoading={isSending}>
-          Отправить код подтверждения
+          {t("set.sendConfirmCode")}
         </Button>
       ) : (
         <form onSubmit={handleConfirm} className="flex gap-2">
@@ -83,7 +86,7 @@ function EmailVerificationBlock() {
             className="flex-1"
           />
           <Button type="submit" size="sm" isLoading={isConfirming}>
-            Подтвердить
+            {t("set.confirm")}
           </Button>
         </form>
       )}
@@ -101,6 +104,7 @@ function EmailVerificationBlock() {
 }
 
 function BackupAccessBlock() {
+  const t = useT();
   const { user, hasPassword, refreshMe } = useAuth();
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -124,9 +128,9 @@ function BackupAccessBlock() {
     try {
       await authApi.requestEmailVerification(email);
       setCodeSent(true);
-      setMessage({ type: "success", text: "Код отправлен на указанную почту" });
+      setMessage({ type: "success", text: t("set.codeSentToEmail") });
     } catch (e) {
-      notify(e, "Не удалось отправить код");
+      notify(e, t("set.errSendCode"));
     } finally {
       setBusy(false);
     }
@@ -141,9 +145,9 @@ function BackupAccessBlock() {
       await refreshMe();
       setCode("");
       setCodeSent(false);
-      setMessage({ type: "success", text: "Email подтверждён" });
+      setMessage({ type: "success", text: t("set.emailConfirmed") });
     } catch (e) {
-      notify(e, "Неверный код");
+      notify(e, t("set.wrongCode"));
     } finally {
       setBusy(false);
     }
@@ -157,9 +161,9 @@ function BackupAccessBlock() {
       await authApi.setPassword(password);
       await refreshMe();
       setPassword("");
-      setMessage({ type: "success", text: "Пароль установлен" });
+      setMessage({ type: "success", text: t("set.passwordSet") });
     } catch (e) {
-      notify(e, "Не удалось установить пароль");
+      notify(e, t("set.errSetPassword"));
     } finally {
       setBusy(false);
     }
@@ -168,17 +172,17 @@ function BackupAccessBlock() {
   return (
     <Card variant="bordered">
       <CardHeader
-        title="Резервный доступ по email"
-        subtitle="Чтобы не потерять аккаунт, если Telegram заблокируют — добавьте почту и пароль для входа"
+        title={t("set.backupTitle")}
+        subtitle={t("set.backupSub")}
       />
 
       {fullyConfigured ? (
         <div className="flex items-start gap-2 rounded-xl border border-success/30 bg-success/8 px-4 py-3">
           <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-success" />
           <div className="text-sm">
-            <p className="font-medium text-fg">Резервный доступ настроен</p>
+            <p className="font-medium text-fg">{t("set.backupDone")}</p>
             <p className="text-fg-muted">
-              Вход по email <span className="text-fg">{user.email}</span> и паролю доступен.
+              {t("set.backupLoginFull", { email: user.email ?? "" })}
             </p>
           </div>
         </div>
@@ -194,7 +198,7 @@ function BackupAccessBlock() {
               >
                 {emailVerified ? "✓" : "1"}
               </span>
-              <span className="text-sm font-medium text-fg">Подтвердите email</span>
+              <span className="text-sm font-medium text-fg">{t("set.confirmEmailLabel")}</span>
             </div>
             {emailVerified ? (
               <p className="pl-7 text-sm text-fg-muted">{user.email}</p>
@@ -208,7 +212,7 @@ function BackupAccessBlock() {
                   className="flex-1"
                 />
                 <Button size="sm" variant="secondary" onClick={handleSendCode} isLoading={busy} disabled={!email}>
-                  Отправить код
+                  {t("set.sendCode")}
                 </Button>
               </div>
             ) : (
@@ -221,7 +225,7 @@ function BackupAccessBlock() {
                   className="flex-1"
                 />
                 <Button type="submit" size="sm" isLoading={busy}>
-                  Подтвердить
+                  {t("set.confirm")}
                 </Button>
               </form>
             )}
@@ -238,16 +242,16 @@ function BackupAccessBlock() {
                 {hasPassword ? "✓" : "2"}
               </span>
               <span className={`text-sm font-medium ${emailVerified ? "text-fg" : "text-fg-subtle"}`}>
-                Задайте пароль
+                {t("set.setPasswordLabel")}
               </span>
             </div>
             {hasPassword ? (
-              <p className="pl-7 text-sm text-fg-muted">Пароль установлен</p>
+              <p className="pl-7 text-sm text-fg-muted">{t("set.passwordSet")}</p>
             ) : emailVerified ? (
               <form onSubmit={handleSetPassword} className="flex gap-2 pl-7">
                 <Input
                   type="password"
-                  placeholder="Минимум 8 символов"
+                  placeholder={t("set.min8")}
                   autoComplete="new-password"
                   minLength={8}
                   value={password}
@@ -255,11 +259,11 @@ function BackupAccessBlock() {
                   className="flex-1"
                 />
                 <Button type="submit" size="sm" isLoading={busy} disabled={password.length < 8}>
-                  Сохранить
+                  {t("common.save")}
                 </Button>
               </form>
             ) : (
-              <p className="pl-7 text-sm text-fg-subtle">Сначала подтвердите email</p>
+              <p className="pl-7 text-sm text-fg-subtle">{t("set.confirmEmailFirst")}</p>
             )}
           </div>
         </div>
@@ -276,6 +280,7 @@ function BackupAccessBlock() {
 
 // Управление уже привязанной и подтверждённой почтой: сменить или удалить.
 function ManageEmailBlock() {
+  const t = useT();
   const { user, refreshMe } = useAuth();
   const [mode, setMode] = useState<"idle" | "change">("idle");
   const [newEmail, setNewEmail] = useState("");
@@ -308,9 +313,9 @@ function ManageEmailBlock() {
       await authApi.changeEmail({ email: newEmail });
       await authApi.requestEmailVerification(newEmail);
       setCodeSent(true);
-      setMessage({ type: "success", text: "Код отправлен на новый адрес" });
+      setMessage({ type: "success", text: t("set.codeSentNew") });
     } catch (e) {
-      notify(e, "Не удалось отправить код");
+      notify(e, t("set.errSendCode"));
     } finally {
       setBusy(false);
     }
@@ -324,25 +329,25 @@ function ManageEmailBlock() {
       await authApi.confirmEmailVerification({ code });
       await refreshMe();
       reset();
-      setMessage({ type: "success", text: "Email изменён" });
+      setMessage({ type: "success", text: t("set.emailChanged") });
     } catch (e) {
-      notify(e, "Неверный код");
+      notify(e, t("set.wrongCode"));
     } finally {
       setBusy(false);
     }
   };
 
   const handleDelete = async () => {
-    if (!window.confirm(`Удалить почту ${user.email}? Вход останется через Telegram.`)) return;
+    if (!window.confirm(t("set.confirmDeleteEmail", { email: user.email ?? "" }))) return;
     setBusy(true);
     setMessage(null);
     try {
       await authApi.deleteEmail();
       await refreshMe();
       reset();
-      setMessage({ type: "success", text: "Email удалён" });
+      setMessage({ type: "success", text: t("set.emailDeleted") });
     } catch (e) {
-      notify(e, "Не удалось удалить почту");
+      notify(e, t("set.errDeleteEmail"));
     } finally {
       setBusy(false);
     }
@@ -350,16 +355,16 @@ function ManageEmailBlock() {
 
   return (
     <Card variant="bordered">
-      <CardHeader title="Почта" subtitle={`Текущая: ${user.email}`} />
+      <CardHeader title={t("set.emailTitle")} subtitle={t("set.currentEmail", { email: user.email })} />
 
       {mode === "idle" ? (
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="secondary" onClick={() => setMode("change")}>
-            Изменить email
+            {t("set.changeEmail")}
           </Button>
           {canDelete && (
             <Button size="sm" variant="danger" onClick={handleDelete} isLoading={busy}>
-              Удалить email
+              {t("set.deleteEmail")}
             </Button>
           )}
         </div>
@@ -373,10 +378,10 @@ function ManageEmailBlock() {
             className="flex-1"
           />
           <Button size="sm" variant="secondary" onClick={handleSendCode} isLoading={busy} disabled={!newEmail}>
-            Отправить код
+            {t("set.sendCode")}
           </Button>
           <Button size="sm" variant="ghost" onClick={reset}>
-            Отмена
+            {t("common.cancel")}
           </Button>
         </div>
       ) : (
@@ -389,17 +394,17 @@ function ManageEmailBlock() {
             className="flex-1"
           />
           <Button type="submit" size="sm" isLoading={busy}>
-            Подтвердить
+            {t("set.confirm")}
           </Button>
           <Button size="sm" variant="ghost" onClick={reset}>
-            Отмена
+            {t("common.cancel")}
           </Button>
         </form>
       )}
 
       {!canDelete && mode === "idle" && (
         <p className="mt-2 text-xs text-fg-subtle">
-          Удаление недоступно: email — единственный способ входа. Привяжите Telegram, чтобы удалить почту.
+          {t("set.deleteUnavailable")}
         </p>
       )}
       {message && (
@@ -412,6 +417,7 @@ function ManageEmailBlock() {
 }
 
 function ChangePasswordBlock() {
+  const t = useT();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -423,7 +429,7 @@ function ChangePasswordBlock() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newPassword !== confirmPassword) {
-      setMessage({ type: "error", text: "Новый пароль и его повтор не совпадают" });
+      setMessage({ type: "error", text: t("set.passMismatch") });
       return;
     }
     setIsLoading(true);
@@ -433,14 +439,14 @@ function ChangePasswordBlock() {
         current_password: currentPassword,
         new_password: newPassword,
       });
-      setMessage({ type: "success", text: "Пароль изменён" });
+      setMessage({ type: "success", text: t("set.passwordChanged") });
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
     } catch (e) {
       setMessage({
         type: "error",
-        text: e instanceof ApiError ? e.detail : "Не удалось изменить пароль",
+        text: e instanceof ApiError ? e.detail : t("set.errChangePassword"),
       });
     } finally {
       setIsLoading(false);
@@ -449,11 +455,11 @@ function ChangePasswordBlock() {
 
   return (
     <Card variant="bordered">
-      <CardHeader title="Смена пароля" />
+      <CardHeader title={t("set.changePassTitle")} />
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
         <Input
           type="password"
-          label="Текущий пароль"
+          label={t("set.currentPass")}
           autoComplete="current-password"
           required
           value={currentPassword}
@@ -461,7 +467,7 @@ function ChangePasswordBlock() {
         />
         <Input
           type="password"
-          label="Новый пароль"
+          label={t("set.newPass")}
           autoComplete="new-password"
           minLength={8}
           required
@@ -470,7 +476,7 @@ function ChangePasswordBlock() {
         />
         <Input
           type="password"
-          label="Повторите новый пароль"
+          label={t("set.repeatNewPass")}
           autoComplete="new-password"
           minLength={8}
           required
@@ -487,7 +493,7 @@ function ChangePasswordBlock() {
           </p>
         )}
         <Button type="submit" isLoading={isLoading} className="self-start">
-          Сохранить
+          {t("common.save")}
         </Button>
       </form>
     </Card>
@@ -496,16 +502,17 @@ function ChangePasswordBlock() {
 
 // Сообщения по результату OIDC-привязки (?tg=... в URL после возврата с oauth.telegram.org).
 const TG_LINK_RESULTS: Record<string, { type: "success" | "error"; text: string }> = {
-  linked: { type: "success", text: "Telegram привязан" },
-  already: { type: "error", text: "К аккаунту уже привязан другой Telegram" },
+  linked: { type: "success", text: "set.tgLinked" },
+  already: { type: "error", text: "set.tgAlready" },
   conflict: {
     type: "error",
-    text: "Этот Telegram уже привязан к другому аккаунту с активной подпиской. Войдите в него напрямую или напишите в поддержку.",
+    text: "set.tgConflict",
   },
-  error: { type: "error", text: "Не удалось привязать Telegram" },
+  error: { type: "error", text: "set.tgErrLink" },
 };
 
 function TelegramLinkBlock() {
+  const t = useT();
   const { user, refreshMe } = useAuth();
   const { telegramOidcEnabled } = useBranding();
   const [error, setError] = useState<string | null>(null);
@@ -534,12 +541,12 @@ function TelegramLinkBlock() {
         <CardHeader title="Telegram" />
         <p className="text-sm text-fg-muted">
           {user?.telegram_id
-            ? `Аккаунт привязан (ID: ${user.telegram_id})`
-            : "Загрузка..."}
+            ? t("set.tgLinkedId", { id: user.telegram_id })
+            : t("common.loading")}
         </p>
         {result && (
           <p className={`mt-2 text-sm ${result.type === "success" ? "text-success" : "text-danger"}`}>
-            {result.text}
+            {t(result.text)}
           </p>
         )}
       </Card>
@@ -552,13 +559,13 @@ function TelegramLinkBlock() {
       await authApi.linkTelegram(data);
       await refreshMe();
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Не удалось привязать Telegram");
+      setError(e instanceof ApiError ? e.detail : t("set.tgErrLink"));
     }
   };
 
   return (
     <Card variant="bordered">
-      <CardHeader title="Привязать Telegram" subtitle="Для быстрого входа и уведомлений" />
+      <CardHeader title={t("tgPrompt.link")} subtitle={t("set.tgLinkSub")} />
       {/* Если включён OIDC — только его кнопка. Классический виджет остаётся
           запасным лишь когда OIDC выключен (иначе «Bot domain invalid»). */}
       <div className="flex flex-col items-start gap-2.5">
@@ -574,7 +581,7 @@ function TelegramLinkBlock() {
             <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current" aria-hidden>
               <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z" />
             </svg>
-            Привязать через Telegram
+            {t("set.tgLinkVia")}
           </button>
         )}
         {!telegramOidcEnabled && TELEGRAM_BOT_USERNAME && (
@@ -587,7 +594,7 @@ function TelegramLinkBlock() {
             result?.type === "success" ? "text-success" : "text-danger"
           }`}
         >
-          {error ?? result?.text}
+          {error ?? (result ? t(result.text) : null)}
         </p>
       )}
     </Card>
@@ -595,6 +602,7 @@ function TelegramLinkBlock() {
 }
 
 export default function SettingsPage() {
+  const t = useT();
   const { user, hasPassword, logout } = useAuth();
   const navigate = useNavigate();
 
@@ -605,13 +613,13 @@ export default function SettingsPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <h1 className="text-xl font-semibold text-fg">Настройки</h1>
+      <h1 className="text-xl font-semibold text-fg">{t("nav.settings")}</h1>
 
       <Card>
-        <CardHeader title="Профиль" />
+        <CardHeader title={t("set.profile")} />
         <div className="flex flex-col gap-3 text-sm">
           <div className="flex justify-between">
-            <span className="text-fg-subtle">Имя</span>
+            <span className="text-fg-subtle">{t("set.name")}</span>
             <span className="text-fg">{user?.name}</span>
           </div>
           {user?.email && (
@@ -622,12 +630,12 @@ export default function SettingsPage() {
                 {user.is_email_verified ? (
                   <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success">
                     <CheckCircle2 className="h-3.5 w-3.5" />
-                    Подтверждён
+                    {t("set.verified")}
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning">
                     <AlertCircle className="h-3.5 w-3.5" />
-                    Не подтверждён
+                    {t("set.notVerified")}
                   </span>
                 )}
               </div>
@@ -647,8 +655,13 @@ export default function SettingsPage() {
       <ManageEmailBlock />
 
       <Card variant="bordered">
-        <CardHeader title="Тема оформления" subtitle="Выберите, как должен выглядеть кабинет" />
+        <CardHeader title={t("set.themeTitle")} subtitle={t("set.themeSub")} />
         <ThemeSwitcher />
+      </Card>
+
+      <Card variant="bordered">
+        <CardHeader title={t("push.cardTitle")} subtitle={t("push.cardSub")} />
+        <PushToggle />
       </Card>
 
       {/* Смена пароля — всем, у кого пароль уже есть (в т.ч. Telegram-юзерам с
@@ -658,14 +671,14 @@ export default function SettingsPage() {
 
       {/* Выход — для смены аккаунта (особенно на мобильном, где нет сайдбара) */}
       <Card variant="bordered">
-        <CardHeader title="Аккаунт" subtitle="Выйти, чтобы войти под другим аккаунтом" />
+        <CardHeader title={t("set.accountTitle")} subtitle={t("set.accountSub")} />
         <Button
           variant="danger"
           onClick={handleLogout}
           className="w-full sm:w-auto"
         >
           <LogOut className="h-4 w-4" />
-          Выйти из аккаунта
+          {t("set.logoutBtn")}
         </Button>
       </Card>
     </div>

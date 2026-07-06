@@ -85,12 +85,12 @@ async def toggle_gateway(
 ) -> dict[str, Any]:
     gateway = await gateway_dao.get_by_id(gateway_id)
     if not gateway:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gateway not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Шлюз не найден")
 
     if body.is_active and gateway.settings and not gateway.settings.is_configured:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Gateway is not configured. Set up credentials first.",
+            detail="Шлюз не настроен. Сначала введите ключи.",
         )
 
     await gateway_dao.set_active_status(gateway.type, body.is_active)
@@ -107,7 +107,7 @@ async def gateway_fields(
 ) -> dict[str, Any]:
     gateway = await gateway_dao.get_by_id(gateway_id)
     if not gateway:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gateway not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Шлюз не найден")
     return {"fields": _gateway_fields(gateway)}
 
 
@@ -133,7 +133,7 @@ async def test_gateway(
     """
     gateway = await gateway_dao.get_by_id(gateway_id)
     if not gateway:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gateway not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Шлюз не найден")
 
     if gateway.settings and not gateway.settings.is_configured:
         raise HTTPException(
@@ -187,11 +187,11 @@ async def set_gateway_field(
 ) -> dict[str, Any]:
     gateway = await gateway_dao.get_by_id(gateway_id)
     if not gateway or not gateway.settings:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gateway not configured")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Шлюз не настроен")
 
     hints = get_type_hints(type(gateway.settings))
     if field_name in _NON_CRED_FIELDS or field_name not in hints:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown field")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неизвестное поле")
 
     value = body.value.strip()
     if value == "":
@@ -201,7 +201,7 @@ async def set_gateway_field(
             # Грузим строку в тип поля так же, как штатный use-case бота.
             new_value = retort.load(value, hints[field_name])
         except Exception:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid value")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Недопустимое значение")
 
     setattr(gateway.settings, field_name, new_value)
     await gateway_dao.update(gateway)

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Send, X, ArrowRight } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useT } from "@/i18n/I18nContext";
 
 const DISMISS_KEY = "tg-link-prompt-dismissed";
 
@@ -12,6 +13,7 @@ const DISMISS_KEY = "tg-link-prompt-dismissed";
  * (TelegramLinkBlock на странице /settings).
  */
 export function TelegramLinkPrompt() {
+  const t = useT();
   const { user } = useAuth();
   const [dismissed, setDismissed] = useState(
     () => localStorage.getItem(DISMISS_KEY) === "1",
@@ -38,21 +40,21 @@ export function TelegramLinkPrompt() {
         <Send className="h-5 w-5" />
       </div>
       <div className="min-w-0 flex-1 pr-6">
-        <p className="text-sm font-semibold text-fg">Привяжите Telegram</p>
+        <p className="text-sm font-semibold text-fg">{t("tgPrompt.title")}</p>
         <p className="mt-0.5 text-sm text-fg-muted">
-          Необязательно, но удобно: быстрый вход в один клик и уведомления о подписке.
+          {t("tgPrompt.text")}
         </p>
         <Link
           to="/settings"
           className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-accent transition-opacity hover:opacity-80"
         >
-          Привязать Telegram
+          {t("tgPrompt.link")}
           <ArrowRight className="h-4 w-4" />
         </Link>
       </div>
       <button
         onClick={handleDismiss}
-        aria-label="Скрыть предложение"
+        aria-label={t("common.hide")}
         className="absolute right-3 top-3 flex h-7 w-7 items-center justify-center rounded-lg text-fg-subtle transition-colors hover:bg-bg-overlay hover:text-fg"
       >
         <X className="h-4 w-4" />

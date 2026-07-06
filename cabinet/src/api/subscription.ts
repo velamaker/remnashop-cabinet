@@ -3,7 +3,6 @@ import type {
   DevicesResponse,
   ExtendRequest,
   PaymentInitResponse,
-  PromocodeActivateResponse,
   PurchaseRequest,
   SubscriptionInfoResponse,
   SubscriptionOffersResponse,
@@ -42,9 +41,6 @@ export const subscriptionApi = {
 
   reissue: () => api.post<{ success: boolean }>("/subscription/reissue"),
 
-  activatePromocode: (code: string) =>
-    api.post<PromocodeActivateResponse>("/subscription/promocode", { code }),
-
   activateTrial: () =>
     api.post<{ success: boolean }>("/subscription/trial"),
 
@@ -60,4 +56,10 @@ export const subscriptionApi = {
 
   extend: (data: ExtendRequest) =>
     api.post<PaymentInitResponse>("/subscription/extend", data),
+
+  payWithBalance: (data: { plan_code: string; duration_days: number; gateway_type: string }) =>
+    api.post<{ success: boolean; purchase_type: string; spent: number; balance: number }>(
+      "/subscription/pay-with-balance",
+      data,
+    ),
 };

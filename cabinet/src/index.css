@@ -78,7 +78,11 @@ body {
   color: var(--fg);
   overflow: hidden;
   overscroll-behavior: none;
+  /* В PWA standalone (iOS) height:100% не включает нижнюю safe-area (зону
+     home-индикатора) → она оставалась вне body и красилась чёрным UA-дефолтом.
+     100dvh покрывает весь динамический вьюпорт вкл. safe-area (фон = --bg). */
   height: 100%;
+  height: 100dvh;
   max-width: 100%;
 }
 
@@ -195,8 +199,8 @@ body {
 
 /* Активный пункт навигации — мягкая подложка + акцентная полоса слева */
 .nav-active-glow {
-  background: var(--accent-subtle);
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: linear-gradient(90deg, var(--accent-subtle), transparent 88%);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 /* ---------- Premium surfaces ---------- */
@@ -263,6 +267,38 @@ body {
 .btn-gradient:hover {
   box-shadow: 0 12px 28px -6px var(--accent-glow);
   filter: brightness(1.06);
+  transform: translateY(-1px);
+}
+.btn-gradient:active {
+  transform: translateY(0);
+}
+
+/* Акцентная карточка — тонкий градиентный отсвет сверху + акцентная рамка.
+   Точечно для ключевых блоков (баланс, монетизация), без слома минимализма. */
+.card-accent {
+  background:
+    radial-gradient(120% 120% at 100% 0%, var(--accent-subtle) 0%, transparent 55%),
+    linear-gradient(180deg, var(--bg-raised), var(--bg-subtle));
+  border: 1px solid var(--border);
+  box-shadow: inset 0 0 0 1px var(--accent-subtle), 0 10px 30px -18px var(--accent-glow);
+  transition: box-shadow 0.25s ease, transform 0.2s ease;
+}
+.card-accent:hover {
+  box-shadow: inset 0 0 0 1px var(--accent-glow), 0 16px 40px -18px var(--accent-glow);
+}
+
+/* ---------- Reduced motion ---------- */
+/* Уважаем системную настройку «уменьшить движение» — гасим появление страниц,
+   шиммер, пульс статуса и hover-подъёмы для тех, кому анимации мешают. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Технический моноширинный + табличные цифры */

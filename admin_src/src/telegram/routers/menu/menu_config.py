@@ -73,16 +73,30 @@ VALID_COLORS: set[str] = {"primary", "success", "danger"}
 # Ограничение длины подписи кнопки (эмодзи считаются символами).
 BTN_TEXT_MAX = 64
 
+# OVERLAY (RемнаShop): премиум-эмодзи в тексте кнопки задаётся тегом
+# <tg-emoji emoji-id="123">⭐</tg-emoji> (бот парсит его в icon_custom_emoji_id).
+# Лимит 64 считаем по ЧИСТОМУ тексту (тег заменяется своим fallback при отправке),
+# иначе тег «съедал» бы бюджет и обрезался. Влезает чистый — сохраняем сырой
+# (с тегом) целиком; иначе — старое поведение (обрезка сырого).
+# ВНИМАНИЕ: файл перекрывает базовый — при обновлении базы сверять с оригиналом.
+import re as _re
+
+_TG_EMOJI_RE = _re.compile(r'<tg-emoji emoji-id="\d+">([^<]*)</tg-emoji>')
+
+
+def _clean_len(s: str) -> int:
+    return len(list(_TG_EMOJI_RE.sub(r"\1", s)))
+
 
 def _normalize_texts(texts: Any) -> dict[str, str]:
-    """Только известные ключи, непустые строки, обрезаем по BTN_TEXT_MAX символов."""
+    """Только известные ключи, непустые строки, лимит BTN_TEXT_MAX по чистому тексту."""
     out: dict[str, str] = {}
     if isinstance(texts, dict):
         for k, v in texts.items():
             if k in _CUSTOMIZABLE and isinstance(v, str):
                 s = v.strip()
                 if s:
-                    out[k] = "".join(list(s)[:BTN_TEXT_MAX])
+                    out[k] = s if _clean_len(s) <= BTN_TEXT_MAX else "".join(list(s)[:BTN_TEXT_MAX])
     return out
 
 

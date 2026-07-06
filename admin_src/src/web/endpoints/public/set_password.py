@@ -53,7 +53,7 @@ async def set_initial_password(
         if not updated:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found during password set",
+                detail="Пользователь не найден",
             )
         await uow.commit()
 

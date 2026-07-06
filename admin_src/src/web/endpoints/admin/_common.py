@@ -25,23 +25,23 @@ async def _get_admin_user(
 ) -> UserDto:
     token = request.cookies.get("access_token")
     if not token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Не авторизован")
     try:
         if config.jwt_secret is None:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="JWT secret not configured",
+                detail="JWT-секрет не настроен",
             )
         user_id = decode_access_token(token, config.jwt_secret.get_secret_value())
     except jwt.InvalidTokenError:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Недействительный или истёкший токен"
         )
     user = await user_dao.get_by_id(user_id)
     if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Пользователь не найден")
     if user.is_blocked:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is blocked")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Пользователь заблокирован")
 
     # Единая точка контроля. Права считаем из enum-роли + гранта (таблица
     # admin_grants). Приоритет: OWNER+ = полный доступ; иначе действующий грант

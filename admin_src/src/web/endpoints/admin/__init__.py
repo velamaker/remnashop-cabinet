@@ -2,18 +2,22 @@ from fastapi import APIRouter
 
 from src.core.constants import API_V1
 
+from .abuse import router as abuse_router
 from .ad_links import router as ad_links_router
 from .appearance import router as appearance_router
 from .apps import router as apps_router
 from .audit import router as audit_router
 from .auth_settings import router as auth_settings_router
 from .broadcasts import router as broadcasts_router
+from .cashback import router as cashback_router
 from .email_settings import router as email_settings_router
 from .email_template import router as email_template_router
 from .gateways import router as gateways_router
 from .grants import router as grants_router
+from .import_users import router as import_users_router
 from .info import router as info_router
 from .menu import router as menu_router
+from .morning_summary import router as morning_summary_router
 from .plans import router as plans_router
 from .promocodes import router as promocodes_router
 from .remnawave import router as remnawave_router
@@ -21,6 +25,7 @@ from .settings import router as settings_router
 from .statistics import router as statistics_router
 from .subscriptions import router as subscriptions_router
 from .support import router as support_router
+from .topup import router as topup_router
 from .transactions import router as transactions_router
 from .updates import router as updates_router
 from .users import router as users_router
@@ -34,6 +39,9 @@ router.include_router(promocodes_router)
 router.include_router(plans_router)
 router.include_router(broadcasts_router)
 router.include_router(settings_router)
+router.include_router(cashback_router)
+router.include_router(topup_router)
+router.include_router(morning_summary_router)
 router.include_router(gateways_router)
 router.include_router(ad_links_router)
 router.include_router(remnawave_router)
@@ -48,5 +56,7 @@ router.include_router(auth_settings_router)
 router.include_router(audit_router)
 router.include_router(grants_router)
 router.include_router(updates_router)
+router.include_router(abuse_router)
+router.include_router(import_users_router)
 
 __all__ = ["router"]

@@ -11,24 +11,29 @@ import {
   Info,
   ShieldCheck,
   LifeBuoy,
+  Wallet,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useT } from "@/i18n/I18nContext";
 import { BrandWordmark } from "@/components/BrandWordmark";
 import { BrandLogo } from "@/components/BrandLogo";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { getTelegramWebApp } from "@/hooks/useTelegramWebApp";
 
 const navItems = [
-  { to: "/", icon: LayoutDashboard, label: "Главная", fullLabel: "Главная" },
-  { to: "/subscription", icon: CreditCard, label: "Подписка", fullLabel: "Подписка" },
-  { to: "/devices", icon: Smartphone, label: "Устройства", fullLabel: "Устройства" },
-  { to: "/referral", icon: Gift, label: "Рефералка", fullLabel: "Рефералка" },
-  { to: "/support", icon: LifeBuoy, label: "Поддержка", fullLabel: "Поддержка" },
-  { to: "/settings", icon: Settings, label: "Настройки", fullLabel: "Настройки" },
+  { to: "/", icon: LayoutDashboard, labelKey: "nav.home" },
+  { to: "/subscription", icon: CreditCard, labelKey: "nav.subscription" },
+  { to: "/balance", icon: Wallet, labelKey: "nav.balance" },
+  { to: "/devices", icon: Smartphone, labelKey: "nav.devices" },
+  { to: "/referral", icon: Gift, labelKey: "nav.referral" },
+  { to: "/support", icon: LifeBuoy, labelKey: "nav.support" },
+  { to: "/settings", icon: Settings, labelKey: "nav.settings" },
 ];
 
 export function AppLayout({ children }: { children: ReactNode }) {
   const { user, isAdmin, logout } = useAuth();
+  const t = useT();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -61,7 +66,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
   const displayName = user?.username
     ? `@${user.username}`
-    : user?.email || user?.name || "Профиль";
+    : user?.email || user?.name || t("set.profile");
 
   return (
     <div className="relative flex w-full h-[100dvh] overflow-hidden bg-bg">
@@ -78,7 +83,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
         {/* Nav */}
         <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto min-h-0">
-          {navItems.map(({ to, icon: Icon, fullLabel }) => (
+          {navItems.map(({ to, icon: Icon, labelKey }) => (
             <NavLink
               key={to}
               to={to}
@@ -96,7 +101,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 className={clsx("h-4 w-4 flex-shrink-0 transition-colors")}
                 strokeWidth={1.75}
               />
-              {fullLabel}
+              {t(labelKey)}
             </NavLink>
           ))}
         </nav>
@@ -132,7 +137,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
             }
           >
             <Info className="h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
-            Информация
+            {t("nav.info")}
           </NavLink>
 
           <div className="mt-2 px-2.5">
@@ -144,13 +149,14 @@ export function AppLayout({ children }: { children: ReactNode }) {
             className="mt-1 flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-normal text-fg-muted transition-colors hover:bg-danger/8 hover:text-danger"
           >
             <LogOut className="h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
-            Выйти
+            {t("nav.logout")}
           </button>
         </div>
       </aside>
 
-      {/* Mobile top bar */}
-      <div className="fixed inset-x-0 top-0 z-30 flex items-center justify-between border-b border-[var(--border)] bg-bg px-4 py-3 md:hidden">
+      {/* Mobile top bar — pt учитывает safe-area (в PWA standalone контент уходит
+          под статус-бар/вырез iOS из-за viewport-fit=cover) */}
+      <div className="fixed inset-x-0 top-0 z-30 flex items-center justify-between border-b border-[var(--border)] bg-bg px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] md:hidden">
         <NavLink to="/" end className="flex items-center gap-2 transition-opacity active:opacity-70">
           <BrandLogo size={28} className="!rounded-lg" />
           <BrandWordmark className="text-sm" />
@@ -160,31 +166,35 @@ export function AppLayout({ children }: { children: ReactNode }) {
           {isAdmin && (
             <NavLink
               to="/admin"
-              aria-label="Админ панель"
+              aria-label={t("common.adminPanel")}
               className="flex h-8 w-8 items-center justify-center rounded-lg text-danger transition-colors hover:bg-danger/10 active:opacity-70"
             >
               <ShieldCheck className="h-5 w-5" strokeWidth={2} />
             </NavLink>
           )}
+          <LanguageSwitcher />
           <ThemeSwitcher />
         </div>
       </div>
 
-      {/* Переключатель темы — вверху справа (десктоп) */}
-      <div className="fixed right-6 top-5 z-30 hidden md:block">
+      {/* Тема + язык — вверху справа (десктоп) */}
+      <div className="fixed right-6 top-5 z-30 hidden items-center gap-2 md:flex">
+        <LanguageSwitcher />
         <ThemeSwitcher />
       </div>
 
       {/* Main content — единственный скролл-контейнер страницы (app-scroll) */}
-      <main className="app-scroll relative z-10 flex-1 min-w-0 px-5 pb-28 pt-20 md:px-8 md:pb-8 md:pt-8">
-        <div className="mx-auto max-w-4xl animate-fade-in">{children}</div>
+      <main className="app-scroll relative z-10 flex-1 min-w-0 px-5 pb-28 pt-[calc(5rem+env(safe-area-inset-top))] md:px-8 md:pb-8 md:pt-8">
+        {/* key={pathname} → обёртка перемонтируется на смене роута и заново
+            проигрывает fade-in (плавное появление каждой страницы, не только первой) */}
+        <div key={location.pathname} className="mx-auto max-w-4xl animate-fade-in">{children}</div>
       </main>
 
       {/* Mobile bottom nav — без «Устройства» и «Рефералка» (доступны с Главной/Подписки) */}
-      <nav className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-around border-t border-[var(--border)] bg-bg px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 shadow-[0_-4px_16px_-8px_rgba(0,0,0,0.3)] md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-around border-t border-[var(--border)] bg-bg px-2 pb-2 pt-2 shadow-[0_-4px_16px_-8px_rgba(0,0,0,0.3)] md:hidden">
         {navItems
           .filter(({ to }) => to !== "/devices" && to !== "/referral")
-          .map(({ to, icon: Icon, label }) => (
+          .map(({ to, icon: Icon, labelKey }) => (
           <NavLink
             key={to}
             to={to}
@@ -197,7 +207,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
             }
           >
             <Icon className="h-5 w-5" strokeWidth={1.75} />
-            {label}
+            {t(labelKey)}
           </NavLink>
         ))}
       </nav>

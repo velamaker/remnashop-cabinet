@@ -2,14 +2,15 @@ import { useEffect, useState } from "react";
 import { HelpCircle, FileText, Shield, ScrollText, Star, Activity } from "lucide-react";
 import { subscriptionApi } from "@/api/subscription";
 import { infoApi, type InfoContent, type FaqItem } from "@/api/info";
+import { useT } from "@/i18n/I18nContext";
 
 const tabs = [
-  { id: "faq", label: "FAQ", icon: HelpCircle },
-  { id: "service", label: "Серверы", icon: Activity },
-  { id: "rules", label: "Правила", icon: FileText },
-  { id: "privacy", label: "Конфиденциальность", icon: Shield },
-  { id: "offer", label: "Оферта", icon: ScrollText },
-  { id: "statuses", label: "Статусы", icon: Star },
+  { id: "faq", label: "info.tabFaq", icon: HelpCircle },
+  { id: "service", label: "info.tabServers", icon: Activity },
+  { id: "rules", label: "info.tabRules", icon: FileText },
+  { id: "privacy", label: "info.tabPrivacy", icon: Shield },
+  { id: "offer", label: "info.tabOffer", icon: ScrollText },
+  { id: "statuses", label: "info.tabStatuses", icon: Star },
 ] as const;
 
 type TabId = (typeof tabs)[number]["id"];
@@ -111,6 +112,7 @@ function Markdown({ text }: { text: string }) {
 
 // ─── Серверы (живой статус из Remnawave бота) ────────────────────────────────
 function ServiceStatus() {
+  const t = useT();
   const [nodes, setNodes] = useState<
     { name: string; country_code: string; online: boolean }[]
   >([]);
@@ -129,7 +131,7 @@ function ServiceStatus() {
   }, []);
 
   if (!loaded) {
-    return <p className="py-6 text-center text-sm text-fg-subtle">Загрузка статуса…</p>;
+    return <p className="py-6 text-center text-sm text-fg-subtle">{t("info.loadingStatus")}</p>;
   }
 
   return (
@@ -143,12 +145,12 @@ function ServiceStatus() {
       >
         <span className={`h-2.5 w-2.5 rounded-full ${allOk ? "bg-success" : "bg-warning"}`} />
         <p className="text-sm font-semibold">
-          {allOk ? "Все серверы работают" : "Часть серверов недоступны"}
+          {allOk ? t("info.allOk") : t("info.someDown")}
         </p>
       </div>
 
       {nodes.length === 0 ? (
-        <p className="py-4 text-center text-sm text-fg-subtle">Нет данных о серверах</p>
+        <p className="py-4 text-center text-sm text-fg-subtle">{t("info.noServerData")}</p>
       ) : (
         <div className="space-y-2">
           {nodes.map((n, i) => (
@@ -164,7 +166,7 @@ function ServiceStatus() {
                 }`}
               >
                 <span className={`h-2 w-2 rounded-full ${n.online ? "bg-success" : "bg-danger"}`} />
-                {n.online ? "Работает" : "Недоступен"}
+                {n.online ? t("info.online") : t("info.offline")}
               </span>
             </div>
           ))}
@@ -176,10 +178,11 @@ function ServiceStatus() {
 
 // ─── FAQ (аккордеон из загруженных вопросов) ─────────────────────────────────
 function Faq({ items }: { items: FaqItem[] }) {
+  const t = useT();
   const [open, setOpen] = useState<number | null>(null);
 
   if (!items.length) {
-    return <p className="py-6 text-center text-sm text-fg-subtle">Раздел пока не заполнен.</p>;
+    return <p className="py-6 text-center text-sm text-fg-subtle">{t("info.emptySection")}</p>;
   }
 
   return (
@@ -213,6 +216,7 @@ function Faq({ items }: { items: FaqItem[] }) {
 }
 
 export default function InfoPage() {
+  const t = useT();
   const [active, setActive] = useState<TabId>("faq");
   const [content, setContent] = useState<InfoContent | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -228,10 +232,10 @@ export default function InfoPage() {
   const renderContent = () => {
     if (active === "service") return <ServiceStatus />;
     if (!loaded) {
-      return <p className="py-6 text-center text-sm text-fg-subtle">Загрузка…</p>;
+      return <p className="py-6 text-center text-sm text-fg-subtle">{t("common.loading")}</p>;
     }
     if (!content) {
-      return <p className="py-6 text-center text-sm text-fg-subtle">Не удалось загрузить контент.</p>;
+      return <p className="py-6 text-center text-sm text-fg-subtle">{t("info.errContent")}</p>;
     }
     if (active === "faq") return <Faq items={content.faq} />;
     return <Markdown text={content[active]} />;
@@ -244,7 +248,7 @@ export default function InfoPage() {
           <circle cx="12" cy="12" r="10" />
           <path strokeLinecap="round" d="M12 16v-4m0-4h.01" />
         </svg>
-        Информация
+        {t("nav.info")}
       </h1>
 
       {/* Tab bar */}
@@ -260,7 +264,7 @@ export default function InfoPage() {
             }`}
           >
             <Icon className="h-4 w-4" />
-            {label}
+            {t(label)}
           </button>
         ))}
       </div>

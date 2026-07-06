@@ -50,7 +50,7 @@ async def delete_email(
         if not updated:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found during email delete",
+                detail="Пользователь не найден",
             )
         await uow.commit()
 

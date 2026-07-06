@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { AlertTriangle, ArrowRight, X } from "lucide-react";
 import type { SubscriptionInfoResponse } from "@/types/api";
 import { daysUntil } from "@/lib/format";
+import { useT } from "@/i18n/I18nContext";
 
 // За сколько дней до конца показывать предупреждение.
 const WARN_DAYS = 3;
@@ -18,6 +19,7 @@ export function RenewalBanner({
 }: {
   subscription: SubscriptionInfoResponse | null;
 }) {
+  const t = useT();
   const [dismissed, setDismissed] = useState(
     () => sessionStorage.getItem(DISMISS_KEY) === "1",
   );
@@ -40,13 +42,13 @@ export function RenewalBanner({
   };
 
   const title = expired
-    ? "Подписка истекла"
+    ? t("renewal.expired")
     : days <= 1
-      ? "Подписка заканчивается завтра"
-      : `Подписка заканчивается через ${days} дн.`;
+      ? t("renewal.tomorrow")
+      : t("renewal.inDays", { days });
   const text = expired
-    ? "Доступ к VPN приостановлен. Продлите, чтобы снова подключиться."
-    : "Продлите заранее, чтобы не потерять доступ.";
+    ? t("renewal.expiredText")
+    : t("renewal.soonText");
 
   return (
     <div
@@ -67,13 +69,13 @@ export function RenewalBanner({
         to="/billing"
         className="btn-gradient inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl px-4 text-sm font-semibold transition-all active:scale-[0.98]"
       >
-        Продлить <ArrowRight className="h-4 w-4" />
+        {t("renewal.renew")} <ArrowRight className="h-4 w-4" />
       </Link>
       {soon && (
         <button
           type="button"
           onClick={dismiss}
-          aria-label="Скрыть"
+          aria-label={t("common.hide")}
           className="shrink-0 text-fg-subtle transition-colors hover:text-fg"
         >
           <X className="h-4 w-4" />

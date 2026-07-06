@@ -57,7 +57,7 @@ export const APPS: AppEntry[] = [
   {
     id: "happ",
     name: "Happ",
-    desc: "Простое и быстрое — подходит большинству",
+    desc: "app.happ.desc",
     platforms: ["ios", "android", "macos", "windows", "androidtv"],
     deepLink: happDeepLink,
     install: {
@@ -71,7 +71,7 @@ export const APPS: AppEntry[] = [
   {
     id: "incy",
     name: "INCY",
-    desc: "Xray-клиент для iPhone, Mac и Android",
+    desc: "app.incy.desc",
     platforms: ["ios", "macos", "android"],
     deepLink: (sub) => `incy://import/${sub}`,
     install: {
@@ -83,7 +83,7 @@ export const APPS: AppEntry[] = [
   {
     id: "v2raytun",
     name: "v2RayTun",
-    desc: "Популярный кросс-платформенный клиент",
+    desc: "app.v2raytun.desc",
     platforms: ["ios", "android", "windows", "androidtv"],
     deepLink: (sub) => `v2raytun://import/${sub}`,
     install: {
@@ -96,7 +96,7 @@ export const APPS: AppEntry[] = [
   {
     id: "v2rayng",
     name: "v2rayNG",
-    desc: "Классический клиент для Android",
+    desc: "app.v2rayng.desc",
     platforms: ["android", "androidtv"],
     deepLink: (sub) => `v2rayng://install-sub?url=${enc(sub)}`,
     install: {
@@ -107,7 +107,7 @@ export const APPS: AppEntry[] = [
   {
     id: "hiddify",
     name: "Hiddify",
-    desc: "Открытый клиент для всех платформ",
+    desc: "app.hiddify.desc",
     platforms: ["ios", "android", "windows", "macos", "androidtv"],
     deepLink: (sub) => `hiddify://import/${sub}`,
     install: {
@@ -121,7 +121,7 @@ export const APPS: AppEntry[] = [
   {
     id: "streisand",
     name: "Streisand",
-    desc: "Лёгкий клиент для Apple",
+    desc: "app.streisand.desc",
     platforms: ["ios", "macos"],
     deepLink: (sub) => `streisand://import/${sub}`,
     install: {
@@ -132,7 +132,7 @@ export const APPS: AppEntry[] = [
   {
     id: "shadowrocket",
     name: "Shadowrocket",
-    desc: "Мощный клиент для iOS (платный)",
+    desc: "app.shadowrocket.desc",
     platforms: ["ios", "macos"],
     deepLink: (sub) => `sub://${b64(sub)}`,
     install: {
@@ -143,7 +143,7 @@ export const APPS: AppEntry[] = [
   {
     id: "karing",
     name: "Karing",
-    desc: "Кросс-платформенный клиент на базе sing-box",
+    desc: "app.karing.desc",
     platforms: ["ios", "android", "windows", "macos", "androidtv"],
     deepLink: (sub) => `karing://install-config?url=${enc(sub)}`,
     install: {
@@ -157,7 +157,7 @@ export const APPS: AppEntry[] = [
   {
     id: "nekobox",
     name: "NekoBox",
-    desc: "Гибкий клиент для Android (sing-box)",
+    desc: "app.nekobox.desc",
     platforms: ["android"],
     deepLink: (sub) => `sing-box://import-remote-profile?url=${enc(sub)}`,
     install: {
@@ -167,7 +167,7 @@ export const APPS: AppEntry[] = [
   {
     id: "clash",
     name: "Clash Meta",
-    desc: "Clash Verge / FlClash для ПК и Android",
+    desc: "app.clash.desc",
     platforms: ["windows", "macos", "android"],
     deepLink: (sub) => `clash://install-config?url=${enc(sub)}`,
     install: {

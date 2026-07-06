@@ -78,7 +78,7 @@ async def get_user_grant(
     _require_owner(admin)
     user = await user_dao.get_by_id(user_id)
     if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
     role_value = getattr(user.role, "value", user.role)
     grant = await load_grant(session, user_id)
     return {"user_id": user_id, "role": role_value, **_grant_public(grant, role_value)}
@@ -107,7 +107,7 @@ async def set_user_grant(
         )
     user = await user_dao.get_by_id(user_id)
     if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
     role_value = getattr(user.role, "value", user.role)
     if role_value >= Role.OWNER:
         raise HTTPException(

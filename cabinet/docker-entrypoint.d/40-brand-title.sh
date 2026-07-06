@@ -33,4 +33,13 @@ done
 # Экранируем спецсимволы sed-замены (& / \).
 esc="$(printf '%s' "$brand" | sed -e 's/[&/\\]/\\&/g')"
 sed -i "s/__CABINET_BRAND__/${esc}/g" "$HTML"
-echo "40-brand-title: title/description set to '$brand'"
+
+# Тот же бренд — в PWA-манифест (имя установленного приложения «на экран Домой»).
+# Обычные бренд-имена — простой текст, поэтому reuse того же esc (кавычки/бэкслеши
+# в бренде не поддерживаются, как и в HTML meta — та же прагматика).
+MANIFEST=/usr/share/nginx/html/manifest.webmanifest
+if [ -f "$MANIFEST" ] && grep -q "__CABINET_BRAND__" "$MANIFEST"; then
+  sed -i "s/__CABINET_BRAND__/${esc}/g" "$MANIFEST"
+fi
+
+echo "40-brand-title: title/description/manifest set to '$brand'"

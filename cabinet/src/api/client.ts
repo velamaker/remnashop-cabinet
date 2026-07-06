@@ -1,4 +1,5 @@
 import { ApiError } from "@/types/api";
+import { translate } from "@/i18n/translate";
 
 // В проде nginx/Caddy проксирует /api на бэкенд бота (см. nginx.conf).
 // В деве vite.config.ts делает то же самое на localhost.
@@ -37,7 +38,7 @@ interface RequestOptions extends Omit<RequestInit, "body"> {
 async function parseErrorDetail(res: Response): Promise<string> {
   try {
     const text = await res.text();
-    if (!text) return res.statusText || `Ошибка ${res.status}`;
+    if (!text) return res.statusText || translate("fmt.errStatus", { n: res.status });
     // Try JSON first
     try {
       const data = JSON.parse(text);
@@ -47,10 +48,10 @@ async function parseErrorDetail(res: Response): Promise<string> {
     } catch {
       // HTML or plain text — strip tags and return first meaningful line
       const stripped = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
-      return stripped || res.statusText || `Ошибка ${res.status}`;
+      return stripped || res.statusText || translate("fmt.errStatus", { n: res.status });
     }
   } catch {
-    return res.statusText || `Ошибка ${res.status}`;
+    return res.statusText || translate("fmt.errStatus", { n: res.status });
   }
 }
 

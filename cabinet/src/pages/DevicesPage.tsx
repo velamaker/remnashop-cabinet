@@ -1,13 +1,33 @@
 import { useCallback, useEffect, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { subscriptionApi } from "@/api/subscription";
+import { useT } from "@/i18n/I18nContext";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ConnectGuide } from "@/components/ConnectGuide";
 import { PlatformIcon } from "@/components/PlatformIcon";
+import { formatRelativeOnline } from "@/lib/format";
 import type { DeviceResponse, DevicesResponse } from "@/types/api";
 import { ApiError } from "@/types/api";
+
+type ActivityTone = "online" | "recent" | "idle" | "stale";
+
+function activityTone(iso: string | null): ActivityTone {
+  if (!iso) return "stale";
+  const minutes = (Date.now() - new Date(iso).getTime()) / 60000;
+  if (minutes < 10) return "online";
+  if (minutes < 60 * 24) return "recent";
+  if (minutes < 60 * 24 * 7) return "idle";
+  return "stale";
+}
+
+const TONE_COLOR: Record<ActivityTone, string> = {
+  online: "var(--success)",
+  recent: "var(--success)",
+  idle: "var(--warning)",
+  stale: "var(--fg-subtle)",
+};
 
 function DeviceRow({
   device,
@@ -16,6 +36,7 @@ function DeviceRow({
   device: DeviceResponse;
   onDelete: (hwid: string) => void;
 }) {
+  const t = useT();
   const [isDeleting, setIsDeleting] = useState(false);
 
   const handleDelete = async () => {
@@ -28,9 +49,13 @@ function DeviceRow({
     }
   };
 
+  const lastSeen = device.updated_at ?? device.created_at;
+  const tone = activityTone(lastSeen);
+  const dotColor = TONE_COLOR[tone];
+
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-border-subtle bg-bg-subtle p-3">
-      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-bg-raised">
+    <div className="flex items-center gap-3 rounded-xl border border-border-subtle bg-bg-subtle p-3 transition-colors hover:border-accent-subtle">
+      <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-bg-raised">
         <PlatformIcon
           platform={device.platform}
           model={device.device_model}
@@ -38,13 +63,36 @@ function DeviceRow({
           userAgent={device.user_agent}
           className="h-5 w-5 text-fg-muted"
         />
+        <span
+          className="absolute -right-0.5 -top-0.5 flex h-2.5 w-2.5"
+          title={t("devices.lastActivity")}
+        >
+          {tone === "online" && (
+            <span
+              className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60"
+              style={{ backgroundColor: dotColor }}
+            />
+          )}
+          <span
+            className="relative inline-flex h-2.5 w-2.5 rounded-full ring-2 ring-bg-subtle"
+            style={{ backgroundColor: dotColor }}
+          />
+        </span>
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-fg">
-          {device.device_model || device.platform || "Неизвестное устройство"}
+          {device.device_model || device.platform || t("devices.unknown")}
         </p>
         <p className="truncate text-xs text-fg-subtle">
           {device.os_version || device.user_agent || device.hwid}
+        </p>
+        <p className="mt-1 flex items-center gap-1.5 text-xs" style={{ color: dotColor }}>
+          <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: dotColor }} />
+          <span className="truncate">
+            {tone === "online"
+              ? t("devices.activeNow")
+              : t("devices.lastActivity") + ": " + formatRelativeOnline(lastSeen)}
+          </span>
         </p>
       </div>
       <Button
@@ -61,6 +109,7 @@ function DeviceRow({
 }
 
 export default function DevicesPage() {
+  const t = useT();
   const [data, setData] = useState<DevicesResponse | null>(null);
   const [subUrl, setSubUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -81,7 +130,7 @@ export default function DevicesPage() {
       const res = await subscriptionApi.devices();
       setData(res);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Не удалось загрузить устройства");
+      setError(e instanceof ApiError ? e.detail : t("devices.errLoad"));
     } finally {
       setIsLoading(false);
     }
@@ -109,7 +158,7 @@ export default function DevicesPage() {
       await subscriptionApi.deleteAllDevices();
       await load();
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Не удалось очистить устройства");
+      setError(e instanceof ApiError ? e.detail : t("devices.errClear"));
     } finally {
       setIsClearingAll(false);
     }
@@ -117,16 +166,16 @@ export default function DevicesPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <h1 className="text-xl font-semibold text-fg">Устройства</h1>
+      <h1 className="text-xl font-semibold text-fg">{t("nav.devices")}</h1>
 
       {subUrl && <ConnectGuide subUrl={subUrl} />}
 
       <Card>
         <CardHeader
           title={
-            data ? `${data.current_count} из ${data.max_count} устройств` : "Устройства"
+            data ? t("devices.count", { cur: data.current_count, max: data.max_count }) : t("nav.devices")
           }
-          subtitle="Удалите устройство, чтобы освободить слот для нового"
+          subtitle={t("devices.subtitle")}
           action={
             data && data.devices.length > 0 ? (
               <Button
@@ -136,7 +185,7 @@ export default function DevicesPage() {
                 isLoading={isClearingAll}
                 className="text-fg-subtle hover:text-danger"
               >
-                Очистить все
+                {t("devices.clearAll")}
               </Button>
             ) : undefined
           }
@@ -153,7 +202,7 @@ export default function DevicesPage() {
 
         {!isLoading && data && data.devices.length === 0 && (
           <p className="py-6 text-center text-sm text-fg-subtle">
-            Пока нет подключённых устройств
+            {t("devices.empty")}
           </p>
         )}
 

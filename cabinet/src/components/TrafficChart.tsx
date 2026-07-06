@@ -8,6 +8,7 @@ import {
 } from "recharts";
 import { BarChart3 } from "lucide-react";
 import { subscriptionApi } from "@/api/subscription";
+import { useT } from "@/i18n/I18nContext";
 import { formatBytes } from "@/lib/format";
 
 type Day = { date: string; total: number };
@@ -19,6 +20,7 @@ function shortDate(iso: string): string {
 
 /** График расхода трафика по дням за 30 дней (данные /subscription/traffic-history). */
 export function TrafficChart() {
+  const t = useT();
   const [days, setDays] = useState<Day[]>([]);
   const [loaded, setLoaded] = useState(false);
 
@@ -43,7 +45,7 @@ export function TrafficChart() {
       <div className="mb-3 flex items-center justify-between">
         <p className="flex items-center gap-2 text-sm font-medium text-fg-muted">
           <BarChart3 className="h-4 w-4" />
-          Трафик за 30 дней
+          {t("home.trafficChart30")}
         </p>
         <span className="tabular text-xs text-fg-subtle">{formatBytes(totalSum)}</span>
       </div>
@@ -67,7 +69,7 @@ export function TrafficChart() {
                 fontSize: 12,
               }}
               labelStyle={{ color: "var(--fg)" }}
-              formatter={(v: number) => [formatBytes(v), "Трафик"]}
+              formatter={(v: number) => [formatBytes(v), t("home.traffic")]}
             />
             <Bar dataKey="total" fill="var(--accent)" radius={[3, 3, 0, 0]} />
           </BarChart>

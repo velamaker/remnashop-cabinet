@@ -10,19 +10,22 @@ import { useBranding } from "@/contexts/BrandingContext";
 import { TicketThread } from "@/components/TicketThread";
 import { Button } from "@/components/ui/Button";
 import { ApiError } from "@/types/api";
+import { useT } from "@/i18n/I18nContext";
 
 const STATUS_META: Record<TicketStatus, { label: string; cls: string }> = {
-  open: { label: "Открыт", cls: "bg-warning/10 text-warning" },
-  answered: { label: "Отвечен", cls: "bg-success/10 text-success" },
-  closed: { label: "Закрыт", cls: "bg-fg-subtle/15 text-fg-muted" },
+  open: { label: "support.statusOpen", cls: "bg-warning/10 text-warning" },
+  answered: { label: "support.statusAnswered", cls: "bg-success/10 text-success" },
+  closed: { label: "support.statusClosed", cls: "bg-fg-subtle/15 text-fg-muted" },
 };
 
 function StatusPill({ status }: { status: TicketStatus }) {
+  const t = useT();
   const m = STATUS_META[status];
-  return <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${m.cls}`}>{m.label}</span>;
+  return <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${m.cls}`}>{t(m.label)}</span>;
 }
 
 function NewTicketModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: number) => void }) {
+  const t = useT();
   const [subject, setSubject] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -36,7 +39,7 @@ function NewTicketModal({ onClose, onCreated }: { onClose: () => void; onCreated
       const { id } = await supportApi.create(subject.trim(), message.trim());
       onCreated(id);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Не удалось создать обращение");
+      setError(e instanceof ApiError ? e.detail : t("support.errCreate"));
     } finally {
       setBusy(false);
     }
@@ -46,7 +49,7 @@ function NewTicketModal({ onClose, onCreated }: { onClose: () => void; onCreated
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" onClick={onClose}>
       <div className="surface w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-fg">Новое обращение</h2>
+          <h2 className="text-base font-semibold text-fg">{t("support.newTicketModal")}</h2>
           <button onClick={onClose} className="text-fg-subtle hover:text-fg">
             <X className="h-5 w-5" />
           </button>
@@ -58,7 +61,7 @@ function NewTicketModal({ onClose, onCreated }: { onClose: () => void; onCreated
             required
             minLength={2}
             maxLength={200}
-            placeholder="Тема обращения"
+            placeholder={t("support.subjectPlaceholder")}
             className="w-full rounded-xl border border-[var(--border)] bg-bg-subtle px-3 py-2.5 text-sm text-fg placeholder:text-fg-subtle focus:outline-none focus:ring-2 focus:ring-accent"
           />
           <textarea
@@ -67,13 +70,13 @@ function NewTicketModal({ onClose, onCreated }: { onClose: () => void; onCreated
             required
             minLength={1}
             rows={5}
-            placeholder="Опишите проблему подробно…"
+            placeholder={t("support.descPlaceholder")}
             className="w-full resize-none rounded-xl border border-[var(--border)] bg-bg-subtle px-3 py-2.5 text-sm text-fg placeholder:text-fg-subtle focus:outline-none focus:ring-2 focus:ring-accent"
           />
           {error && <p className="text-sm text-danger">{error}</p>}
           <Button type="submit" isLoading={busy} className="self-end btn-gradient border-0">
             <Send className="h-4 w-4" />
-            Отправить
+            {t("support.send")}
           </Button>
         </form>
       </div>
@@ -82,6 +85,7 @@ function NewTicketModal({ onClose, onCreated }: { onClose: () => void; onCreated
 }
 
 export default function SupportPage() {
+  const tr = useT();
   const { supportUsername } = useBranding();
   const support = supportUsername; // только из конфига бота; нет — блок не показываем
   const [tickets, setTickets] = useState<TicketListItem[]>([]);
@@ -118,10 +122,10 @@ export default function SupportPage() {
   return (
     <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-fg">Поддержка</h1>
+        <h1 className="text-xl font-semibold text-fg">{tr("nav.support")}</h1>
         <Button onClick={() => setShowModal(true)} className="btn-gradient border-0">
           <Plus className="h-4 w-4" />
-          Новый тикет
+          {tr("support.newTicket")}
         </Button>
       </div>
 
@@ -134,7 +138,7 @@ export default function SupportPage() {
               <MessageCircle className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-sm font-medium text-fg">Связаться в Telegram</p>
+              <p className="text-sm font-medium text-fg">{tr("support.contactTg")}</p>
               <p className="text-xs text-fg-muted">@{support}</p>
             </div>
           </div>
@@ -144,7 +148,7 @@ export default function SupportPage() {
             rel="noreferrer"
             className="inline-flex h-9 items-center justify-center rounded-lg border border-[var(--border)] bg-bg-raised px-4 text-sm font-medium text-fg transition-colors hover:bg-bg-overlay"
           >
-            Открыть чат
+            {tr("support.openChat")}
           </a>
         </div>
       )}
@@ -152,16 +156,16 @@ export default function SupportPage() {
       {/* Two-column */}
       <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
         {/* List */}
-        <div className={`surface p-4 ${active ? "hidden lg:block" : ""}`}>
-          <h2 className="mb-3 text-sm font-semibold text-fg">Ваши обращения</h2>
+        <div className={`surface min-w-0 p-4 ${active ? "hidden lg:block" : ""}`}>
+          <h2 className="mb-3 text-sm font-semibold text-fg">{tr("support.yourTickets")}</h2>
           {loadingList ? (
-            <p className="py-8 text-center text-sm text-fg-subtle">Загрузка…</p>
+            <p className="py-8 text-center text-sm text-fg-subtle">{tr("common.loading")}</p>
           ) : tickets.length === 0 ? (
             <div className="py-10 text-center">
               <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-bg-subtle text-fg-subtle">
                 <MessageCircle className="h-6 w-6" />
               </div>
-              <p className="text-sm text-fg-muted">Нет обращений</p>
+              <p className="text-sm text-fg-muted">{tr("support.noTickets")}</p>
             </div>
           ) : (
             <div className="flex flex-col gap-1.5">
@@ -179,7 +183,7 @@ export default function SupportPage() {
                     <span className="truncate text-sm font-medium text-fg">{t.subject}</span>
                     <StatusPill status={t.status} />
                   </div>
-                  <span className="text-xs text-fg-subtle">#{t.id} · {t.messages_count} сообщ.</span>
+                  <span className="text-xs text-fg-subtle">#{t.id} · {t.messages_count} {tr("support.messagesShort")}</span>
                 </button>
               ))}
             </div>
@@ -187,7 +191,7 @@ export default function SupportPage() {
         </div>
 
         {/* Conversation */}
-        <div className={`surface flex min-h-[420px] flex-col p-4 ${active ? "" : "hidden lg:flex"}`}>
+        <div className={`surface flex min-h-[420px] min-w-0 flex-col overflow-hidden p-4 ${active ? "" : "hidden lg:flex"}`}>
           {active ? (
             <>
               <div className="mb-3 flex items-center gap-2 border-b border-[var(--border-subtle)] pb-3">
@@ -196,7 +200,7 @@ export default function SupportPage() {
                 </button>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold text-fg">{active.subject}</p>
-                  <p className="text-xs text-fg-subtle">Обращение #{active.id}</p>
+                  <p className="text-xs text-fg-subtle">{tr("support.ticketNo", { id: active.id })}</p>
                 </div>
                 <StatusPill status={active.status} />
               </div>
@@ -214,7 +218,7 @@ export default function SupportPage() {
               <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-bg-subtle text-fg-subtle">
                 <MessageCircle className="h-7 w-7" />
               </div>
-              <p className="text-sm text-fg-muted">Выберите обращение или создайте новое</p>
+              <p className="text-sm text-fg-muted">{tr("support.selectOrCreate")}</p>
             </div>
           )}
         </div>

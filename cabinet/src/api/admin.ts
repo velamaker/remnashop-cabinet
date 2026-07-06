@@ -102,6 +102,7 @@ export interface AdminUser {
   personal_discount: number;
   purchase_discount: number;
   points: number;
+  cabinet_balance?: number;
   referral_code: string | null;
   created_at: string | null;
   last_login_at?: string | null;
@@ -194,10 +195,24 @@ export interface SalesStatsResponse {
   periods: SalesPeriod[];
 }
 
+export interface DailyStatsPoint {
+  date: string;
+  registrations: number;
+  revenue: Record<string, number>;
+}
+
+export interface DailyStatsResponse {
+  days: number;
+  currencies: string[];
+  series: DailyStatsPoint[];
+}
+
 export const statisticsApi = {
   overview: () => adminApi.get<AdminOverviewResponse>("/statistics/overview"),
   transactions: () => adminApi.get<unknown>("/statistics/transactions"),
   sales: () => adminApi.get<SalesStatsResponse>("/statistics/sales"),
+  daily: (days = 30) =>
+    adminApi.get<DailyStatsResponse>(`/statistics/daily?days=${days}`),
 };
 
 export const usersAdminApi = {
@@ -221,6 +236,11 @@ export const usersAdminApi = {
     adminApi.get<TrafficByNode>(`/users/${id}/traffic-by-node?days=${days}`),
   block: (id: number, is_blocked: boolean) =>
     adminApi.put<{ success: boolean; is_blocked: boolean }>(`/users/${id}/block`, { is_blocked }),
+  setTrial: (id: number, is_trial_available: boolean) =>
+    adminApi.put<{ success: boolean; is_trial_available: boolean }>(
+      `/users/${id}/trial`,
+      { is_trial_available },
+    ),
   changeRole: (id: number, role: number) =>
     adminApi.put<{ success: boolean; role: number }>(`/users/${id}/role`, { role }),
   setDiscount: (id: number, personal_discount: number, purchase_discount: number) =>
@@ -228,6 +248,71 @@ export const usersAdminApi = {
       personal_discount,
       purchase_discount,
     }),
+  // Экспорт Excel (.xlsx) с текущими фильтрами: качаем blob (cookie-auth) и скачиваем.
+  exportXlsx: async (params: {
+    search?: string; blocked?: boolean; role?: number; sort?: string; order?: string;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params.search) qs.set("search", params.search);
+    if (params.blocked != null) qs.set("blocked", String(params.blocked));
+    if (params.role != null) qs.set("role", String(params.role));
+    if (params.sort) qs.set("sort", params.sort);
+    if (params.order) qs.set("order", params.order);
+    const endpoint = `/api/admin/users/export.xlsx?${qs}`;
+
+    // iOS Safari и встроенные браузеры (Telegram/соцсети) не поддерживают <a download>
+    // — открываем файл в новой вкладке (cookie-auth same-origin работает).
+    const isIOS =
+      /iP(hone|ad|od)/.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    if (isIOS) {
+      window.open(endpoint, "_blank");
+      return;
+    }
+
+    const res = await fetch(endpoint, { method: "GET", credentials: "include" });
+    if (!res.ok) throw new Error(`Экспорт не удался (HTTP ${res.status})`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `users-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+};
+
+// ---------- Детект абьюза триала ----------
+
+export interface AbuseAccount {
+  id: number;
+  name: string;
+  email: string | null;
+  telegram_id: number | null;
+  username: string | null;
+  created_at: string | null;
+  is_blocked: boolean;
+  is_trial_available: boolean;
+  trial_used: boolean;
+  young_tg: boolean;
+}
+
+export interface AbuseCluster {
+  signal: "ip" | "hwid" | "email" | "referral";
+  key: string;
+  severity: "high" | "medium" | "low";
+  accounts: AbuseAccount[];
+}
+
+export const abuseAdminApi = {
+  trials: (params: { min_accounts?: number; only_trial?: boolean } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.min_accounts != null) qs.set("min_accounts", String(params.min_accounts));
+    if (params.only_trial != null) qs.set("only_trial", String(params.only_trial));
+    return adminApi.get<{ clusters: AbuseCluster[]; total: number }>(`/abuse/trials?${qs}`);
+  },
 };
 
 // ---------- Гранулярные права (grants) ----------
@@ -292,6 +377,22 @@ export const grantsAdminApi = {
     adminApi.delete<{ success: boolean; user_id: number }>(`/grants/${userId}`),
 };
 
+export interface AdminTransactionDetail {
+  payment_id: string;
+  status: string;
+  is_test: boolean;
+  purchase_type: string;
+  gateway_type: string;
+  gateway_display_name: string | null;
+  payment_method: string | null;
+  currency: string;
+  pricing: Record<string, unknown> | null;
+  plan_snapshot: Record<string, unknown> | null;
+  created_at: string | null;
+  updated_at: string | null;
+  user: { id: number; name: string | null; email: string | null; username: string | null };
+}
+
 export const transactionsAdminApi = {
   list: (params: {
     limit?: number; offset?: number; status?: string; gateway?: string;
@@ -305,6 +406,44 @@ export const transactionsAdminApi = {
     if (params.date_from) qs.set("date_from", params.date_from);
     if (params.date_to) qs.set("date_to", params.date_to);
     return adminApi.get<PaginatedResponse<AdminTransaction>>(`/transactions?${qs}`);
+  },
+  get: (paymentId: string) => adminApi.get<AdminTransactionDetail>(`/transactions/${paymentId}`),
+  // Экспорт Excel (.xlsx) с текущими фильтрами: качаем blob (cookie-auth) и скачиваем.
+  exportXlsx: async (params: {
+    status?: string; gateway?: string; date_from?: string; date_to?: string;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set("status", params.status);
+    if (params.gateway) qs.set("gateway", params.gateway);
+    if (params.date_from) qs.set("date_from", params.date_from);
+    if (params.date_to) qs.set("date_to", params.date_to);
+    const endpoint = `/api/admin/transactions/export.xlsx?${qs}`;
+
+    // iOS Safari и встроенные браузеры (Telegram/соцсети) не поддерживают <a download>
+    // — тап по кнопке молча ничего не качает. Открываем файл в новой вкладке: cookie-auth
+    // работает (same-origin), оттуда пользователь сохранит через «Поделиться».
+    const isIOS =
+      /iP(hone|ad|od)/.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    if (isIOS) {
+      window.open(endpoint, "_blank");
+      return;
+    }
+
+    const res = await fetch(endpoint, {
+      method: "GET",
+      credentials: "include",
+    });
+    if (!res.ok) throw new Error(`Экспорт не удался (HTTP ${res.status})`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `transactions-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   },
 };
 
@@ -354,6 +493,10 @@ export interface AdminPlan {
   traffic_limit_strategy: string;
   traffic_limit: number;
   device_limit: number;
+  allowed_telegram_ids: number[];
+  allowed_emails: string[];
+  internal_squads: string[];
+  external_squad: string | null;
   order_index: number;
   is_active: boolean;
   is_trial: boolean;
@@ -361,11 +504,24 @@ export interface AdminPlan {
   created_at: string | null;
 }
 
+export interface AdminSquad {
+  uuid: string;
+  name: string;
+}
+
+export interface AdminSquadsResponse {
+  internal: AdminSquad[];
+  external: AdminSquad[];
+  available: boolean;
+}
+
 export const plansAdminApi = {
   list: () => adminApi.get<{ items: AdminPlan[]; total: number }>("/plans"),
   get: (id: number) => adminApi.get<AdminPlan>(`/plans/${id}`),
+  squads: () => adminApi.get<AdminSquadsResponse>("/plans/meta/squads"),
   create: (data: Partial<AdminPlan>) => adminApi.post<AdminPlan>("/plans", data),
-  update: (id: number, data: Partial<AdminPlan>) => adminApi.put<AdminPlan>(`/plans/${id}`, data),
+  update: (id: number, data: Partial<AdminPlan> & { clear_external_squad?: boolean }) =>
+    adminApi.put<AdminPlan>(`/plans/${id}`, data),
   toggle: (id: number) => adminApi.put<{ id: number; is_active: boolean }>(`/plans/${id}/toggle`),
   delete: (id: number) => adminApi.delete<void>(`/plans/${id}`),
 };
@@ -382,9 +538,16 @@ export interface AdminBroadcast {
   created_at: string | null;
 }
 
+export type BroadcastChannel =
+  | "TG_ALL" | "TG_SUBSCRIBED" | "TG_UNSUBSCRIBED" | "TG_TRIAL" | "TG_EXPIRED"
+  | "EMAIL_ALL" | "EMAIL_SUBSCRIBED" | "EMAIL_TRIAL" | "EMAIL_EXPIRING" | "EMAIL_EXPIRED";
+
 export const broadcastsAdminApi = {
   list: () => adminApi.get<{ items: AdminBroadcast[]; total: number }>("/broadcasts"),
   get: (task_id: string) => adminApi.get<AdminBroadcast>(`/broadcasts/${task_id}`),
+  audienceCounts: () => adminApi.get<Record<BroadcastChannel, number>>("/broadcasts/audience-counts"),
+  create: (text: string, channels: BroadcastChannel[]) =>
+    adminApi.post<{ telegram: string[]; email: number[] }>("/broadcasts", { text, channels }),
 };
 
 // ---------- Settings ----------
@@ -402,6 +565,51 @@ export interface AdminSettings {
 export const settingsAdminApi = {
   get: () => adminApi.get<AdminSettings>("/settings"),
   update: (data: Record<string, unknown>) => adminApi.put<AdminSettings>("/settings", data),
+};
+
+// ---------- Cashback (кэшбэк баллами покупателю) ----------
+
+export interface CashbackTier {
+  min_days: number;
+  percent: number;
+}
+
+export interface CashbackConfig {
+  enabled: boolean;
+  point_value_rub: number;
+  tiers: CashbackTier[];
+}
+
+export const cashbackAdminApi = {
+  get: () => adminApi.get<CashbackConfig>("/cashback"),
+  update: (data: Partial<CashbackConfig>) => adminApi.put<CashbackConfig>("/cashback", data),
+};
+
+// ---------- Topup (пополнение баланса через шлюзы) ----------
+
+export interface TopupAdminConfig {
+  enabled: boolean;
+  bonus_percent: number;
+  min_amount: number;
+  max_amount: number;
+  presets: number[];
+}
+
+export const topupAdminApi = {
+  get: () => adminApi.get<TopupAdminConfig>("/topup"),
+  update: (data: Partial<TopupAdminConfig>) => adminApi.put<TopupAdminConfig>("/topup", data),
+};
+
+export interface MorningSummaryConfig {
+  enabled: boolean;
+  hour: number;
+  expiring_days: number;
+}
+
+export const morningSummaryAdminApi = {
+  get: () => adminApi.get<MorningSummaryConfig>("/morning-summary"),
+  update: (data: Partial<MorningSummaryConfig>) =>
+    adminApi.put<MorningSummaryConfig>("/morning-summary", data),
 };
 
 // ---------- Gateways ----------
@@ -511,6 +719,10 @@ export const subscriptionsAdminApi = {
     adminApi.post<{ success: boolean; points: number }>(
       `/subscriptions/user/${userId}/points`, { points }
     ),
+  adjustBalance: (userId: number, amount: number) =>
+    adminApi.post<{ success: boolean; cabinet_balance: number }>(
+      `/subscriptions/user/${userId}/balance`, { amount }
+    ),
 };
 
 // ---------- Audit ----------
@@ -527,4 +739,31 @@ export interface AuditEntry {
 export const auditAdminApi = {
   list: (limit = 100) =>
     adminApi.get<{ items: AuditEntry[] }>(`/audit?limit=${limit}`),
+};
+
+// ---------- Импорт пользователей (как в боте) ----------
+export const importAdminApi = {
+  status: () => adminApi.get<{ panel: boolean; bot: boolean; xui: boolean }>("/import/status"),
+  squads: () => adminApi.get<{ squads: { uuid: string; name: string }[] }>("/import/squads"),
+  syncPanel: () => adminApi.post<{ success: boolean; synced: number }>("/import/sync-panel"),
+  syncBot: () => adminApi.post<{ success: boolean; synced: number }>("/import/sync-bot"),
+  xui: async (file: File, squadUuids: string[]) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("squads", squadUuids.join(","));
+    const res = await fetch(`${ADMIN_BASE}/import/xui`, {
+      method: "POST",
+      credentials: "include",
+      body: fd,
+    });
+    if (!res.ok) {
+      let detail = res.statusText || "Ошибка";
+      try {
+        const d = await res.json();
+        if (typeof d?.detail === "string") detail = d.detail;
+      } catch {}
+      throw new ApiError(res.status, detail);
+    }
+    return (await res.json()) as { success: boolean; found: number; started: boolean };
+  },
 };

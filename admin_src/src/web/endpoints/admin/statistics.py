@@ -1,8 +1,9 @@
+from datetime import date, timedelta
 from typing import Any, Optional
 
 from dishka import FromDishka
 from dishka.integrations.fastapi import inject
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -160,6 +161,81 @@ async def get_sales_stats(
             for p in (result[d] for d in periods)
         ]
     }
+
+
+@router.get("/daily")
+@inject
+async def get_daily_stats(
+    _admin: AdminUser,
+    session: FromDishka[AsyncSession],
+    days: int = Query(30, ge=7, le=90),
+) -> dict[str, Any]:
+    """Ряды по дням за N дней: регистрации + выручка по валютам.
+
+    Пропуски заполняются нулями (непрерывный ряд для графика). Выручка —
+    оплаченные транзакции (COMPLETED, не тест, final_amount>0), валюты не
+    суммируются между собой. Считается на лету из users/transactions.
+    """
+    since = date.today() - timedelta(days=days - 1)
+
+    reg_rows = (
+        await session.execute(
+            text(
+                """
+                SELECT created_at::date AS d, count(*) AS c
+                FROM users
+                WHERE created_at::date >= :since
+                GROUP BY 1
+                """
+            ),
+            {"since": since},
+        )
+    ).all()
+
+    rev_rows = (
+        await session.execute(
+            text(
+                """
+                SELECT created_at::date AS d,
+                       currency::text AS currency,
+                       sum((pricing->>'final_amount')::numeric) AS amt
+                FROM transactions
+                WHERE status::text = 'COMPLETED'
+                  AND is_test = false
+                  AND (pricing->>'final_amount')::numeric > 0
+                  AND created_at::date >= :since
+                GROUP BY 1, 2
+                """
+            ),
+            {"since": since},
+        )
+    ).all()
+
+    regs_by_day = {r.d: int(r.c) for r in reg_rows}
+    rev_by_day: dict[date, dict[str, float]] = {}
+    currency_totals: dict[str, float] = {}
+    for r in rev_rows:
+        amt = float(r.amt or 0)
+        rev_by_day.setdefault(r.d, {})[r.currency] = amt
+        currency_totals[r.currency] = currency_totals.get(r.currency, 0.0) + amt
+
+    series = []
+    for i in range(days):
+        d = since + timedelta(days=i)
+        series.append(
+            {
+                "date": d.isoformat(),
+                "registrations": regs_by_day.get(d, 0),
+                "revenue": rev_by_day.get(d, {}),
+            }
+        )
+
+    # Валюты по убыванию суммарной выручки — фронт по умолчанию рисует первую.
+    currencies = [
+        c for c, _ in sorted(currency_totals.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+
+    return {"days": days, "currencies": currencies, "series": series}
 
 
 @router.get("/transactions")

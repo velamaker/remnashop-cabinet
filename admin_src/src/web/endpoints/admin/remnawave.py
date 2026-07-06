@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from dishka import FromDishka
@@ -5,17 +6,30 @@ from dishka.integrations.fastapi import inject
 from fastapi import APIRouter, HTTPException
 
 from src.application.common import Remnawave
+from src.web.endpoints.public.appearance import ASSETS_DIR
 
 from ._common import AdminUser
 from ._redact import is_readonly_admin, redact_host, redact_inbound, redact_node
 
 router = APIRouter(prefix="/remnawave", tags=["Admin - RemnaWave"])
 
+# Мониторинг серта (taskiq node_health.py) пишет cert_days на ноду в этот файл.
+NODE_HEALTH_PATH = ASSETS_DIR / "node_health.json"
+
+
+def _load_cert_health() -> dict[str, dict[str, Any]]:
+    """name → {cert_days, checked_at} из node_health.json. Нет файла — пусто."""
+    try:
+        data = json.loads(NODE_HEALTH_PATH.read_text(encoding="utf-8"))
+        return {k: v for k, v in data.items() if isinstance(v, dict)}
+    except Exception:
+        return {}
+
 
 def _sdk(remnawave: Remnawave):
     if hasattr(remnawave, "sdk"):
         return remnawave.sdk  # type: ignore[attr-defined]
-    raise HTTPException(status_code=500, detail="RemnaWave SDK not available")
+    raise HTTPException(status_code=500, detail="RemnaWave SDK недоступен")
 
 
 def _unpack(result: Any) -> list:
@@ -81,6 +95,13 @@ async def get_nodes(
         nodes = [_dump(n) for n in _unpack(result)]
         if is_readonly_admin(admin):
             nodes = [redact_node(n) for n in nodes]
+        # Подмешиваем срок серта (из мониторинга node_health), матчим по имени ноды.
+        cert = _load_cert_health()
+        for n in nodes:
+            info = cert.get(n.get("name")) if isinstance(n, dict) else None
+            if info:
+                n["cert_days"] = info.get("cert_days")
+                n["cert_checked_at"] = info.get("checked_at")
         return {"nodes": nodes}
     except HTTPException:
         raise
