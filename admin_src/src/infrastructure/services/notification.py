@@ -52,6 +52,7 @@ from src.application.events.system import (
     UserRegisteredEvent,
 )
 from src.application.events.user import (
+    ReferralAttachedEvent,
     SubscriptionExpiredAgoEvent,
     SubscriptionExpiredEvent,
     SubscriptionExpiresEvent,
@@ -64,6 +65,7 @@ from src.core.enums import Locale, Role
 from src.core.types import AnyKeyboard, NotificationType
 from src.infrastructure.services.event_bus import on_event
 from src.infrastructure.services.notification_queue import NotificationWorker
+from src.infrastructure.services.overlay_push import push_user_standalone  # [OVERLAY]
 from src.telegram.keyboards import (
     get_buy_keyboard,
     get_close_notification_button,
@@ -74,6 +76,20 @@ from src.telegram.keyboards import (
     get_user_keyboard,
 )
 from src.telegram.widgets import extract_tg_emoji
+
+
+def _push_title_body(raw: str) -> tuple[str, str]:
+    """[OVERLAY] Из отрендеренного (HTML) текста уведомления делает title/body для
+    web-push: срезает теги, первая непустая строка → заголовок, остальное → тело."""
+    import re
+
+    plain = re.sub(r"<[^>]+>", "", raw or "").replace("&amp;", "&").strip()
+    parts = [p.strip() for p in plain.split("\n") if p.strip()]
+    if not parts:
+        return ("🔔 Уведомление", "")
+    title = parts[0][:80]
+    body = " ".join(parts[1:])[:180] if len(parts) > 1 else ""
+    return (title, body)
 
 
 class NotificationService(Notifier):
@@ -181,6 +197,28 @@ class NotificationService(Notifier):
         payload = event.as_payload()
         payload.reply_markup = self._resolve_keyboard(event)
         await self.notify_user(event.user, payload)
+
+        # [OVERLAY] Пуш пригласившему: «по вашей ссылке подключился реферал».
+        # event.user — пригласивший, event.name — имя приглашённого. Работает и
+        # для кабинет-only юзеров без Telegram (для них push — единственный канал).
+        if isinstance(event, ReferralAttachedEvent):
+            try:
+                _uid = getattr(event.user, "id", None)
+                if _uid:
+                    _name = getattr(event, "name", "") or "друг"
+                    asyncio.create_task(
+                        push_user_standalone(
+                            _uid,
+                            {
+                                "title": "🎉 Новый реферал",
+                                "body": f"{_name} подключился по вашей ссылке.",
+                                "url": "/referral",
+                                "tag": "referral-join",
+                            },
+                        )
+                    )
+            except Exception:  # noqa: BLE001
+                pass
 
     @on_event(SystemEvent)
     async def on_system_event(self, event: SystemEvent) -> None:
@@ -375,6 +413,24 @@ class NotificationService(Notifier):
             i18n_key=payload.i18n_key,
             i18n_kwargs=render_kwargs,
         )
+
+        # [OVERLAY] Админ-пуши: любое уведомление, уходящее админу в Telegram
+        # (включая admin-broadcast через _process_task/_broadcast — регистрации,
+        # оплаты, ошибки и т.п.), дублируем в web-push на его PWA, чтобы админ
+        # получал их на телефоне даже вне админки. Только админ-роли и реальные
+        # пользователи (есть .id); фоново — не влияет на TG-отправку.
+        try:
+            _role = getattr(user, "role", None)
+            _uid = getattr(user, "id", None)
+            if _uid and _role is not None and _role.includes(Role.ADMIN):
+                _pt, _pb = _push_title_body(text)
+                asyncio.create_task(
+                    push_user_standalone(
+                        _uid, {"title": _pt, "body": _pb, "url": "/admin", "tag": "admin"}
+                    )
+                )
+        except Exception:  # noqa: BLE001 — зеркало push не должно мешать TG
+            pass
 
         kwargs: dict[str, Any] = {
             "disable_notification": payload.disable_notification,

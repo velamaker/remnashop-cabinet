@@ -38,7 +38,23 @@ def _support_link() -> str:
 
 
 async def _notify_owner(text_message: str) -> None:
-    """Шлёт владельцу (BOT_OWNER_ID) уведомление в Telegram. Не роняет запрос."""
+    """Уведомление владельцу в Telegram + web-push админам (PWA). Не роняет запрос."""
+    # [OVERLAY] web-push админам (не зависит от BOT_TOKEN/owner) — best-effort.
+    try:
+        from src.infrastructure.services.overlay_push import push_admins_standalone
+
+        _lines = [ln for ln in text_message.split("\n") if ln.strip()]
+        await push_admins_standalone(
+            {
+                "title": (_lines[0][:80] if _lines else "🎫 Поддержка"),
+                "body": (" ".join(_lines[1:])[:180] if len(_lines) > 1 else ""),
+                "url": "/admin/support",
+                "tag": "support",
+            }
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"support-notify: push админам не удалось: {e}")
+
     token = (os.environ.get("BOT_TOKEN") or "").strip()
     owner = (os.environ.get("BOT_OWNER_ID") or "").strip()
     if not token or not owner:

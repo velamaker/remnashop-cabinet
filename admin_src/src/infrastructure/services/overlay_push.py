@@ -147,6 +147,60 @@ def _user_lang(user: object) -> str:
     return str(lang or "ru").lower()[:2]
 
 
+# --- Standalone-отправка со своей сессией: для мест без AsyncSession в аргументах
+# (врезка web-push в базовый notification.py и в overlay support.py). Ленивый
+# общий sessionmaker поверх DSN приложения. Все функции best-effort. ---
+
+_sessionmaker = None
+
+
+def _get_sessionmaker():
+    global _sessionmaker
+    if _sessionmaker is None:
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        from src.core.config import AppConfig
+
+        engine = create_async_engine(AppConfig.get().database.dsn)
+        _sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    return _sessionmaker
+
+
+async def push_user_standalone(user_id: int, payload: dict) -> int:
+    """Web-push пользователю по user_id со своей сессией. НИКОГДА не бросает."""
+    try:
+        async with _get_sessionmaker()() as session:
+            sent = await send_to_user(session, user_id, payload)
+            await session.commit()
+            return sent
+    except Exception as exc:  # noqa: BLE001 — push не должен ронять уведомления
+        logger.debug(f"push: push_user_standalone user={user_id} не удалось: {exc}")
+        return 0
+
+
+async def push_admins_standalone(payload: dict) -> int:
+    """Web-push всем админам (OWNER/DEV/ADMIN) с push-подписками. Best-effort."""
+    try:
+        async with _get_sessionmaker()() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT DISTINCT p.user_id FROM push_subscriptions p "
+                        "JOIN users u ON u.id = p.user_id "
+                        "WHERE u.role::text IN ('OWNER', 'DEV', 'ADMIN')"
+                    )
+                )
+            ).all()
+            total = 0
+            for (uid,) in rows:
+                total += await send_to_user(session, uid, payload)
+            await session.commit()
+            return total
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"push: push_admins_standalone не удалось: {exc}")
+        return 0
+
+
 async def notify_user_push(
     session: AsyncSession,
     user: object,

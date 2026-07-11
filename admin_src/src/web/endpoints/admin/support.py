@@ -3,6 +3,7 @@
 from dishka import FromDishka
 from dishka.integrations.fastapi import inject
 from fastapi import APIRouter, HTTPException, status
+from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -134,12 +135,12 @@ async def admin_reply(
     _admin: AdminUser,
     session: FromDishka[AsyncSession],
 ) -> dict:
-    exists = (
+    ticket = (
         await session.execute(
-            text("SELECT 1 FROM support_tickets WHERE id = :id"), {"id": ticket_id}
+            text("SELECT user_id, subject FROM support_tickets WHERE id = :id"), {"id": ticket_id}
         )
     ).first()
-    if not exists:
+    if not ticket:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Тикет не найден")
 
     await session.execute(
@@ -153,6 +154,23 @@ async def admin_reply(
         {"id": ticket_id},
     )
     await session.commit()
+
+    # [OVERLAY] Пуш пользователю: на его тикет ответила поддержка.
+    try:
+        from src.infrastructure.services.overlay_push import push_user_standalone
+
+        await push_user_standalone(
+            ticket.user_id,
+            {
+                "title": "💬 Ответ поддержки",
+                "body": f"Вам ответили в тикете «{ticket.subject}».",
+                "url": "/support",
+                "tag": "support-reply",
+            },
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"support: push пользователю не удался: {e}")
+
     return {"success": True}
 
 

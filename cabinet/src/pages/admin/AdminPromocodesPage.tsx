@@ -6,12 +6,65 @@ import { formatDate } from "@/lib/format";
 
 const LIMIT = 25;
 
-const REWARD_TYPES = ["TRIAL", "DISCOUNT", "DAYS", "POINTS"];
-const AVAILABILITY_OPTIONS = ["ALL", "NEW_ONLY", "EXISTING_ONLY"];
+// Значения ДОЛЖНЫ совпадать с enum бота (src/core/enums.py):
+// PromocodeRewardType / PromocodeAvailability. Иначе бэкенд вернёт 400.
+const REWARD_TYPES: { value: string; label: string }[] = [
+  { value: "DURATION", label: "Дни подписки" },
+  { value: "TRAFFIC", label: "Трафик (ГБ)" },
+  { value: "DEVICES", label: "Устройства" },
+  { value: "PERSONAL_DISCOUNT", label: "Личная скидка (%)" },
+  { value: "PURCHASE_DISCOUNT", label: "Скидка на покупку (%)" },
+];
+
+const AVAILABILITY_OPTIONS: { value: string; label: string }[] = [
+  { value: "ALL", label: "Все пользователи" },
+  { value: "NEW", label: "Только новые" },
+  { value: "EXISTING", label: "Существующие" },
+  { value: "INVITED", label: "Приглашённые (по реф-ссылке)" },
+];
+
+// Настройка поля «значение» под каждый тип награды.
+function rewardMeta(type: string): { label: string; hint: string; placeholder: string; discount: boolean } {
+  switch (type) {
+    case "DURATION":
+      return { label: "Дней подписки", hint: "0 — бессрочно", placeholder: "30", discount: false };
+    case "TRAFFIC":
+      return { label: "Трафик, ГБ", hint: "0 — безлимит", placeholder: "50", discount: false };
+    case "DEVICES":
+      return { label: "Устройств", hint: "0 — без лимита", placeholder: "3", discount: false };
+    case "PERSONAL_DISCOUNT":
+    case "PURCHASE_DISCOUNT":
+      return { label: "Скидка, %", hint: "от 1 до 100", placeholder: "20", discount: true };
+    default:
+      return { label: "Значение", hint: "", placeholder: "", discount: false };
+  }
+}
+
+const REWARD_LABEL: Record<string, string> = Object.fromEntries(
+  REWARD_TYPES.map((t) => [t.value, t.label]),
+);
+
+// Человеко-читаемое значение награды с единицей — для таблицы.
+function rewardValueText(type: string, reward: number | null | undefined): string {
+  if (reward == null) return "—";
+  switch (type) {
+    case "DURATION":
+      return reward === 0 ? "бессрочно" : `${reward} дн.`;
+    case "TRAFFIC":
+      return reward === 0 ? "безлимит" : `${reward} ГБ`;
+    case "DEVICES":
+      return reward === 0 ? "без лимита" : `${reward} шт.`;
+    case "PERSONAL_DISCOUNT":
+    case "PURCHASE_DISCOUNT":
+      return `${reward}%`;
+    default:
+      return String(reward);
+  }
+}
 
 function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [code, setCode] = useState("");
-  const [rewardType, setRewardType] = useState("TRIAL");
+  const [rewardType, setRewardType] = useState("DURATION");
   const [reward, setReward] = useState("");
   const [availability, setAvailability] = useState("ALL");
   const [isReusable, setIsReusable] = useState(false);
@@ -20,16 +73,34 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const meta = rewardMeta(rewardType);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!code.trim()) return;
+
+    // reward пустой → не отправляем (0 — валидное значение, поэтому проверяем строку).
+    const rewardNum = reward.trim() !== "" ? Number(reward) : undefined;
+    if (rewardNum == null || Number.isNaN(rewardNum)) {
+      setError(`Укажите значение (${meta.label.toLowerCase()})`);
+      return;
+    }
+    if (meta.discount && (rewardNum < 1 || rewardNum > 100)) {
+      setError("Скидка должна быть от 1 до 100%");
+      return;
+    }
+    if (!meta.discount && rewardNum < 0) {
+      setError("Значение не может быть отрицательным");
+      return;
+    }
+
     setSaving(true);
     setError(null);
     try {
       await promocodesAdminApi.create({
         code: code.trim().toUpperCase(),
         reward_type: rewardType,
-        reward: reward ? Number(reward) : undefined,
+        reward: rewardNum,
         availability,
         is_reusable: isReusable,
         max_activations: maxActivations ? Number(maxActivations) : undefined,
@@ -75,19 +146,22 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
                 className="w-full rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent"
               >
                 {REWARD_TYPES.map((t) => (
-                  <option key={t} value={t}>{t}</option>
+                  <option key={t.value} value={t.value}>{t.label}</option>
                 ))}
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-fg-muted">Значение</label>
+              <label className="mb-1 block text-xs font-medium text-fg-muted">{meta.label} *</label>
               <input
                 type="number"
                 value={reward}
                 onChange={(e) => setReward(e.target.value)}
-                placeholder="30"
+                placeholder={meta.placeholder}
+                min={meta.discount ? 1 : 0}
+                max={meta.discount ? 100 : undefined}
                 className="w-full rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2.5 text-sm text-fg placeholder:text-fg-muted focus:outline-none focus:ring-2 focus:ring-accent"
               />
+              {meta.hint && <p className="mt-1 text-[11px] text-fg-subtle">{meta.hint}</p>}
             </div>
           </div>
 
@@ -99,7 +173,7 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
               className="w-full rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent"
             >
               {AVAILABILITY_OPTIONS.map((a) => (
-                <option key={a} value={a}>{a}</option>
+                <option key={a.value} value={a.value}>{a.label}</option>
               ))}
             </select>
           </div>
@@ -271,9 +345,9 @@ export default function AdminPromocodesPage() {
                     <td className="px-4 py-3">
                       <span className="font-mono font-semibold text-fg">{p.code}</span>
                     </td>
-                    <td className="px-4 py-3 text-fg-muted">{p.reward_type}</td>
+                    <td className="px-4 py-3 text-fg-muted">{REWARD_LABEL[p.reward_type] ?? p.reward_type}</td>
                     <td className="px-4 py-3 text-fg-muted hidden sm:table-cell">
-                      {p.reward ?? "—"}
+                      {rewardValueText(p.reward_type, p.reward)}
                     </td>
                     <td className="px-4 py-3 text-fg-muted hidden md:table-cell">
                       {p.total_activations ?? 0}
