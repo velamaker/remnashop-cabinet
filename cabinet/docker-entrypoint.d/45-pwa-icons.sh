@@ -35,5 +35,13 @@ bg="$(convert "$tmp" -format '%[pixel:p{0,0}]' info: 2>/dev/null || echo '#0a0a0
 convert "$tmp" -resize 404x404 -background "$bg" -gravity center -extent 512x512 \
   -strip "$HTML_DIR/icon-maskable-512.png" 2>/dev/null || true
 
+# Фавикон вкладки браузера из лого бренда (по умолчанию был статичный «R» из
+# favicon.svg). Генерим PNG и подменяем <link rel="icon"> в собранном index.html.
+# Если конвертация не удалась — index.html не трогаем, остаётся дефолтный favicon.svg.
+if gen 32 favicon-32.png; then
+  sed -i 's#<link rel="icon"[^>]*href="/favicon\.svg"[^>]*/>#<link rel="icon" type="image/png" href="/favicon-32.png" />#' \
+    "$HTML_DIR/index.html" 2>/dev/null || true
+fi
+
 rm -f "$tmp"
 echo "45-pwa-icons: brand icons generated from $logo_path"

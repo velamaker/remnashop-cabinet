@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Save, AlertCircle, CheckCircle2, Bell, Lock, Coins, SlidersHorizontal, Sunrise } from "lucide-react";
+import { Save, AlertCircle, CheckCircle2, Bell, Lock, SlidersHorizontal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { settingsAdminApi, topupAdminApi, morningSummaryAdminApi, type AdminSettings, type TopupAdminConfig, type MorningSummaryConfig } from "@/api/admin";
 import { ApiError } from "@/types/api";
@@ -332,19 +332,11 @@ export default function AdminSettingsPage() {
         </div>
       </section>
       </Group>
-
-      <Group title="Пополнение баланса" icon={Coins}>
-        <TopupSettingsCard />
-      </Group>
-
-      <Group title="Утренняя сводка" icon={Sunrise}>
-        <MorningSummaryCard />
-      </Group>
     </div>
   );
 }
 
-function MorningSummaryCard() {
+export function MorningSummaryCard() {
   const [cfg, setCfg] = useState<MorningSummaryConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -408,7 +400,7 @@ function MorningSummaryCard() {
   );
 }
 
-function TopupSettingsCard() {
+export function TopupSettingsCard() {
   const [cfg, setCfg] = useState<TopupAdminConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

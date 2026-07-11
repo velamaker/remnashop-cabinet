@@ -29,6 +29,8 @@ import {
   Fingerprint,
   DownloadCloud,
   Gift,
+  Coins,
+  Sunrise,
   PanelLeftClose,
   PanelLeftOpen,
 } from "lucide-react";
@@ -67,6 +69,7 @@ export const navGroups: { title: string; items: NavItem[] }[] = [
       { to: "/admin/plans", icon: Package, label: "Тарифы", section: "plans" },
       { to: "/admin/promocodes", icon: Tag, label: "Промокоды", section: "promocodes" },
       { to: "/admin/gateways", icon: Wallet, label: "Шлюзы", section: "gateways" },
+      { to: "/admin/topup", icon: Coins, label: "Пополнение", section: "settings" },
     ],
   },
   {
@@ -92,6 +95,7 @@ export const navGroups: { title: string; items: NavItem[] }[] = [
       { to: "/admin/remnawave", icon: Waves, label: "RemnaWave", section: "remnawave" },
       { to: "/admin/auth", icon: KeyRound, label: "Вход через Telegram", section: "settings" },
       { to: "/admin/settings", icon: Settings, label: "Настройки", section: "settings" },
+      { to: "/admin/summary", icon: Sunrise, label: "Утренняя сводка", section: "settings" },
       { to: "/admin/audit", icon: ShieldAlert, label: "Аудит", section: "audit" },
       { to: "/admin/updates", icon: Sparkles, label: "Обновления", section: "updates" },
     ],
@@ -172,9 +176,6 @@ export function AdminLayout({ children }: { children: ReactNode }) {
       try { localStorage.setItem("admin_sidebar_collapsed", n ? "1" : "0"); } catch { /* ignore */ }
       return n;
     });
-
-  // Плоский список разрешённых пунктов для мобильного нижнего навбара.
-  const mobileItems = navGroups.flatMap((g) => g.items).filter((it) => canSection(it.section));
 
   const handleLogout = async () => {
     await logout();
@@ -320,7 +321,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
       )}
 
       {/* Main — единственный скролл-контейнер страницы (app-scroll) */}
-      <main className="app-scroll flex-1 min-w-0 px-5 pb-24 pt-[calc(5rem+env(safe-area-inset-top))] md:px-8 md:pb-8 md:pt-8">
+      <main className="app-scroll flex-1 min-w-0 px-5 pb-8 pt-[calc(5rem+env(safe-area-inset-top))] md:px-8 md:pt-8">
         <div key={location.pathname} className="mx-auto max-w-6xl animate-fade-in">
           {isReadonlyAdmin && (
             <div className="mb-5 flex items-center gap-2.5 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
@@ -335,26 +336,6 @@ export function AdminLayout({ children }: { children: ReactNode }) {
           {children}
         </div>
       </main>
-
-      {/* Mobile bottom nav — горизонтальная прокрутка по всем разделам */}
-      <nav className="scrollbar-hide fixed inset-x-0 bottom-0 z-20 flex items-center gap-0.5 overflow-x-auto border-t border-[var(--border)] bg-bg/90 px-2 pb-2 pt-2 backdrop-blur-md md:hidden">
-        {mobileItems.map(({ to, icon: Icon, label, end }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={end}
-            className={({ isActive }) =>
-              clsx(
-                "flex min-w-[60px] shrink-0 flex-col items-center gap-1 rounded-lg px-1 py-1.5 text-[10px] font-medium transition-colors",
-                isActive ? "text-accent" : "text-fg-subtle",
-              )
-            }
-          >
-            <Icon className="h-5 w-5" strokeWidth={1.75} />
-            <span className="max-w-[64px] truncate">{label}</span>
-          </NavLink>
-        ))}
-      </nav>
     </div>
   );
 }
