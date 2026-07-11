@@ -119,7 +119,13 @@ async def create_broadcast(
         if audience is None:
             continue
         count = await _tg_count(user_dao, audience)
-        payload = MessagePayloadDto(i18n_key="raw-message", i18n_kwargs={"content": content})
+        # delete_after=None ОБЯЗАТЕЛЬНО: у MessagePayloadDto дефолт delete_after=5,
+        # из-за чего сообщение рассылки самоудалялось через 5 секунд у всех
+        # получателей (в базе SENT+message_id, а в чате физически пусто). Рассылка
+        # должна оставаться в переписке — не удаляем.
+        payload = MessagePayloadDto(
+            i18n_key="raw-message", i18n_kwargs={"content": content}, delete_after=None
+        )
         broadcast = BroadcastDto(
             task_id=uuid4(),
             status=BroadcastStatus.PROCESSING,
