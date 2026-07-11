@@ -15,6 +15,7 @@ from dishka.integrations.fastapi import inject
 from fastapi import APIRouter
 
 from src.application.common import Remnawave
+from src.infrastructure.services.overlay_server_status import load_config
 
 router = APIRouter(tags=["Public - Status"])
 
@@ -24,6 +25,11 @@ _cache: dict[str, Any] = {"at": 0.0, "data": None}
 
 async def _fetch(remnawave: Remnawave) -> dict[str, Any]:
     empty: dict[str, Any] = {"nodes": [], "all_operational": True, "total": 0, "online": 0}
+
+    # Блок выключен админом или скрыт для невошедших — публично ничего не отдаём.
+    cfg = load_config()
+    if not cfg["enabled"] or not cfg["guest_visible"]:
+        return empty
 
     sdk = getattr(remnawave, "sdk", None)
     if sdk is None:
@@ -43,8 +49,10 @@ async def _fetch(remnawave: Remnawave) -> dict[str, Any]:
                 "name": getattr(n, "name", "") or "",
                 "country_code": getattr(n, "country_code", "") or "",
                 "online": bool(getattr(n, "is_connected", False)),
-                # host — для клиентского (браузерного) замера пинга с устройства юзера
-                "host": getattr(n, "address", "") or "",
+                # ВНИМАНИЕ: host (адрес ноды) публично НЕ отдаём — иначе адрес/через
+                # DNS и IP утекал бы любому без входа. Публичный статус — без пинга;
+                # host для клиентского пинга отдаётся только владельцу на
+                # /subscription/servers.
             }
         )
 

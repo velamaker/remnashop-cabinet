@@ -21,6 +21,7 @@ from .morning_summary import router as morning_summary_router
 from .plans import router as plans_router
 from .promocodes import router as promocodes_router
 from .remnawave import router as remnawave_router
+from .server_status import router as server_status_router
 from .settings import router as settings_router
 from .statistics import router as statistics_router
 from .subscriptions import router as subscriptions_router
@@ -39,6 +40,7 @@ router.include_router(promocodes_router)
 router.include_router(plans_router)
 router.include_router(broadcasts_router)
 router.include_router(settings_router)
+router.include_router(server_status_router)
 router.include_router(cashback_router)
 router.include_router(topup_router)
 router.include_router(morning_summary_router)

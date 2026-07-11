@@ -30,6 +30,7 @@ import AdminBroadcastsPage from "@/pages/admin/AdminBroadcastsPage";
 import AdminSettingsPage from "@/pages/admin/AdminSettingsPage";
 import AdminTopupPage from "@/pages/admin/AdminTopupPage";
 import AdminMorningSummaryPage from "@/pages/admin/AdminMorningSummaryPage";
+import AdminServerStatusPage from "@/pages/admin/AdminServerStatusPage";
 import AdminAppearancePage from "@/pages/admin/AdminAppearancePage";
 import AdminInfoPage from "@/pages/admin/AdminInfoPage";
 import AdminRemnaWavePage from "@/pages/admin/AdminRemnaWavePage";
@@ -248,6 +249,14 @@ export default function App() {
               element={
                 <AdminRoute>
                   <AdminMorningSummaryPage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/server-status"
+              element={
+                <AdminRoute>
+                  <AdminServerStatusPage />
                 </AdminRoute>
               }
             />

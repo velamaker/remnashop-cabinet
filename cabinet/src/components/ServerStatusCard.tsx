@@ -16,7 +16,7 @@ export function ServerStatusCard() {
     let alive = true;
     const load = () =>
       statusApi
-        .get()
+        .myServers()
         .then((d) => { if (alive) { setData(d); setLoaded(true); } })
         .catch(() => { if (alive) setLoaded(true); });
     load();
@@ -35,8 +35,8 @@ export function ServerStatusCard() {
   let bestHost: string | null = null;
   let bestMs = Infinity;
   for (const n of data.nodes) {
-    const p = pings[n.host];
-    if (n.online && p != null && p < bestMs) {
+    const p = n.host ? pings[n.host] : null;
+    if (n.online && n.host && p != null && p < bestMs) {
       bestMs = p;
       bestHost = n.host;
     }
@@ -74,13 +74,13 @@ export function ServerStatusCard() {
               />
             )}
             <span className="min-w-0 truncate text-sm font-medium text-fg">{n.name}</span>
-            {n.host === bestHost && (
+            {n.host && n.host === bestHost && (
               <span className="flex-shrink-0 rounded-md bg-accent px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
                 {t("status.recommended")}
               </span>
             )}
             <span className="flex-1" />
-            {n.online && pings[n.host] != null && (
+            {n.online && n.host && pings[n.host] != null && (
               <span className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium tabular-nums ${pingClass(pings[n.host]!)}`}>
                 {pings[n.host]} {t("status.ms")}
               </span>

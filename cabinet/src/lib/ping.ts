@@ -42,9 +42,9 @@ async function pingBest(host: string, attempts = 2): Promise<number | null> {
 
 // Хук: пингует хосты онлайн-нод из браузера, возвращает {host: ms|null}.
 // Перемеряет при смене набора хостов и раз в 30 с.
-export function useNodePings(nodes: { host: string; online: boolean }[]): Record<string, number | null> {
+export function useNodePings(nodes: { host?: string; online: boolean }[]): Record<string, number | null> {
   const [pings, setPings] = useState<Record<string, number | null>>({});
-  const key = nodes.map((n) => (n.online ? n.host : "")).join("|");
+  const key = nodes.map((n) => (n.online ? n.host ?? "" : "")).join("|");
   const keyRef = useRef(key);
   keyRef.current = key;
 

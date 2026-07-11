@@ -31,6 +31,7 @@ import {
   Gift,
   Coins,
   Sunrise,
+  Activity,
   PanelLeftClose,
   PanelLeftOpen,
 } from "lucide-react";
@@ -86,6 +87,7 @@ export const navGroups: { title: string; items: NavItem[] }[] = [
       { to: "/admin/info", icon: Info, label: "Информация", section: "content" },
       { to: "/admin/menu", icon: SquareMenu, label: "Меню", section: "content" },
       { to: "/admin/apps", icon: Smartphone, label: "Приложения", section: "content" },
+      { to: "/admin/server-status", icon: Activity, label: "Статус сервиса", section: "settings" },
       { to: "/admin/email", icon: Mail, label: "Письмо", section: "settings" },
     ],
   },

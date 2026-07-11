@@ -612,6 +612,20 @@ export const morningSummaryAdminApi = {
     adminApi.put<MorningSummaryConfig>("/morning-summary", data),
 };
 
+// ---------- Блок «Статус сервиса» в кабинете ----------
+
+export interface ServerStatusConfig {
+  enabled: boolean;
+  bind_to_subscription: boolean;
+  guest_visible: boolean;
+}
+
+export const serverStatusAdminApi = {
+  get: () => adminApi.get<ServerStatusConfig>("/server-status"),
+  update: (data: Partial<ServerStatusConfig>) =>
+    adminApi.put<ServerStatusConfig>("/server-status", data),
+};
+
 // ---------- Gateways ----------
 
 export interface AdminGateway {

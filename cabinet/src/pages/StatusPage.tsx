@@ -72,7 +72,7 @@ export default function StatusPage() {
                       />
                     )}
                     <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">{n.name}</span>
-                    {n.online && pings[n.host] != null && (
+                    {n.online && n.host && pings[n.host] != null && (
                       <span className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium tabular-nums ${pingClass(pings[n.host]!)}`}>
                         {pings[n.host]} {t("status.ms")}
                       </span>
