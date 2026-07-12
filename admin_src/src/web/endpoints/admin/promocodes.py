@@ -1,14 +1,15 @@
 from datetime import datetime
 from typing import Any, Optional
 
+from adaptix import Retort
 from dishka import FromDishka
 from dishka.integrations.fastapi import inject
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.application.common.dao import PromocodeDao
-from src.application.dto import PromocodeDto
+from src.application.common.dao import PlanDao, PromocodeDao
+from src.application.dto import PlanSnapshotDto, PromocodeDto
 from src.core.enums import PromocodeAvailability, PromocodeRewardType
 
 from ._common import AdminUser
@@ -23,6 +24,7 @@ def _promo_to_dict(p: PromocodeDto) -> dict[str, Any]:
         "is_active": p.is_active,
         "reward_type": p.reward_type,
         "reward": p.reward,
+        "plan_snapshot": p.plan_snapshot,
         "availability": p.availability,
         "is_reusable": p.is_reusable,
         "max_activations": p.max_activations,
@@ -55,6 +57,9 @@ class CreatePromocodeRequest(BaseModel):
     code: str
     reward_type: str
     reward: Optional[int] = None
+    # Для reward_type=SUBSCRIPTION — какой тариф и на сколько дней выдать.
+    plan_id: Optional[int] = None
+    duration: Optional[int] = None
     availability: str = "ALL"
     is_reusable: bool = False
     max_activations: Optional[int] = None
@@ -67,6 +72,8 @@ async def create_promocode(
     body: CreatePromocodeRequest,
     _admin: AdminUser,
     promocode_dao: FromDishka[PromocodeDao],
+    plan_dao: FromDishka[PlanDao],
+    retort: FromDishka[Retort],
     session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     existing = await promocode_dao.get_by_code(body.code.upper())
@@ -89,12 +96,35 @@ async def create_promocode(
             status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid availability: {body.availability}"
         )
 
+    # SUBSCRIPTION — выдаёт целый тариф: строим plan_snapshot из выбранного плана и
+    # длительности (тот же путь, что в боте: PlanSnapshotDto.from_plan → retort.dump).
+    plan_snapshot: Optional[dict[str, Any]] = None
+    reward = body.reward
+    if reward_type is PromocodeRewardType.SUBSCRIPTION:
+        if body.plan_id is None or body.duration is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Для тарифного промокода укажите план и длительность",
+            )
+        plan = await plan_dao.get_by_id(body.plan_id)
+        if plan is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Тариф не найден")
+        if plan.get_duration(body.duration) is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="У тарифа нет такой длительности",
+            )
+        snapshot = PlanSnapshotDto.from_plan(plan, body.duration)
+        plan_snapshot = retort.dump(snapshot)
+        reward = None  # у SUBSCRIPTION награда — сам тариф, числовое значение не нужно
+
     promo = PromocodeDto(
         id=0,
         code=body.code.upper(),
         is_active=True,
         reward_type=reward_type,
-        reward=body.reward,
+        reward=reward,
+        plan_snapshot=plan_snapshot,
         availability=availability,
         is_reusable=body.is_reusable,
         max_activations=body.max_activations,

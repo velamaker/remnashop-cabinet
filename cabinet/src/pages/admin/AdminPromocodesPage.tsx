@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { Plus, Trash2, ToggleLeft, ToggleRight, AlertCircle, X, ChevronLeft, ChevronRight } from "lucide-react";
-import { promocodesAdminApi, type AdminPromocode } from "@/api/admin";
+import { promocodesAdminApi, plansAdminApi, type AdminPromocode, type AdminPlan } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { formatDate } from "@/lib/format";
 
@@ -12,6 +12,7 @@ const REWARD_TYPES: { value: string; label: string }[] = [
   { value: "DURATION", label: "Дни подписки" },
   { value: "TRAFFIC", label: "Трафик (ГБ)" },
   { value: "DEVICES", label: "Устройства" },
+  { value: "SUBSCRIPTION", label: "Тариф (подписка)" },
   { value: "PERSONAL_DISCOUNT", label: "Личная скидка (%)" },
   { value: "PURCHASE_DISCOUNT", label: "Скидка на покупку (%)" },
 ];
@@ -24,19 +25,21 @@ const AVAILABILITY_OPTIONS: { value: string; label: string }[] = [
 ];
 
 // Настройка поля «значение» под каждый тип награды.
-function rewardMeta(type: string): { label: string; hint: string; placeholder: string; discount: boolean } {
+function rewardMeta(type: string): { label: string; hint: string; placeholder: string; discount: boolean; subscription: boolean } {
   switch (type) {
     case "DURATION":
-      return { label: "Дней подписки", hint: "0 — бессрочно", placeholder: "30", discount: false };
+      return { label: "Дней подписки", hint: "0 — бессрочно", placeholder: "30", discount: false, subscription: false };
     case "TRAFFIC":
-      return { label: "Трафик, ГБ", hint: "0 — безлимит", placeholder: "50", discount: false };
+      return { label: "Трафик, ГБ", hint: "0 — безлимит", placeholder: "50", discount: false, subscription: false };
     case "DEVICES":
-      return { label: "Устройств", hint: "0 — без лимита", placeholder: "3", discount: false };
+      return { label: "Устройств", hint: "0 — без лимита", placeholder: "3", discount: false, subscription: false };
+    case "SUBSCRIPTION":
+      return { label: "Тариф", hint: "", placeholder: "", discount: false, subscription: true };
     case "PERSONAL_DISCOUNT":
     case "PURCHASE_DISCOUNT":
-      return { label: "Скидка, %", hint: "от 1 до 100", placeholder: "20", discount: true };
+      return { label: "Скидка, %", hint: "от 1 до 100", placeholder: "20", discount: true, subscription: false };
     default:
-      return { label: "Значение", hint: "", placeholder: "", discount: false };
+      return { label: "Значение", hint: "", placeholder: "", discount: false, subscription: false };
   }
 }
 
@@ -45,9 +48,15 @@ const REWARD_LABEL: Record<string, string> = Object.fromEntries(
 );
 
 // Человеко-читаемое значение награды с единицей — для таблицы.
-function rewardValueText(type: string, reward: number | null | undefined): string {
+function rewardValueText(p: AdminPromocode): string {
+  if (p.reward_type === "SUBSCRIPTION") {
+    const snap = p.plan_snapshot as { name?: string; duration?: number } | null | undefined;
+    if (snap?.name) return snap.duration ? `${snap.name} · ${snap.duration} дн.` : snap.name;
+    return "тариф";
+  }
+  const reward = p.reward;
   if (reward == null) return "—";
-  switch (type) {
+  switch (p.reward_type) {
     case "DURATION":
       return reward === 0 ? "бессрочно" : `${reward} дн.`;
     case "TRAFFIC":
@@ -73,39 +82,68 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Для типа SUBSCRIPTION — выбор тарифа и длительности.
+  const [plans, setPlans] = useState<AdminPlan[]>([]);
+  const [planId, setPlanId] = useState<number | "">("");
+  const [duration, setDuration] = useState<number | "">("");
+
   const meta = rewardMeta(rewardType);
+
+  // Тарифы подгружаем один раз при первом выборе типа «Тариф».
+  useEffect(() => {
+    if (meta.subscription && plans.length === 0) {
+      plansAdminApi
+        .list()
+        .then((r) => setPlans(r.items ?? []))
+        .catch(() => {});
+    }
+  }, [meta.subscription, plans.length]);
+
+  const selectedPlan = plans.find((p) => p.id === planId);
+  const durations = selectedPlan?.durations ?? [];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!code.trim()) return;
 
-    // reward пустой → не отправляем (0 — валидное значение, поэтому проверяем строку).
-    const rewardNum = reward.trim() !== "" ? Number(reward) : undefined;
-    if (rewardNum == null || Number.isNaN(rewardNum)) {
-      setError(`Укажите значение (${meta.label.toLowerCase()})`);
-      return;
-    }
-    if (meta.discount && (rewardNum < 1 || rewardNum > 100)) {
-      setError("Скидка должна быть от 1 до 100%");
-      return;
-    }
-    if (!meta.discount && rewardNum < 0) {
-      setError("Значение не может быть отрицательным");
-      return;
+    const base = {
+      code: code.trim().toUpperCase(),
+      reward_type: rewardType,
+      availability,
+      is_reusable: isReusable,
+      max_activations: maxActivations ? Number(maxActivations) : undefined,
+      expires_at: expiresAt || undefined,
+    };
+
+    let payload: Parameters<typeof promocodesAdminApi.create>[0];
+    if (meta.subscription) {
+      if (planId === "" || duration === "") {
+        setError("Выберите тариф и длительность");
+        return;
+      }
+      payload = { ...base, plan_id: Number(planId), duration: Number(duration) };
+    } else {
+      // reward пустой → не отправляем (0 — валидное значение, проверяем строку).
+      const rewardNum = reward.trim() !== "" ? Number(reward) : undefined;
+      if (rewardNum == null || Number.isNaN(rewardNum)) {
+        setError(`Укажите значение (${meta.label.toLowerCase()})`);
+        return;
+      }
+      if (meta.discount && (rewardNum < 1 || rewardNum > 100)) {
+        setError("Скидка должна быть от 1 до 100%");
+        return;
+      }
+      if (!meta.discount && rewardNum < 0) {
+        setError("Значение не может быть отрицательным");
+        return;
+      }
+      payload = { ...base, reward: rewardNum };
     }
 
     setSaving(true);
     setError(null);
     try {
-      await promocodesAdminApi.create({
-        code: code.trim().toUpperCase(),
-        reward_type: rewardType,
-        reward: rewardNum,
-        availability,
-        is_reusable: isReusable,
-        max_activations: maxActivations ? Number(maxActivations) : undefined,
-        expires_at: expiresAt || undefined,
-      });
+      await promocodesAdminApi.create(payload);
       onCreated();
       onClose();
     } catch (e) {
@@ -151,19 +189,58 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-fg-muted">{meta.label} *</label>
-              <input
-                type="number"
-                value={reward}
-                onChange={(e) => setReward(e.target.value)}
-                placeholder={meta.placeholder}
-                min={meta.discount ? 1 : 0}
-                max={meta.discount ? 100 : undefined}
-                className="w-full rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2.5 text-sm text-fg placeholder:text-fg-muted focus:outline-none focus:ring-2 focus:ring-accent"
-              />
-              {meta.hint && <p className="mt-1 text-[11px] text-fg-subtle">{meta.hint}</p>}
+              {meta.subscription ? (
+                <>
+                  <label className="mb-1 block text-xs font-medium text-fg-muted">Тариф *</label>
+                  <select
+                    value={planId}
+                    onChange={(e) => {
+                      setPlanId(e.target.value ? Number(e.target.value) : "");
+                      setDuration("");
+                    }}
+                    className="w-full rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent"
+                  >
+                    <option value="">— выберите —</option>
+                    {plans.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </>
+              ) : (
+                <>
+                  <label className="mb-1 block text-xs font-medium text-fg-muted">{meta.label} *</label>
+                  <input
+                    type="number"
+                    value={reward}
+                    onChange={(e) => setReward(e.target.value)}
+                    placeholder={meta.placeholder}
+                    min={meta.discount ? 1 : 0}
+                    max={meta.discount ? 100 : undefined}
+                    className="w-full rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2.5 text-sm text-fg placeholder:text-fg-muted focus:outline-none focus:ring-2 focus:ring-accent"
+                  />
+                  {meta.hint && <p className="mt-1 text-[11px] text-fg-subtle">{meta.hint}</p>}
+                </>
+              )}
             </div>
           </div>
+
+          {meta.subscription && (
+            <div>
+              <label className="mb-1 block text-xs font-medium text-fg-muted">Длительность *</label>
+              <select
+                value={duration}
+                onChange={(e) => setDuration(e.target.value ? Number(e.target.value) : "")}
+                disabled={!selectedPlan}
+                className="w-full rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
+              >
+                <option value="">{selectedPlan ? "— выберите —" : "сначала тариф"}</option>
+                {durations.map((d) => (
+                  <option key={d.days} value={d.days}>{d.days} дн.</option>
+                ))}
+              </select>
+              <p className="mt-1 text-[11px] text-fg-subtle">Промокод выдаст этот тариф на выбранный срок.</p>
+            </div>
+          )}
 
           <div>
             <label className="mb-1 block text-xs font-medium text-fg-muted">Доступность</label>
@@ -347,7 +424,7 @@ export default function AdminPromocodesPage() {
                     </td>
                     <td className="px-4 py-3 text-fg-muted">{REWARD_LABEL[p.reward_type] ?? p.reward_type}</td>
                     <td className="px-4 py-3 text-fg-muted hidden sm:table-cell">
-                      {rewardValueText(p.reward_type, p.reward)}
+                      {rewardValueText(p)}
                     </td>
                     <td className="px-4 py-3 text-fg-muted hidden md:table-cell">
                       {p.total_activations ?? 0}

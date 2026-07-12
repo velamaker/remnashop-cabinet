@@ -175,6 +175,7 @@ export interface AdminPromocode {
   is_active: boolean;
   reward_type: string;
   reward: number | null;
+  plan_snapshot?: Record<string, unknown> | null;
   availability: string;
   is_reusable: boolean;
   max_activations: number | null;
@@ -458,6 +459,8 @@ export const promocodesAdminApi = {
     code: string;
     reward_type: string;
     reward?: number;
+    plan_id?: number;
+    duration?: number;
     availability?: string;
     is_reusable?: boolean;
     max_activations?: number;
