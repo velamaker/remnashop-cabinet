@@ -822,13 +822,26 @@ function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClo
 
   useEffect(() => { load(); }, [load]);
 
-  // Моб. фикс: блокируем скролл фона (иначе на iOS «зависает») + Esc закрывает.
+  // Моб. фикс: жёстко блокируем скролл фона. На iOS body{overflow:hidden} НЕ
+  // работает — нужен position:fixed с сохранением позиции. + Esc закрывает.
   useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const scrollY = window.scrollY;
+    const body = document.body;
+    const prev = { position: body.style.position, top: body.style.top, width: body.style.width, overflow: body.style.overflow };
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.width = "100%";
+    body.style.overflow = "hidden";
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
-    return () => { document.body.style.overflow = prev; window.removeEventListener("keydown", onKey); };
+    return () => {
+      body.style.position = prev.position;
+      body.style.top = prev.top;
+      body.style.width = prev.width;
+      body.style.overflow = prev.overflow;
+      window.scrollTo(0, scrollY);
+      window.removeEventListener("keydown", onKey);
+    };
   }, [onClose]);
 
   const toggleBlock = async () => {
