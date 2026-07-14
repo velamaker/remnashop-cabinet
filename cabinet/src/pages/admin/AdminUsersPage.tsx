@@ -1,13 +1,15 @@
 import { useEffect, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   Search, ChevronLeft, ChevronRight, AlertCircle, X, Download,
-  CalendarPlus, Trash2, Ban, CheckCircle, Gift, RefreshCw, Star, ChevronDown, ChevronUp, LogIn, Gauge, Wallet, Link2,
+  CalendarPlus, Trash2, Ban, CheckCircle, Gift, RefreshCw, Star, ChevronDown, ChevronUp, LogIn, Gauge, Wallet, Link2, Users,
 } from "lucide-react";
 import {
   usersAdminApi, subscriptionsAdminApi, plansAdminApi, grantsAdminApi,
   type AdminUser, type AdminUserDetail, type AdminSubscription, type AdminPlan,
   type LoginHistory, type TrafficByNode, type GrantCatalog, type GrantPreset, type UserGrant,
   type AdminDevice, type AdminUserTx, type AdminSquadsResponse,
+  type UserReferrals, type ReferralMember,
 } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { formatDate } from "@/lib/format";
@@ -598,6 +600,71 @@ function LoginHistoryBlock({ userId }: { userId: number }) {
   );
 }
 
+// ─── Referrals (реф-связи) ─────────────────────────────────────────────────
+
+function ReferralsBlock({ userId, onOpenUser }: { userId: number; onOpenUser?: (id: number) => void }) {
+  const [data, setData] = useState<UserReferrals | null>(null);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    usersAdminApi.referrals(userId).then(setData).catch(() => setData(null));
+  }, [userId]);
+
+  if (!data || (!data.referrer && data.counts.first === 0 && data.counts.second === 0)) return null;
+
+  const Member = ({ m }: { m: ReferralMember }) => (
+    <button
+      type="button"
+      onClick={onOpenUser ? () => onOpenUser(m.id) : undefined}
+      disabled={!onOpenUser}
+      className="flex w-full items-center justify-between gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-xs transition-colors enabled:hover:bg-bg-subtle disabled:cursor-default"
+    >
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="truncate font-medium text-fg">{m.name}</span>
+        {m.username && <span className="truncate text-fg-subtle">@{m.username}</span>}
+      </span>
+      <span className="flex flex-shrink-0 items-center gap-2 text-fg-subtle">
+        {m.created_at && <span>{formatDate(m.created_at)}</span>}
+        <span className="font-mono">#{m.id}</span>
+      </span>
+    </button>
+  );
+
+  return (
+    <div className="rounded-xl border border-[var(--border)] p-4">
+      <button onClick={() => setOpen(!open)} className="flex w-full items-center justify-between gap-2 text-xs font-semibold text-fg">
+        <span className="flex items-center gap-1.5"><Users className="h-3.5 w-3.5 text-accent" />Рефералы</span>
+        <span className="font-normal text-fg-subtle">
+          {data.referrer ? "есть пригласивший · " : ""}{data.counts.first} приглашённых{data.counts.second ? ` · +${data.counts.second} ур.2` : ""}
+          <ChevronDown className={`ml-1 inline h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+        </span>
+      </button>
+      {open && (
+        <div className="mt-3 space-y-3">
+          {data.referrer && (
+            <div>
+              <p className="mb-1 text-[11px] uppercase tracking-wide text-fg-subtle">Пригласил</p>
+              <Member m={data.referrer} />
+            </div>
+          )}
+          {data.referrals.length > 0 && (
+            <div>
+              <p className="mb-1 text-[11px] uppercase tracking-wide text-fg-subtle">Приглашённые ({data.counts.first})</p>
+              <div className="space-y-1">{data.referrals.map(m => <Member key={m.id} m={m} />)}</div>
+            </div>
+          )}
+          {data.second_level.length > 0 && (
+            <div>
+              <p className="mb-1 text-[11px] uppercase tracking-wide text-fg-subtle">Второй уровень ({data.counts.second})</p>
+              <div className="space-y-1">{data.second_level.map(m => <Member key={m.id} m={m} />)}</div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Traffic by node ───────────────────────────────────────────────────────
 
 function fmtBytesRu(n: number): string {
@@ -802,7 +869,7 @@ function AccessGrantBlock({ userId }: { userId: number }) {
 
 // ─── User Detail Modal ─────────────────────────────────────────────────────
 
-function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClose: () => void; onUpdated: () => void }) {
+function UserDetailModal({ userId, onClose, onUpdated, onOpenUser }: { userId: number; onClose: () => void; onUpdated: () => void; onOpenUser?: (id: number) => void }) {
   const [detail, setDetail] = useState<AdminUserDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -869,8 +936,14 @@ function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClo
   const u = detail?.user;
   const roleInfo = u ? (ROLE_LABELS[u.role] ?? { label: `Роль ${u.role}`, cls: "text-fg-muted" }) : null;
 
-  return (
-    <div onClick={onClose} className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-3 pt-6 sm:p-4 sm:pt-8">
+  // ВАЖНО (iOS-фикс): рендерим модалку ПОРТАЛОМ в document.body. Иначе она
+  // остаётся внутри <main class="app-scroll">, у которого -webkit-overflow-scrolling:
+  // touch на iOS Safari создаёт отдельный композиционный слой и ЗАПИРАЕТ в нём
+  // position:fixed-потомков → z-50 модалки теряет силу против корневого топбара
+  // (z-20), и шапка с крестиком «Закрыть» уезжает под топбар (см. скрин владельца).
+  // Портал выносит модалку из этого слоя — крестик снова наверху и кликается.
+  return createPortal(
+    <div onClick={onClose} className="fixed inset-0 z-[60] flex items-start justify-center bg-black/60 p-3 pt-[max(1.5rem,env(safe-area-inset-top))] sm:p-4 sm:pt-8">
       <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90dvh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-bg shadow-raised">
         {/* Header */}
         <div className="flex flex-shrink-0 items-center justify-between border-b border-[var(--border)] px-5 py-4">
@@ -935,6 +1008,9 @@ function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClo
                   {/* История входов */}
                   <LoginHistoryBlock userId={userId} />
 
+                  {/* Реф-связи: кто пригласил + кого пригласил (клик открывает карточку) */}
+                  <ReferralsBlock userId={userId} onOpenUser={onOpenUser} />
+
                   {/* Трафик по нодам (живьём из панели) */}
                   <TrafficByNodeBlock userId={userId} />
 
@@ -995,7 +1071,8 @@ function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClo
         ) : null}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -1215,7 +1292,8 @@ export default function AdminUsersPage() {
         <div className="flex justify-center py-16"><div className="h-6 w-6 animate-spin rounded-full border-2 border-border border-t-accent" /></div>
       ) : (
         <>
-          <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+          {/* Desktop: таблица. Моб.: карточная раскладка ниже (без гориз. скролла). */}
+          <div className="hidden overflow-x-auto rounded-xl border border-[var(--border)] md:block">
             <table className="w-full min-w-[640px] text-sm">
               <thead>
                 <tr className="border-b border-[var(--border)] bg-bg-subtle">
@@ -1266,6 +1344,48 @@ export default function AdminUsersPage() {
             </table>
           </div>
 
+          {/* Mobile: карточки вместо таблицы (не влезает по ширине → был гориз. скролл) */}
+          <div className="grid gap-2 md:hidden">
+            {users.map((u, i) => {
+              const rInfo = ROLE_LABELS[u.role] ?? { label: `${u.role}`, cls: "text-fg-muted" };
+              const clickable = u.id != null;
+              return (
+                <button
+                  key={u.id ?? `card-${i}`}
+                  type="button"
+                  onClick={clickable ? () => setSelectedId(u.id) : undefined}
+                  disabled={!clickable}
+                  className="w-full rounded-xl border border-[var(--border)] bg-bg-subtle/40 p-3 text-left transition-colors enabled:hover:bg-bg-subtle disabled:cursor-default"
+                >
+                  <div className="flex items-start gap-2.5">
+                    <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border border-[var(--border)] bg-bg-raised text-xs font-medium text-fg-muted">
+                      {u.name?.[0]?.toUpperCase() ?? "?"}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="truncate font-medium text-fg">{u.name}</p>
+                        {u.is_blocked ? (
+                          <span className="flex-shrink-0 text-xs font-medium text-danger">Заблокирован</span>
+                        ) : (
+                          <span className="flex-shrink-0 text-xs font-medium text-success">Активен</span>
+                        )}
+                      </div>
+                      {u.username && <p className="truncate text-xs text-fg-subtle">@{u.username}</p>}
+                      {u.email && <p className="truncate text-xs text-fg-muted">{u.email}</p>}
+                      {u.expire_at && <p className="text-xs text-warning">истекает {formatDate(u.expire_at)}</p>}
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-fg-subtle">
+                        <span className={`font-medium ${rInfo.cls}`}>{rInfo.label}</span>
+                        <span className="font-mono">ID {u.id ?? "—"}</span>
+                        {u.created_at && <span>рег. {formatDate(u.created_at)}</span>}
+                        {u.last_login_at && <span>вход {formatDate(u.last_login_at)}</span>}
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
           {/* Pagination */}
           {totalPages > 1 && (
             <div className="flex items-center justify-between text-sm">
@@ -1284,7 +1404,7 @@ export default function AdminUsersPage() {
       )}
 
       {selectedId !== null && (
-        <UserDetailModal userId={selectedId} onClose={() => setSelectedId(null)} onUpdated={load} />
+        <UserDetailModal userId={selectedId} onClose={() => setSelectedId(null)} onUpdated={load} onOpenUser={(id) => setSelectedId(id)} />
       )}
     </div>
   );

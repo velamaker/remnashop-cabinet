@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/Button";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { RenewalBanner } from "@/components/RenewalBanner";
 import {
   formatTrafficLimit,
   formatBytes,
@@ -152,6 +153,9 @@ export default function DashboardPage() {
         <h1 className="text-xl font-semibold text-fg">{t("nav.subscription")}</h1>
         <StatusBadge status={subscription.status} />
       </div>
+
+      {/* Заметные предупреждения: истечение подписки / окончание трафика */}
+      <RenewalBanner subscription={subscription} />
 
       <div className="card-hero p-6 sm:p-7">
         {/* Тариф */}

@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from dishka import FromDishka
 from dishka.integrations.fastapi import inject
@@ -11,8 +11,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common import Remnawave
 from src.application.common.dao import PlanDao, SubscriptionDao, UserDao
-from src.application.dto import PlanSnapshotDto, SubscriptionDto
+from src.application.dto import MessagePayloadDto, PlanSnapshotDto, SubscriptionDto
+from src.application.use_cases.remnawave import ReissueUserSubscription, ResetUserTraffic
+from src.application.use_cases.subscription import (
+    SyncSubscriptionFromRemnashop,
+    SyncSubscriptionFromRemnawave,
+    ToggleExternalSquad,
+    ToggleInternalSquad,
+    UpdateDeviceLimit,
+    UpdateTrafficLimit,
+)
+from src.application.use_cases.subscription.commands.management import (
+    ToggleExternalSquadDto,
+    ToggleInternalSquadDto,
+    UpdateDeviceLimitDto,
+    UpdateTrafficLimitDto,
+)
+from src.application.use_cases.user import ResetUserReferralCode, SendMessageToUser
+from src.application.use_cases.user.commands.messaging import SendMessageToUserDto
 from src.core.enums import SubscriptionStatus
+from src.core.exceptions import PermissionDeniedError
 from remnapy.enums.users import TrafficLimitStrategy
 
 from ._common import AdminUser
@@ -49,6 +67,8 @@ def _sub_to_dict(s: SubscriptionDto) -> dict[str, Any]:
         "expire_at": s.expire_at.isoformat() if s.expire_at else None,
         "traffic_limit": s.traffic_limit,
         "device_limit": s.device_limit,
+        "internal_squads": [str(u) for u in (getattr(s, "internal_squads", None) or [])],
+        "external_squad": str(s.external_squad) if getattr(s, "external_squad", None) else None,
         "url": s.url,
         "created_at": s.created_at.isoformat() if hasattr(s, "created_at") and s.created_at else None,
     }
@@ -293,6 +313,318 @@ async def reset_trial(
         raise HTTPException(status_code=500, detail="Не удалось обновить пользователя")
     await session.commit()
     return {"success": True, "is_trial_available": True}
+
+
+# ─── Действия над подпиской юзера (паритет с ботом) ───────────────────────────
+# Переиспользуем базовые интеракторы (они сами синхронят Remnawave + коммитят
+# свой uow). Зовём `._execute(admin, ...)` НАПРЯМУЮ — в обход enum-права
+# (USER_EDITOR): доступ уже проверен в _common (раздел subscriptions + can_write),
+# как сделано для теста шлюзов. См. память проекта.
+
+
+async def _run_user_action(coro: Any) -> None:
+    """Гоняет интерактор, превращая его ошибки в понятные HTTP-коды."""
+    try:
+        await coro
+    except HTTPException:
+        raise
+    except PermissionDeniedError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Недостаточно прав для действия над этим пользователем",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Ошибка синхронизации с Remnawave: {exc}",
+        )
+
+
+@router.post("/user/{user_id}/reset-traffic")
+@inject
+async def reset_traffic(
+    user_id: int,
+    admin: AdminUser,
+    reset_user_traffic: FromDishka[ResetUserTraffic],
+) -> dict[str, Any]:
+    await _run_user_action(reset_user_traffic._execute(admin, user_id))
+    return {"success": True}
+
+
+@router.post("/user/{user_id}/reissue")
+@inject
+async def reissue_subscription(
+    user_id: int,
+    admin: AdminUser,
+    reissue_user_subscription: FromDishka[ReissueUserSubscription],
+) -> dict[str, Any]:
+    await _run_user_action(reissue_user_subscription._execute(admin, user_id))
+    return {"success": True}
+
+
+@router.post("/user/{user_id}/referral-reset")
+@inject
+async def referral_reset(
+    user_id: int,
+    admin: AdminUser,
+    reset_user_referral_code: FromDishka[ResetUserReferralCode],
+) -> dict[str, Any]:
+    await _run_user_action(reset_user_referral_code._execute(admin, user_id))
+    return {"success": True}
+
+
+# ─── Устройства пользователя (список + удаление) ──────────────────────────────
+
+
+def _iso(value: Any) -> Optional[str]:
+    return value.isoformat() if value else None
+
+
+@router.get("/user/{user_id}/devices")
+@inject
+async def user_devices(
+    user_id: int,
+    _admin: AdminUser,
+    subscription_dao: FromDishka[SubscriptionDao],
+    remnawave: FromDishka[Remnawave],
+) -> dict[str, Any]:
+    sub = await subscription_dao.get_current(user_id)
+    if not sub:
+        return {"devices": [], "count": 0}
+    devices = await _sync_remnawave(remnawave.get_devices(sub.user_remna_id))
+    return {
+        "devices": [
+            {
+                "hwid": d.hwid,
+                "platform": getattr(d, "platform", None),
+                "device_model": getattr(d, "device_model", None),
+                "os_version": getattr(d, "os_version", None),
+                "user_agent": getattr(d, "user_agent", None),
+                "created_at": _iso(getattr(d, "created_at", None)),
+                "updated_at": _iso(getattr(d, "updated_at", None)),
+            }
+            for d in (devices or [])
+        ],
+        "count": len(devices or []),
+    }
+
+
+class DeleteDeviceRequest(BaseModel):
+    hwid: str
+
+
+@router.post("/user/{user_id}/devices/delete")
+@inject
+async def user_device_delete(
+    user_id: int,
+    body: DeleteDeviceRequest,
+    _admin: AdminUser,
+    subscription_dao: FromDishka[SubscriptionDao],
+    remnawave: FromDishka[Remnawave],
+) -> dict[str, Any]:
+    sub = await subscription_dao.get_current(user_id)
+    if not sub:
+        raise HTTPException(status_code=404, detail="У пользователя нет активной подписки")
+    # Админ удаляет устройство напрямую (без юзер-настройки device_single_reset и
+    # её кулдауна) + сбрасываем активные соединения, чтобы устройство отвалилось.
+    await _sync_remnawave(remnawave.delete_device(sub.user_remna_id, body.hwid))
+    await _sync_remnawave(remnawave.drop_connections(sub.user_remna_id))
+    return {"success": True}
+
+
+# ─── Транзакции пользователя (в карточке) ─────────────────────────────────────
+
+
+@router.get("/user/{user_id}/transactions")
+@inject
+async def user_transactions(
+    user_id: int,
+    _admin: AdminUser,
+    session: FromDishka[AsyncSession],
+    limit: int = 50,
+) -> dict[str, Any]:
+    limit = max(1, min(limit, 200))
+    rows = (
+        await session.execute(
+            text(
+                """
+                SELECT payment_id, status::text AS status, is_test,
+                       purchase_type::text AS purchase_type,
+                       gateway_type::text AS gateway_type,
+                       created_at, updated_at,
+                       pricing->>'final_amount' AS final_amount,
+                       currency::text AS currency,
+                       plan_snapshot->>'name' AS plan_name,
+                       plan_snapshot->>'duration' AS plan_duration
+                FROM transactions
+                WHERE user_id = :uid
+                ORDER BY created_at DESC NULLS LAST
+                LIMIT :limit
+                """
+            ),
+            {"uid": user_id, "limit": limit},
+        )
+    ).all()
+    return {
+        "items": [
+            {
+                "payment_id": str(r.payment_id),
+                "status": r.status,
+                "gateway_type": r.gateway_type,
+                "purchase_type": r.purchase_type,
+                "is_test": r.is_test,
+                "amount": r.final_amount,
+                "currency": r.currency,
+                "plan_name": r.plan_name,
+                "plan_duration": int(r.plan_duration) if r.plan_duration else None,
+                "created_at": _iso(r.created_at),
+                "updated_at": _iso(r.updated_at),
+            }
+            for r in rows
+        ]
+    }
+
+
+# ─── Лимиты трафика/устройств ─────────────────────────────────────────────────
+
+
+class TrafficLimitRequest(BaseModel):
+    traffic_limit: int  # ГБ, 0 = безлимит
+
+
+class DeviceLimitRequest(BaseModel):
+    device_limit: int  # 0 = безлимит
+
+
+@router.post("/user/{user_id}/traffic-limit")
+@inject
+async def set_traffic_limit(
+    user_id: int,
+    body: TrafficLimitRequest,
+    admin: AdminUser,
+    update_traffic_limit: FromDishka[UpdateTrafficLimit],
+) -> dict[str, Any]:
+    await _run_user_action(
+        update_traffic_limit._execute(
+            admin, UpdateTrafficLimitDto(user_id=user_id, traffic_limit=max(0, body.traffic_limit))
+        )
+    )
+    return {"success": True}
+
+
+@router.post("/user/{user_id}/device-limit")
+@inject
+async def set_device_limit(
+    user_id: int,
+    body: DeviceLimitRequest,
+    admin: AdminUser,
+    update_device_limit: FromDishka[UpdateDeviceLimit],
+) -> dict[str, Any]:
+    await _run_user_action(
+        update_device_limit._execute(
+            admin, UpdateDeviceLimitDto(user_id=user_id, device_limit=max(0, body.device_limit))
+        )
+    )
+    return {"success": True}
+
+
+# ─── Смена сквада (internal/external) — тумблер членства ──────────────────────
+
+
+class SquadToggleRequest(BaseModel):
+    squad_id: str
+    external: bool = False
+
+
+@router.post("/user/{user_id}/squad-toggle")
+@inject
+async def squad_toggle(
+    user_id: int,
+    body: SquadToggleRequest,
+    admin: AdminUser,
+    toggle_internal: FromDishka[ToggleInternalSquad],
+    toggle_external: FromDishka[ToggleExternalSquad],
+) -> dict[str, Any]:
+    try:
+        squad_uuid = UUID(body.squad_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Некорректный UUID сквада")
+    if body.external:
+        await _run_user_action(
+            toggle_external._execute(admin, ToggleExternalSquadDto(user_id=user_id, squad_id=squad_uuid))
+        )
+    else:
+        await _run_user_action(
+            toggle_internal._execute(admin, ToggleInternalSquadDto(user_id=user_id, squad_id=squad_uuid))
+        )
+    return {"success": True}
+
+
+# ─── Синхронизация с Remnawave ────────────────────────────────────────────────
+
+
+class SyncRequest(BaseModel):
+    direction: str = "from_remnawave"  # "from_remnawave" (панель→бот) | "from_remnashop"
+
+
+@router.post("/user/{user_id}/sync")
+@inject
+async def sync_subscription(
+    user_id: int,
+    body: SyncRequest,
+    admin: AdminUser,
+    from_remnawave: FromDishka[SyncSubscriptionFromRemnawave],
+    from_remnashop: FromDishka[SyncSubscriptionFromRemnashop],
+) -> dict[str, Any]:
+    if body.direction == "from_remnashop":
+        await _run_user_action(from_remnashop._execute(admin, user_id))
+    else:
+        await _run_user_action(from_remnawave._execute(admin, user_id))
+    return {"success": True}
+
+
+# ─── Сообщение пользователю (в его Telegram) ─────────────────────────────────
+
+
+class MessageRequest(BaseModel):
+    text: str
+
+
+@router.post("/user/{user_id}/message")
+@inject
+async def send_message(
+    user_id: int,
+    body: MessageRequest,
+    admin: AdminUser,
+    send_message_to_user: FromDishka[SendMessageToUser],
+) -> dict[str, Any]:
+    text_msg = (body.text or "").strip()
+    if not text_msg:
+        raise HTTPException(status_code=400, detail="Пустое сообщение")
+    payload = MessagePayloadDto(
+        i18n_key="raw-message",
+        i18n_kwargs={"content": text_msg},
+        delete_after=None,  # не самоудалять (см. фикс рассылок delete_after)
+    )
+    delivered = False
+    try:
+        delivered = bool(
+            await send_message_to_user._execute(
+                admin, SendMessageToUserDto(user_id=user_id, payload=payload)
+            )
+        )
+    except HTTPException:
+        raise
+    except PermissionDeniedError:
+        raise HTTPException(status_code=403, detail="Недостаточно прав для действия над этим пользователем")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Ошибка отправки: {exc}")
+    # delivered=False обычно значит, что у пользователя нет привязанного Telegram.
+    return {"success": True, "delivered": delivered}
 
 
 # ─── Add points ──────────────────────────────────────────────────────────────

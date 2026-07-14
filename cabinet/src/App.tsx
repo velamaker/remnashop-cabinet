@@ -31,6 +31,7 @@ import AdminSettingsPage from "@/pages/admin/AdminSettingsPage";
 import AdminTopupPage from "@/pages/admin/AdminTopupPage";
 import AdminMorningSummaryPage from "@/pages/admin/AdminMorningSummaryPage";
 import AdminServerStatusPage from "@/pages/admin/AdminServerStatusPage";
+import AdminSubscriptionAppPage from "@/pages/admin/AdminSubscriptionAppPage";
 import AdminAppearancePage from "@/pages/admin/AdminAppearancePage";
 import AdminInfoPage from "@/pages/admin/AdminInfoPage";
 import AdminRemnaWavePage from "@/pages/admin/AdminRemnaWavePage";
@@ -40,6 +41,7 @@ import AdminAbusePage from "@/pages/admin/AdminAbusePage";
 import AdminImportPage from "@/pages/admin/AdminImportPage";
 import AdminReferralPage from "@/pages/admin/AdminReferralPage";
 import AdminUpdatesPage from "@/pages/admin/AdminUpdatesPage";
+import AdminNotificationsPage from "@/pages/admin/AdminNotificationsPage";
 import AdminAppsPage from "@/pages/admin/AdminAppsPage";
 import AdminMenuPage from "@/pages/admin/AdminMenuPage";
 import AdminEmailPage from "@/pages/admin/AdminEmailPage";
@@ -261,6 +263,14 @@ export default function App() {
               }
             />
             <Route
+              path="/admin/subscription-app"
+              element={
+                <AdminRoute>
+                  <AdminSubscriptionAppPage />
+                </AdminRoute>
+              }
+            />
+            <Route
               path="/admin/appearance"
               element={
                 <AdminRoute>
@@ -345,6 +355,14 @@ export default function App() {
               element={
                 <AdminRoute>
                   <AdminUpdatesPage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/notifications"
+              element={
+                <AdminRoute>
+                  <AdminNotificationsPage />
                 </AdminRoute>
               }
             />

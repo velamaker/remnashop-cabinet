@@ -1,7 +1,9 @@
-"""Лента обновлений: тянет релизы Vela с GitHub (releases → фолбэк на теги).
+"""Лента обновлений: список релизов из локального CHANGELOG.md.
 
-Работает у ЛЮБОГО, кто поставил кабинет: данные из публичного GitHub API
-репозитория (не захардкожены). Кэш в памяти, чтобы не упираться в лимиты API.
+Работает у ЛЮБОГО, кто поставил кабинет, БЕЗ сети: версии и понятные пункты
+берутся из курируемого `CHANGELOG.md` (лежит в образе). GitHub опрашивается
+только как best-effort обогащение (даты релизов, ссылки) — если репозиторий
+приватный/недоступен/не тот, лента всё равно показывается. Кэш в памяти.
 """
 
 import os
@@ -17,7 +19,7 @@ from ._common import AdminUser
 
 router = APIRouter(prefix="/updates", tags=["Admin - Updates"])
 
-REPO = (os.environ.get("UPDATE_REPO") or "alexdsndr161rus2015-maker/remnashop-cabinet").strip()
+REPO = (os.environ.get("UPDATE_REPO") or "velamaker/remnashop-cabinet").strip()
 VERSION_PATH = Path("/opt/remnashop/VERSION")
 CHANGELOG_PATH = Path("/opt/remnashop/CHANGELOG.md")
 
@@ -71,75 +73,49 @@ def _parse(v: str) -> tuple[int, ...]:
     return tuple(int(x) for x in nums) or (0,)
 
 
-_SKIP_RE = re.compile(r"^(merge\b|bump version|v?\d+(\.\d+)+\s*$)", re.IGNORECASE)
+async def _github_releases() -> tuple[dict[str, str], dict[str, str]]:
+    """Best-effort обогащение из GitHub: {ver_norm: url}, {ver_norm: date}.
 
-
-async def _commit_notes(cli: "httpx.AsyncClient", base: str, head: str) -> tuple[str, Optional[str]]:
-    """Список изменений между тегами (первые строки коммитов) + дата head."""
+    Никогда не бросает: приватный/недоступный/чужой репозиторий → пустые словари,
+    и лента всё равно строится из локального CHANGELOG.md.
+    """
+    urls: dict[str, str] = {}
+    dates: dict[str, str] = {}
     try:
-        r = await cli.get(f"https://api.github.com/repos/{REPO}/compare/{base}...{head}")
-        if r.status_code != 200:
-            return "", None
-        commits = r.json().get("commits", []) or []
+        async with httpx.AsyncClient(timeout=10) as cli:
+            rel = await cli.get(
+                f"https://api.github.com/repos/{REPO}/releases", params={"per_page": 50}
+            )
+            data = rel.json() if rel.status_code == 200 else []
+            if isinstance(data, list):
+                for r in data:
+                    if not (isinstance(r, dict) and r.get("tag_name") and not r.get("draft")):
+                        continue
+                    key = _norm(r["tag_name"])
+                    urls[key] = r.get("html_url") or ""
+                    dates[key] = r.get("published_at") or r.get("created_at") or ""
     except Exception:
-        return "", None
-    lines: list[str] = []
-    date: Optional[str] = None
-    for c in commits:
-        cm = (c.get("commit") or {})
-        date = (cm.get("committer") or {}).get("date") or date
-        subject = (cm.get("message") or "").strip().splitlines()[0].strip()
-        if not subject or _SKIP_RE.match(subject):
-            continue
-        # Убираем префикс «vX.Y: » — версия и так в заголовке карточки.
-        subject = re.sub(r"^v?\d+(\.\d+)+:\s*", "", subject)
-        lines.append(f"• {subject}")
-    return "\n".join(lines[:25]), date
+        pass
+    return urls, dates
 
 
 async def _fetch_items() -> list[dict[str, Any]]:
-    async with httpx.AsyncClient(timeout=10) as cli:
-        # 1) Настоящие релизы (если владелец заполнил описания) — берём их notes.
-        rel = await cli.get(
-            f"https://api.github.com/repos/{REPO}/releases", params={"per_page": 30}
-        )
-        rel_data = rel.json() if rel.status_code == 200 else []
-        rel_notes: dict[str, str] = {}
-        rel_url: dict[str, str] = {}
-        if isinstance(rel_data, list):
-            for r in rel_data:
-                if isinstance(r, dict) and r.get("tag_name") and not r.get("draft"):
-                    rel_notes[r["tag_name"]] = (r.get("body") or "").strip()
-                    rel_url[r["tag_name"]] = r.get("html_url") or ""
+    # Источник версий — курируемый CHANGELOG.md (всегда в образе, без сети).
+    changelog = _local_changelog()  # {'0.8.6': '• ...', ...}
+    urls, dates = await _github_releases()
 
-        # 2) Теги (версии) по убыванию.
-        tg = await cli.get(f"https://api.github.com/repos/{REPO}/tags", params={"per_page": 30})
-        raw = tg.json() if tg.status_code == 200 else []
-        names = [
-            t["name"] for t in raw
-            if isinstance(t, dict) and t.get("name")
-            and re.match(r"^v?\d+(\.\d+)+$", t["name"].strip())
-        ]
-        names = sorted(names, key=_parse, reverse=True)[:12]
-
-        changelog = _local_changelog()
-
-        items: list[dict[str, Any]] = []
-        for i, name in enumerate(names):
-            # Приоритет: курируемый CHANGELOG.md → описание релиза на GitHub →
-            # авто-список из коммитов (запасной вариант).
-            notes = changelog.get(_norm(name), "") or rel_notes.get(name, "")
-            date = None
-            if not notes and i + 1 < len(names):
-                notes, date = await _commit_notes(cli, names[i + 1], name)
-            items.append({
-                "version": name,
-                "name": name,
-                "date": date,
-                "notes": notes,
-                "url": rel_url.get(name) or f"https://github.com/{REPO}/releases/tag/{name}",
-            })
-        return items
+    versions = sorted(changelog, key=_parse, reverse=True)[:20]
+    items: list[dict[str, Any]] = []
+    for v in versions:
+        label = f"v{v}"
+        items.append({
+            "version": label,
+            "name": label,
+            "date": dates.get(v) or None,
+            "notes": changelog.get(v, ""),
+            "url": urls.get(v) or f"https://github.com/{REPO}/releases/tag/{label}",
+        })
+    return items
 
 
 @router.get("")

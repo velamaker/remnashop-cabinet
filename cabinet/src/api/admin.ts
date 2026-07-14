@@ -106,6 +106,7 @@ export interface AdminUser {
   referral_code: string | null;
   created_at: string | null;
   last_login_at?: string | null;
+  expire_at?: string | null; // только при фильтре «истекают»
 }
 
 export interface LoginEvent {
@@ -127,6 +128,20 @@ export interface TrafficByNode {
   days: number;
   total: number;
   nodes: { name: string; country_code: string; total: number }[];
+}
+
+export interface ReferralMember {
+  id: number;
+  name: string;
+  username: string | null;
+  created_at: string | null;
+}
+
+export interface UserReferrals {
+  referrer: ReferralMember | null;
+  referrals: ReferralMember[];
+  second_level: ReferralMember[];
+  counts: { first: number; second: number };
 }
 
 export interface AdminUserDetail {
@@ -219,7 +234,7 @@ export const statisticsApi = {
 export const usersAdminApi = {
   list: (params: {
     limit?: number; offset?: number; search?: string; blocked?: boolean;
-    role?: number; sort?: string; order?: string;
+    role?: number; sort?: string; order?: string; expiring?: number;
   }) => {
     const qs = new URLSearchParams();
     if (params.limit != null) qs.set("limit", String(params.limit));
@@ -229,14 +244,28 @@ export const usersAdminApi = {
     if (params.role != null) qs.set("role", String(params.role));
     if (params.sort) qs.set("sort", params.sort);
     if (params.order) qs.set("order", params.order);
+    if (params.expiring != null) qs.set("expiring_days", String(params.expiring));
     return adminApi.get<PaginatedResponse<AdminUser>>(`/users?${qs}`);
   },
   get: (id: number) => adminApi.get<AdminUserDetail>(`/users/${id}`),
   logins: (id: number) => adminApi.get<LoginHistory>(`/users/${id}/logins`),
+  referrals: (id: number) => adminApi.get<UserReferrals>(`/users/${id}/referrals`),
   trafficByNode: (id: number, days = 30) =>
     adminApi.get<TrafficByNode>(`/users/${id}/traffic-by-node?days=${days}`),
   block: (id: number, is_blocked: boolean) =>
     adminApi.put<{ success: boolean; is_blocked: boolean }>(`/users/${id}/block`, { is_blocked }),
+  bulkAction: (params: {
+    action: "points" | "discount" | "block" | "unblock";
+    value?: number; search?: string; blocked?: boolean; role?: number; expiring?: number;
+  }) =>
+    adminApi.post<{ matched: number; applied: number }>("/users/bulk-action", {
+      action: params.action,
+      value: params.value ?? 0,
+      search: params.search,
+      blocked: params.blocked,
+      role: params.role,
+      expiring_days: params.expiring,
+    }),
   setTrial: (id: number, is_trial_available: boolean) =>
     adminApi.put<{ success: boolean; is_trial_available: boolean }>(
       `/users/${id}/trial`,
@@ -629,6 +658,26 @@ export const serverStatusAdminApi = {
     adminApi.put<ServerStatusConfig>("/server-status", data),
 };
 
+// ---------- Подписка в приложении (настройки панели Remnawave) ----------
+
+export interface SubscriptionAppSettings {
+  profile_title: string | null;
+  support_link: string | null;
+  profile_update_interval: number | null;
+  is_profile_webpage_url_enabled: boolean | null;
+  happ_announce: string | null;
+  happ_routing: string | null;
+  custom_response_headers: Record<string, string> | null;
+  limits: { announce: number; title: number };
+}
+
+export const subscriptionAppAdminApi = {
+  get: () => adminApi.get<SubscriptionAppSettings>("/subscription-app"),
+  update: (data: Partial<Omit<SubscriptionAppSettings, "limits">>) =>
+    adminApi.put<SubscriptionAppSettings>("/subscription-app", data),
+  defaultRouting: () => adminApi.post<{ routing: string }>("/subscription-app/routing/default", {}),
+};
+
 // ---------- Gateways ----------
 
 export interface AdminGateway {
@@ -705,8 +754,34 @@ export interface AdminSubscription {
   expire_at: string | null;
   traffic_limit: number;
   device_limit: number;
+  internal_squads: string[];
+  external_squad: string | null;
   url: string;
   created_at: string | null;
+}
+
+export interface AdminDevice {
+  hwid: string;
+  platform: string | null;
+  device_model: string | null;
+  os_version: string | null;
+  user_agent: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface AdminUserTx {
+  payment_id: string;
+  status: string;
+  gateway_type: string | null;
+  purchase_type: string | null;
+  is_test: boolean;
+  amount: string | null;
+  currency: string | null;
+  plan_name: string | null;
+  plan_duration: number | null;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 export const subscriptionsAdminApi = {
@@ -732,6 +807,28 @@ export const subscriptionsAdminApi = {
     adminApi.post<{ success: boolean; is_trial_available: boolean }>(
       `/subscriptions/user/${userId}/reset-trial`
     ),
+  resetTraffic: (userId: number) =>
+    adminApi.post<{ success: boolean }>(`/subscriptions/user/${userId}/reset-traffic`),
+  reissue: (userId: number) =>
+    adminApi.post<{ success: boolean }>(`/subscriptions/user/${userId}/reissue`),
+  referralReset: (userId: number) =>
+    adminApi.post<{ success: boolean }>(`/subscriptions/user/${userId}/referral-reset`),
+  devices: (userId: number) =>
+    adminApi.get<{ devices: AdminDevice[]; count: number }>(`/subscriptions/user/${userId}/devices`),
+  deleteDevice: (userId: number, hwid: string) =>
+    adminApi.post<{ success: boolean }>(`/subscriptions/user/${userId}/devices/delete`, { hwid }),
+  transactions: (userId: number, limit = 50) =>
+    adminApi.get<{ items: AdminUserTx[] }>(`/subscriptions/user/${userId}/transactions?limit=${limit}`),
+  setTrafficLimit: (userId: number, traffic_limit: number) =>
+    adminApi.post<{ success: boolean }>(`/subscriptions/user/${userId}/traffic-limit`, { traffic_limit }),
+  setDeviceLimit: (userId: number, device_limit: number) =>
+    adminApi.post<{ success: boolean }>(`/subscriptions/user/${userId}/device-limit`, { device_limit }),
+  squadToggle: (userId: number, squad_id: string, external = false) =>
+    adminApi.post<{ success: boolean }>(`/subscriptions/user/${userId}/squad-toggle`, { squad_id, external }),
+  sync: (userId: number, direction: "from_remnawave" | "from_remnashop" = "from_remnawave") =>
+    adminApi.post<{ success: boolean }>(`/subscriptions/user/${userId}/sync`, { direction }),
+  sendMessage: (userId: number, text: string) =>
+    adminApi.post<{ success: boolean; delivered: boolean }>(`/subscriptions/user/${userId}/message`, { text }),
   addPoints: (userId: number, points: number) =>
     adminApi.post<{ success: boolean; points: number }>(
       `/subscriptions/user/${userId}/points`, { points }
@@ -756,6 +853,21 @@ export interface AuditEntry {
 export const auditAdminApi = {
   list: (limit = 100) =>
     adminApi.get<{ items: AuditEntry[] }>(`/audit?limit=${limit}`),
+};
+
+// ---------- История уведомлений админам ----------
+export interface AdminNotification {
+  id: number;
+  title: string;
+  body: string;
+  url: string;
+  created_at: string | null;
+}
+
+export const notificationsAdminApi = {
+  list: (limit = 100) =>
+    adminApi.get<{ items: AdminNotification[] }>(`/notifications?limit=${limit}`),
+  clear: () => adminApi.delete<{ ok: boolean }>("/notifications"),
 };
 
 // ---------- Импорт пользователей (как в боте) ----------

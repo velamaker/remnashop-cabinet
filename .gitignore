@@ -46,6 +46,9 @@ assets/morning_summary.json
 assets/auth.json
 assets/email.json
 assets/info_content.json
+assets/server_status.json
+assets/morning_summary_state.json
+assets/app_links.json
 
 # Editor / OS
 .DS_Store

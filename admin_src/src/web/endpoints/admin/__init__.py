@@ -18,12 +18,14 @@ from .import_users import router as import_users_router
 from .info import router as info_router
 from .menu import router as menu_router
 from .morning_summary import router as morning_summary_router
+from .notifications import router as notifications_router
 from .plans import router as plans_router
 from .promocodes import router as promocodes_router
 from .remnawave import router as remnawave_router
 from .server_status import router as server_status_router
 from .settings import router as settings_router
 from .statistics import router as statistics_router
+from .subscription_app import router as subscription_app_router
 from .subscriptions import router as subscriptions_router
 from .support import router as support_router
 from .topup import router as topup_router
@@ -41,9 +43,11 @@ router.include_router(plans_router)
 router.include_router(broadcasts_router)
 router.include_router(settings_router)
 router.include_router(server_status_router)
+router.include_router(subscription_app_router)
 router.include_router(cashback_router)
 router.include_router(topup_router)
 router.include_router(morning_summary_router)
+router.include_router(notifications_router)
 router.include_router(gateways_router)
 router.include_router(ad_links_router)
 router.include_router(remnawave_router)

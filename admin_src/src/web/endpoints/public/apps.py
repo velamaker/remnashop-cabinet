@@ -56,8 +56,14 @@ def sanitize_custom_apps(raw: Any) -> list[dict[str, Any]]:
 
 
 def load_apps_config() -> dict[str, Any]:
-    """priority: str|None, enabled: list[str]|None (None = все), custom: list."""
-    data: dict[str, Any] = {"priority": None, "enabled": None, "custom": []}
+    """priority: str|None, enabled: list[str]|None (None = все), custom: list,
+    links_source_url: str|None (источник авто-подтяжки ссылок установки)."""
+    data: dict[str, Any] = {
+        "priority": None,
+        "enabled": None,
+        "custom": [],
+        "links_source_url": None,
+    }
     try:
         if APPS_PATH.exists():
             with APPS_PATH.open(encoding="utf-8") as fh:
@@ -70,12 +76,36 @@ def load_apps_config() -> dict[str, Any]:
                 if isinstance(en, list):
                     data["enabled"] = [str(x) for x in en]
                 data["custom"] = sanitize_custom_apps(stored.get("custom"))
+                lsu = stored.get("links_source_url")
+                if lsu is None or isinstance(lsu, str):
+                    data["links_source_url"] = lsu
     except Exception:
         # Битый файл не должен ронять кабинет — отдаём дефолт (все приложения).
         pass
     return data
 
 
+def save_apps_config(data: dict[str, Any]) -> None:
+    """Записать apps.json (только известные поля выбора админа)."""
+    payload = {
+        "priority": data.get("priority"),
+        "enabled": data.get("enabled"),
+        "custom": data.get("custom") or [],
+        "links_source_url": data.get("links_source_url"),
+    }
+    APPS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with APPS_PATH.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=2)
+
+
 @router.get("")
 async def get_apps_config() -> dict[str, Any]:
-    return load_apps_config()
+    # Оверрайды ссылок установки (авто-подтяжка из upstream app-config.json).
+    # Фронт применяет их поверх встроенного каталога (data/apps.ts) по id+платформе.
+    from src.infrastructure.services.overlay_app_links import load_links
+
+    cfg = load_apps_config()
+    links = load_links()
+    cfg["link_overrides"] = links["links"]
+    cfg["links_updated_at"] = links["updated_at"]
+    return cfg

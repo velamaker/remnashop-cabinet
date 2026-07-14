@@ -170,6 +170,20 @@ _SUPPORT_TABLES_DDL = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS ix_balance_topups_user ON balance_topups (user_id)",
+    # История уведомлений админам (web-push «новый тикет» и т.п.). Пишется в
+    # services/overlay_push.py::push_admins_standalone при каждой отправке админам,
+    # даже если ни одного устройства не подписано — чтобы владелец видел ленту.
+    # Показывается в админке (раздел «Уведомления»). Старые чистятся при вставке.
+    """
+    CREATE TABLE IF NOT EXISTS admin_notifications (
+        id         BIGSERIAL PRIMARY KEY,
+        title      VARCHAR(200) NOT NULL DEFAULT '',
+        body       TEXT         NOT NULL DEFAULT '',
+        url        VARCHAR(500) NOT NULL DEFAULT '/',
+        created_at TIMESTAMPTZ  NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_admin_notifications_created ON admin_notifications (created_at DESC)",
 )
 
 

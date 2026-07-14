@@ -178,10 +178,43 @@ async def push_user_standalone(user_id: int, payload: dict) -> int:
         return 0
 
 
+async def _record_admin_notification(session: AsyncSession, payload: dict) -> None:
+    """Пишет уведомление в историю (admin_notifications) + чистит старые.
+
+    Best-effort: если таблицы ещё нет (старый деплой) — молча пропускаем, чтобы
+    не сорвать саму отправку push. Храним последние 500 записей.
+    """
+    try:
+        await session.execute(
+            text(
+                "INSERT INTO admin_notifications (title, body, url) "
+                "VALUES (:t, :b, :u)"
+            ),
+            {
+                "t": str(payload.get("title") or "")[:200],
+                "b": str(payload.get("body") or ""),
+                "u": str(payload.get("url") or "/")[:500],
+            },
+        )
+        await session.execute(
+            text(
+                "DELETE FROM admin_notifications WHERE id <= "
+                "(SELECT id FROM admin_notifications ORDER BY id DESC OFFSET 500 LIMIT 1)"
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 — история не должна ломать push
+        logger.debug(f"push: не смог записать историю уведомления: {exc}")
+
+
 async def push_admins_standalone(payload: dict) -> int:
-    """Web-push всем админам (OWNER/DEV/ADMIN) с push-подписками. Best-effort."""
+    """Web-push всем админам (OWNER/DEV/ADMIN) с push-подписками. Best-effort.
+
+    Помимо отправки пишет уведомление в историю (admin_notifications) — даже если
+    ни одного устройства не подписано, чтобы владелец видел ленту в админке.
+    """
     try:
         async with _get_sessionmaker()() as session:
+            await _record_admin_notification(session, payload)
             rows = (
                 await session.execute(
                     text(

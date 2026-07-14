@@ -77,10 +77,23 @@ async def list_users(
     role: Optional[int] = Query(default=None),
     sort: str = Query(default="created_at"),
     order: str = Query(default="desc"),
+    expiring_days: Optional[int] = Query(default=None, ge=1, le=365),
 ) -> dict[str, Any]:
     # Гибкий фильтр+сортировка. last_login берём из login_events (LEFT JOIN),
     # чтобы можно было сортировать по дате последнего входа.
     where_sql, params = _build_user_where(search, blocked, role)
+
+    # Фильтр «истекают в N дней» (ретеншн): JOIN на подписки, у которых срок ещё
+    # НЕ вышел, но истекает в окне [сейчас; сейчас+N дней]. Берём ближайшую дату.
+    expiring = expiring_days is not None
+    join_sql = ""
+    if expiring:
+        join_sql = (
+            "JOIN (SELECT user_id, min(expire_at) AS expire_at FROM subscriptions "
+            "WHERE expire_at > now() AND expire_at <= now() + make_interval(days => :exp_days) "
+            "GROUP BY user_id) ex ON ex.user_id = u.id"
+        )
+        params["exp_days"] = int(expiring_days)
 
     # Колонка сортировки — строго из белого списка (без SQL-инъекций).
     sort_col = {
@@ -90,23 +103,29 @@ async def list_users(
     }.get(sort, "u.created_at")
     direction = "ASC" if str(order).lower() == "asc" else "DESC"
     nulls = "NULLS LAST" if direction == "DESC" else "NULLS FIRST"
+    # При фильтре «истекают» сортируем по срочности (кто раньше истекает — выше).
+    order_sql = "ex.expire_at ASC" if expiring else f"{sort_col} {direction} {nulls}"
+    expire_col = ", ex.expire_at AS expire_at" if expiring else ""
 
     total = (
-        await session.execute(text(f"SELECT count(*) FROM users u {where_sql}"), params)
+        await session.execute(
+            text(f"SELECT count(*) FROM users u {join_sql} {where_sql}"), params
+        )
     ).scalar_one()
 
     rows = (
         await session.execute(
             text(
                 f"""
-                SELECT u.id AS id, ll.last_login AS last_login
+                SELECT u.id AS id, ll.last_login AS last_login{expire_col}
                 FROM users u
                 LEFT JOIN (
                     SELECT user_id, max(created_at) AS last_login
                     FROM login_events GROUP BY user_id
                 ) ll ON ll.user_id = u.id
+                {join_sql}
                 {where_sql}
-                ORDER BY {sort_col} {direction} {nulls}, u.id DESC
+                ORDER BY {order_sql}, u.id DESC
                 LIMIT :limit OFFSET :offset
                 """
             ),
@@ -116,6 +135,7 @@ async def list_users(
 
     ids = [r.id for r in rows]
     last_map = {r.id: r.last_login for r in rows}
+    expire_map = {r.id: getattr(r, "expire_at", None) for r in rows} if expiring else {}
     by_id: dict[int, UserDto] = {}
     if ids:
         for u in await user_dao.get_by_ids(ids):
@@ -129,6 +149,8 @@ async def list_users(
         d = _user_to_dict(u)
         m = last_map.get(uid)
         d["last_login_at"] = m.isoformat() if m else None
+        exp = expire_map.get(uid)
+        d["expire_at"] = exp.isoformat() if exp else None
         items.append(d)
 
     if is_readonly_admin(admin):
@@ -321,6 +343,60 @@ async def get_user(
     }
 
 
+@router.get("/{user_id}/referrals")
+@inject
+async def user_referrals(
+    user_id: int,
+    admin: AdminUser,
+    session: FromDishka[AsyncSession],
+) -> dict[str, Any]:
+    """Реф-связи пользователя: кто пригласил (referrer, level FIRST) + кого пригласил
+    (прямые FIRST и второго уровня SECOND). Для read-only админа username маскируется."""
+    readonly = is_readonly_admin(admin)
+
+    referrer_row = (
+        await session.execute(
+            text(
+                "SELECT u.id, u.name, u.username, r.created_at "
+                "FROM referrals r JOIN users u ON u.id = r.referrer_id "
+                "WHERE r.referred_id = :uid AND r.level = 'FIRST' LIMIT 1"
+            ),
+            {"uid": user_id},
+        )
+    ).first()
+
+    rows = (
+        await session.execute(
+            text(
+                "SELECT u.id, u.name, u.username, r.level::text AS level, r.created_at "
+                "FROM referrals r JOIN users u ON u.id = r.referred_id "
+                "WHERE r.referrer_id = :uid ORDER BY r.created_at DESC LIMIT 200"
+            ),
+            {"uid": user_id},
+        )
+    ).all()
+
+    def uname(v: Any) -> Optional[str]:
+        return None if readonly else v
+
+    def member(r: Any) -> dict[str, Any]:
+        return {
+            "id": r.id,
+            "name": r.name,
+            "username": uname(r.username),
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+
+    first = [member(r) for r in rows if r.level == "FIRST"]
+    second = [member(r) for r in rows if r.level == "SECOND"]
+    return {
+        "referrer": ({**member(referrer_row)}) if referrer_row else None,
+        "referrals": first,
+        "second_level": second,
+        "counts": {"first": len(first), "second": len(second)},
+    }
+
+
 @router.get("/{user_id}/logins")
 @inject
 async def user_logins(
@@ -451,6 +527,83 @@ async def toggle_block_user(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Не удалось обновить")
     await session.commit()
     return {"success": True, "is_blocked": updated.is_blocked}
+
+
+# ─── Массовые действия над сегментом (тот же фильтр, что и список) ─────────────
+
+_BULK_CAP = 2000  # предохранитель: за раз обрабатываем не больше
+
+
+class BulkActionRequest(BaseModel):
+    action: str  # points | discount | block | unblock
+    value: int = 0
+    # Сегмент задаётся теми же фильтрами, что и список пользователей.
+    search: Optional[str] = None
+    blocked: Optional[bool] = None
+    role: Optional[int] = None
+    expiring_days: Optional[int] = None
+
+
+@router.post("/bulk-action")
+@inject
+async def bulk_action(
+    body: BulkActionRequest,
+    admin: AdminUser,
+    user_dao: FromDishka[UserDao],
+    session: FromDishka[AsyncSession],
+) -> dict[str, Any]:
+    action = body.action
+    value = int(body.value)
+    if action not in ("points", "discount", "block", "unblock"):
+        raise HTTPException(status_code=400, detail="Неизвестное действие")
+    if action == "discount" and not (0 <= value <= 100):
+        raise HTTPException(status_code=400, detail="Скидка должна быть 0..100%")
+    if action == "points" and value == 0:
+        raise HTTPException(status_code=400, detail="Укажите ненулевое число баллов")
+
+    # Сегмент. Массово трогаем ТОЛЬКО обычных пользователей (не персонал).
+    where_sql, params = _build_user_where(body.search, body.blocked, body.role)
+    where_sql = (where_sql + " AND u.role = 'USER'") if where_sql else "WHERE u.role = 'USER'"
+    join_sql = ""
+    if body.expiring_days:
+        join_sql = (
+            "JOIN (SELECT user_id, min(expire_at) AS expire_at FROM subscriptions "
+            "WHERE expire_at > now() AND expire_at <= now() + make_interval(days => :exp_days) "
+            "GROUP BY user_id) ex ON ex.user_id = u.id"
+        )
+        params["exp_days"] = int(body.expiring_days)
+
+    ids = [
+        r.id
+        for r in (
+            await session.execute(
+                text(f"SELECT u.id FROM users u {join_sql} {where_sql} ORDER BY u.id LIMIT {_BULK_CAP}"),
+                params,
+            )
+        ).all()
+    ]
+    if not ids:
+        return {"matched": 0, "applied": 0}
+
+    applied = 0
+    for uid in ids:
+        if uid == admin.id:
+            continue
+        u = await user_dao.get_by_id(uid)
+        if not u:
+            continue
+        if action == "points":
+            u.points = max(0, (u.points or 0) + value)
+        elif action == "discount":
+            u.personal_discount = value
+        elif action == "block":
+            u.is_blocked = True
+        else:  # unblock
+            u.is_blocked = False
+        if await user_dao.update(u):
+            applied += 1
+    await session.commit()
+    return {"matched": len(ids), "applied": applied}
 
 
 class SetTrialRequest(BaseModel):

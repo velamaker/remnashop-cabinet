@@ -107,8 +107,17 @@ export function ConnectGuide({ subUrl }: { subUrl: string }) {
   const priority = config?.priority || DEFAULT_PRIORITY;
 
   const apps = useMemo(() => {
+    // Оверрайды ссылок установки (авто-подтяжка из upstream app-config.json).
+    // Применяем поверх встроенного каталога по id (lower) + платформе — чтобы
+    // ссылки (особенно iOS App Store) не устаревали при переиздании в сторе.
+    const overrides = config?.link_overrides ?? {};
+    const withOverrides = (a: AppEntry): AppEntry => {
+      const ov = overrides[a.id.toLowerCase()];
+      if (!ov || Object.keys(ov).length === 0) return a;
+      return { ...a, install: { ...a.install, ...(ov as Partial<Record<Platform, string>>) } };
+    };
     // 1) встроенные приложения под выбранную платформу
-    let list = APPS.filter((a) => a.platforms.includes(platform));
+    let list = APPS.filter((a) => a.platforms.includes(platform)).map(withOverrides);
     // 2) если админ ограничил список — оставляем только включённые
     if (config?.enabled) {
       const allow = new Set(config.enabled);

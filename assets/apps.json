@@ -3,5 +3,7 @@
   "enabled": [
     "happ",
     "incy"
-  ]
+  ],
+  "custom": [],
+  "links_source_url": "https://raw.githubusercontent.com/remnawave/subscription-page/main/frontend/public/assets/app-config.json"
 }

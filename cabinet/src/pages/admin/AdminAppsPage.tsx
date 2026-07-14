@@ -1,10 +1,16 @@
 import { useEffect, useState } from "react";
-import { Save, CheckCircle2, Star, Smartphone, Plus, Trash2 } from "lucide-react";
+import { Save, CheckCircle2, Star, Smartphone, Plus, Trash2, RefreshCw, Link2 } from "lucide-react";
 import { appsAdminApi, type CustomApp } from "@/api/apps";
 import { APPS, PLATFORMS, DEFAULT_PRIORITY } from "@/data/apps";
 import { ApiError } from "@/types/api";
 
 const EMPTY_CUSTOM = { name: "", desc: "", deep_link: "", install_url: "", platforms: [] as string[] };
+
+// Upstream-источник актуальных ссылок установки (Remnawave его поддерживает).
+// Локальная страница подписки (sub-домен) не отдаёт app-config.json наружу,
+// поэтому по умолчанию берём официальный репозиторий.
+const RECOMMENDED_LINKS_SOURCE =
+  "https://raw.githubusercontent.com/remnawave/subscription-page/main/frontend/public/assets/app-config.json";
 
 export default function AdminAppsPage() {
   const [enabled, setEnabled] = useState<Set<string>>(new Set());
@@ -15,6 +21,11 @@ export default function AdminAppsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Авто-подтяжка ссылок установки из upstream app-config.json.
+  const [linksSourceUrl, setLinksSourceUrl] = useState("");
+  const [linksUpdatedAt, setLinksUpdatedAt] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
 
   useEffect(() => {
     appsAdminApi
@@ -24,10 +35,28 @@ export default function AdminAppsPage() {
         setEnabled(new Set(cfg.enabled ?? APPS.map((a) => a.id)));
         setPriority(cfg.priority);
         setCustom(cfg.custom ?? []);
+        // Пусто → подставляем рекомендуемый upstream-источник (готов к «Обновить»).
+        setLinksSourceUrl(cfg.links_source_url || RECOMMENDED_LINKS_SOURCE);
+        setLinksUpdatedAt(cfg.links_updated_at ?? null);
       })
       .catch((e) => setError(e instanceof ApiError ? e.detail : "Ошибка загрузки"))
       .finally(() => setLoading(false));
   }, []);
+
+  const refreshLinks = async () => {
+    setRefreshing(true);
+    setRefreshMsg(null);
+    setError(null);
+    try {
+      const r = await appsAdminApi.refreshLinks(linksSourceUrl.trim() || undefined);
+      setLinksUpdatedAt(r.updated_at);
+      setRefreshMsg(`Обновлено ссылок для ${r.count} приложений: ${r.apps.join(", ")}`);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "Не удалось обновить ссылки");
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const toggleDraftPlatform = (p: string) =>
     setDraft((d) => ({
@@ -77,6 +106,7 @@ export default function AdminAppsPage() {
         priority: priority || null,
         enabled: Array.from(enabled),
         custom,
+        links_source_url: linksSourceUrl.trim() || null,
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -143,10 +173,10 @@ export default function AdminAppsPage() {
                   className="h-4 w-4 accent-[var(--accent)]"
                 />
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-fg">{app.name}</span>
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-sm font-semibold text-fg">{app.name}</span>
                     {isPriority && (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent-subtle px-2 py-0.5 text-[10px] font-medium text-accent">
+                      <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-accent/30 bg-accent-subtle px-2 py-0.5 text-[10px] font-medium text-accent">
                         <Star className="h-3 w-3" />
                         Рекомендуем
                       </span>
@@ -181,6 +211,46 @@ export default function AdminAppsPage() {
         Если не отмечено ни одно приложение, у пользователей будет пусто — оставьте
         хотя бы одно.
       </p>
+
+      {/* Авто-подтяжка ссылок установки */}
+      <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-fg">
+          <Link2 className="h-4 w-4 text-accent" />
+          Актуальные ссылки установки
+        </h2>
+        <p className="mt-0.5 text-xs text-fg-muted">
+          Ссылки на скачивание (особенно iOS App Store) меняются при переиздании
+          приложения в сторе. Источник <span className="font-mono">app-config.json</span>{" "}
+          от Remnawave подтягивается автоматически (раз в сутки) и заменяет устаревшие
+          встроенные ссылки по совпадающим приложениям (Happ, Streisand, Shadowrocket
+          и др.). По умолчанию — официальный репозиторий Remnawave; можно указать свой.
+        </p>
+
+        <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+          <input
+            className="input flex-1"
+            placeholder="https://sub.example.com/assets/app-config.json"
+            value={linksSourceUrl}
+            onChange={(e) => setLinksSourceUrl(e.target.value)}
+          />
+          <button
+            type="button"
+            onClick={refreshLinks}
+            disabled={refreshing || !linksSourceUrl.trim()}
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-border-subtle bg-bg px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-overlay disabled:opacity-50"
+          >
+            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+            {refreshing ? "Обновление…" : "Обновить сейчас"}
+          </button>
+        </div>
+
+        <p className="mt-2 text-xs text-fg-subtle">
+          {linksUpdatedAt
+            ? `Ссылки обновлены: ${new Date(linksUpdatedAt).toLocaleString("ru")}`
+            : "Ссылки ещё не подтягивались — сохраните URL и нажмите «Обновить сейчас»."}
+        </p>
+        {refreshMsg && <p className="mt-1 text-xs text-success">{refreshMsg}</p>}
+      </section>
 
       {/* Свои приложения */}
       <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">

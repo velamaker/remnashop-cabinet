@@ -97,25 +97,30 @@ async def my_servers(
             "host": getattr(n, "address", "") or "",
         }
 
-    # Привязка по подписке: оставляем только ноды сквадов активной подписки.
+    # Привязка по подписке: показываем только ноды, доступные пользователю.
+    # Берём их напрямую через /users/{uuid}/accessible-nodes (одна точная ручка
+    # Remnawave) — надёжнее ручного обхода сквадов (у которого форма ответа
+    # плавала между версиями SDK и давала пустой список).
     if cfg["bind_to_subscription"]:
-        allowed: set[str] = set()
         subscription = await subscription_dao.get_current(user.id)
+        allowed: set[str] = set()
         if subscription is not None:
-            remna_user = await remnawave.get_user_by_uuid(subscription.user_remna_id)
-            squads = getattr(remna_user, "active_internal_squads", None) or [] if remna_user else []
-            for squad in squads:
-                squad_uuid = getattr(squad, "uuid", None)
-                if squad_uuid is None:
-                    continue
-                try:
-                    resp = await sdk.internal_squads.get_accessible_nodes(squad_uuid)
-                except Exception:
-                    continue
-                for acc in getattr(resp, "accessible_nodes", None) or []:
-                    allowed.add(str(getattr(acc, "uuid", "") or ""))
-        # нет подписки/сквадов → allowed пуст → серверов не показываем
-        nodes = [v for k, v in all_nodes.items() if k in allowed]
+            try:
+                acc = await sdk.users.get_user_accessible_nodes(subscription.user_remna_id)
+                for n in getattr(acc, "nodes", None) or []:
+                    allowed.add(str(getattr(n, "uuid", "") or ""))
+            except Exception:
+                allowed = set()
+
+        if allowed:
+            nodes = [v for k, v in all_nodes.items() if k in allowed]
+        elif subscription is not None:
+            # Есть активная подписка, но точный список нод не получили (пустой
+            # ответ/несовместимость SDK) — показываем все ноды, а не пустоту.
+            # Фикс: «подписка есть, а серверов нет».
+            nodes = list(all_nodes.values())
+        else:
+            nodes = []  # нет активной подписки → серверов не показываем
     else:
         nodes = list(all_nodes.values())
 
