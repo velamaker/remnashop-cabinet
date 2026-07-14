@@ -422,7 +422,13 @@ export default function AdminPromocodesPage() {
                     <td className="px-4 py-3">
                       <span className="font-mono font-semibold text-fg">{p.code}</span>
                     </td>
-                    <td className="px-4 py-3 text-fg-muted">{REWARD_LABEL[p.reward_type] ?? p.reward_type}</td>
+                    <td className="px-4 py-3 text-fg-muted">
+                      {REWARD_LABEL[p.reward_type] ?? p.reward_type}
+                      {/* Моб.: значение/активации/срок скрыты столбцами — показываем строкой */}
+                      <div className="mt-0.5 text-[11px] text-fg-subtle md:hidden">
+                        {rewardValueText(p)} · {p.total_activations ?? 0}{p.max_activations != null ? `/${p.max_activations}` : ""} акт.{p.expires_at ? ` · до ${formatDate(p.expires_at)}` : ""}
+                      </div>
+                    </td>
                     <td className="px-4 py-3 text-fg-muted hidden sm:table-cell">
                       {rewardValueText(p)}
                     </td>

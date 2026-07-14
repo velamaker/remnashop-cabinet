@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { NavLink, useNavigate, useLocation } from "react-router-dom";
 import { clsx } from "clsx";
 import {
@@ -34,6 +34,7 @@ import {
   Activity,
   PanelLeftClose,
   PanelLeftOpen,
+  Bell,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
@@ -97,6 +98,7 @@ export const navGroups: { title: string; items: NavItem[] }[] = [
       { to: "/admin/remnawave", icon: Waves, label: "RemnaWave", section: "remnawave" },
       { to: "/admin/auth", icon: KeyRound, label: "Вход через Telegram", section: "settings" },
       { to: "/admin/settings", icon: Settings, label: "Настройки", section: "settings" },
+      { to: "/admin/notifications", icon: Bell, label: "Уведомления", section: "settings" },
       { to: "/admin/summary", icon: Sunrise, label: "Утренняя сводка", section: "settings" },
       { to: "/admin/audit", icon: ShieldAlert, label: "Аудит", section: "audit" },
       { to: "/admin/updates", icon: Sparkles, label: "Обновления", section: "updates" },
@@ -162,6 +164,15 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const drawerNavRef = useRef<HTMLElement>(null);
+  // При открытии меню — скролл к активному пункту (а не всегда наверх).
+  useEffect(() => {
+    if (!menuOpen) return;
+    const t = setTimeout(() => {
+      drawerNavRef.current?.querySelector('[aria-current="page"]')?.scrollIntoView({ block: "center" });
+    }, 0);
+    return () => clearTimeout(t);
+  }, [menuOpen]);
   // Свёрнутый сайдбar (иконки-только) — навигация есть на главной-лаунчере.
   // По умолчанию свёрнут; выбор запоминаем.
   const [collapsed, setCollapsed] = useState(() => {
@@ -280,7 +291,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             className="absolute inset-0 bg-black/40 animate-fade-in"
             onClick={() => setMenuOpen(false)}
           />
-          <aside className="absolute left-0 top-0 flex h-full w-72 max-w-[82%] flex-col overflow-y-auto border-r border-[var(--border)] bg-bg px-2 py-4">
+          <aside className="absolute left-0 top-0 flex h-full w-72 max-w-[82%] flex-col overflow-y-auto border-r border-[var(--border)] bg-bg px-2 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))]">
             <div className="mb-4 flex items-center justify-between px-2.5">
               <div className="flex items-center gap-2">
                 <div className="flex h-6 w-6 items-center justify-center rounded-md bg-danger/10 text-danger">
@@ -297,7 +308,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
               </button>
             </div>
 
-            <nav className="flex flex-1 flex-col gap-0.5">
+            <nav ref={drawerNavRef} className="flex flex-1 flex-col gap-0.5">
               <GroupedNav onNavigate={() => setMenuOpen(false)} itemPad="py-2.5" canSection={canSection} />
             </nav>
 

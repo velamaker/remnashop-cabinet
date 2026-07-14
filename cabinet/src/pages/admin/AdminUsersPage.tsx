@@ -1,12 +1,13 @@
 import { useEffect, useState, useCallback } from "react";
 import {
   Search, ChevronLeft, ChevronRight, AlertCircle, X, Download,
-  CalendarPlus, Trash2, Ban, CheckCircle, Gift, RefreshCw, Star, ChevronDown, ChevronUp, LogIn, Gauge, Wallet,
+  CalendarPlus, Trash2, Ban, CheckCircle, Gift, RefreshCw, Star, ChevronDown, ChevronUp, LogIn, Gauge, Wallet, Link2,
 } from "lucide-react";
 import {
   usersAdminApi, subscriptionsAdminApi, plansAdminApi, grantsAdminApi,
   type AdminUser, type AdminUserDetail, type AdminSubscription, type AdminPlan,
   type LoginHistory, type TrafficByNode, type GrantCatalog, type GrantPreset, type UserGrant,
+  type AdminDevice, type AdminUserTx, type AdminSquadsResponse,
 } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { formatDate } from "@/lib/format";
@@ -213,6 +214,42 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
           <p className="mt-1.5 text-[11px] text-fg-subtle">В рублях. Положительное — начислить, отрицательное — списать (ниже 0 не уходит).</p>
         </div>
 
+        {/* Обслуживание подписки (паритет с ботом) */}
+        <div className="rounded-xl border border-[var(--border)] p-4">
+          <p className="mb-2 text-xs font-semibold text-fg-subtle">Действия</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => run(() => subscriptionsAdminApi.resetTraffic(userId), "traffic")}
+              disabled={action !== null || !sub}
+              className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-fg-muted hover:text-fg hover:bg-bg-raised disabled:opacity-40 transition-colors"
+            >
+              <Gauge className="h-3 w-3" />{action === "traffic" ? "…" : "Сбросить трафик"}
+            </button>
+            <button
+              onClick={() => { if (confirm("Переиздать ссылку подписки? Старая ссылка перестанет работать — клиенты придётся переподключить.")) run(() => subscriptionsAdminApi.reissue(userId), "reissue"); }}
+              disabled={action !== null || !sub}
+              className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-fg-muted hover:text-fg hover:bg-bg-raised disabled:opacity-40 transition-colors"
+            >
+              <Link2 className="h-3 w-3" />{action === "reissue" ? "…" : "Переиздать ссылку"}
+            </button>
+            <button
+              onClick={() => { if (confirm("Сбросить реферальный код пользователя? Старая реф-ссылка перестанет работать.")) run(() => subscriptionsAdminApi.referralReset(userId), "refreset"); }}
+              disabled={action !== null}
+              className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-fg-muted hover:text-fg hover:bg-bg-raised disabled:opacity-40 transition-colors"
+            >
+              <Gift className="h-3 w-3" />{action === "refreset" ? "…" : "Сбросить реф-код"}
+            </button>
+            <button
+              onClick={() => run(() => subscriptionsAdminApi.sync(userId, "from_remnawave"), "sync")}
+              disabled={action !== null || !sub}
+              title="Подтянуть данные подписки из панели Remnawave"
+              className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-fg-muted hover:text-fg hover:bg-bg-raised disabled:opacity-40 transition-colors"
+            >
+              <RefreshCw className="h-3 w-3" />{action === "sync" ? "…" : "Синхронизировать"}
+            </button>
+          </div>
+        </div>
+
         {/* Danger actions */}
         <div className="rounded-xl border border-[var(--border)] p-4">
           <p className="mb-2 text-xs font-semibold text-fg-subtle">Опасные действия</p>
@@ -260,6 +297,258 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Limits & squads */}
+      {sub && <LimitsAndSquadsBlock userId={userId} sub={sub} onUpdated={() => { load(); onUpdated(); }} />}
+
+      {/* Devices */}
+      <DevicesBlock userId={userId} />
+
+      {/* Transactions */}
+      <UserTxBlock userId={userId} />
+
+      {/* Send message */}
+      <SendMessageBlock userId={userId} />
+    </div>
+  );
+}
+
+// ─── Устройства пользователя ─────────────────────────────────────────────────
+
+function DevicesBlock({ userId }: { userId: number }) {
+  const [open, setOpen] = useState(false);
+  const [devices, setDevices] = useState<AdminDevice[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = () =>
+    subscriptionsAdminApi.devices(userId).then((r) => setDevices(r.devices)).catch(() => setDevices([]));
+  const toggle = () => { const n = !open; setOpen(n); if (n && devices === null) load(); };
+  const del = async (hwid: string) => {
+    if (!confirm("Удалить это устройство пользователя?")) return;
+    setBusy(hwid);
+    try { await subscriptionsAdminApi.deleteDevice(userId, hwid); await load(); }
+    catch { /* backend вернёт 403 для readonly */ }
+    finally { setBusy(null); }
+  };
+
+  return (
+    <div>
+      <button onClick={toggle} className="flex items-center gap-1 text-xs text-fg-muted hover:text-fg transition-colors">
+        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+        Устройства{devices ? ` (${devices.length})` : ""}
+      </button>
+      {open && (
+        <div className="mt-2 space-y-1">
+          {devices === null ? (
+            <p className="text-xs text-fg-subtle">Загрузка…</p>
+          ) : devices.length === 0 ? (
+            <p className="text-xs text-fg-subtle">Устройств нет</p>
+          ) : devices.map((d) => (
+            <div key={d.hwid} className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-xs">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-fg">{d.platform || "—"}{d.device_model ? ` · ${d.device_model}` : ""}</p>
+                <p className="truncate text-fg-subtle">{d.os_version || d.user_agent || d.hwid}</p>
+              </div>
+              <button
+                onClick={() => del(d.hwid)}
+                disabled={busy !== null}
+                className="flex shrink-0 items-center gap-1 rounded-lg border border-danger/20 bg-danger/8 px-2 py-1 text-danger hover:bg-danger/15 disabled:opacity-40 transition-colors"
+              >
+                <Trash2 className="h-3 w-3" />{busy === d.hwid ? "…" : "Удалить"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Платежи пользователя ────────────────────────────────────────────────────
+
+function UserTxBlock({ userId }: { userId: number }) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<AdminUserTx[] | null>(null);
+
+  const toggle = () => {
+    const n = !open;
+    setOpen(n);
+    if (n && items === null) {
+      subscriptionsAdminApi.transactions(userId).then((r) => setItems(r.items)).catch(() => setItems([]));
+    }
+  };
+
+  return (
+    <div>
+      <button onClick={toggle} className="flex items-center gap-1 text-xs text-fg-muted hover:text-fg transition-colors">
+        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+        Платежи{items ? ` (${items.length})` : ""}
+      </button>
+      {open && (
+        <div className="mt-2 space-y-1">
+          {items === null ? (
+            <p className="text-xs text-fg-subtle">Загрузка…</p>
+          ) : items.length === 0 ? (
+            <p className="text-xs text-fg-subtle">Платежей нет</p>
+          ) : items.map((t) => (
+            <div key={t.payment_id} className="flex items-center justify-between gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-xs">
+              <span className="min-w-0 flex-1 truncate text-fg-muted">
+                {t.plan_name ?? t.purchase_type ?? "—"}{t.is_test ? " · тест" : ""}
+              </span>
+              <span className="shrink-0 text-fg">{t.amount ? `${t.amount} ${t.currency ?? ""}` : "—"}</span>
+              <span className={`shrink-0 ${t.status === "COMPLETED" ? "text-success" : t.status === "FAILED" || t.status === "CANCELED" ? "text-danger" : "text-fg-subtle"}`}>
+                {t.status}
+              </span>
+              {t.created_at && <span className="shrink-0 text-fg-subtle">{formatDate(t.created_at)}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Лимиты и серверы (сквады) ───────────────────────────────────────────────
+
+function LimitsAndSquadsBlock({ userId, sub, onUpdated }: { userId: number; sub: AdminSubscription; onUpdated: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [traffic, setTraffic] = useState(String(sub.traffic_limit ?? 0));
+  const [devices, setDevices] = useState(String(sub.device_limit ?? 0));
+  const [squads, setSquads] = useState<AdminSquadsResponse | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const toggle = () => {
+    const n = !open;
+    setOpen(n);
+    if (n && squads === null) {
+      plansAdminApi.squads().then(setSquads).catch(() => setSquads({ internal: [], external: [], available: false }));
+    }
+  };
+
+  const act = async (key: string, fn: () => Promise<unknown>) => {
+    setBusy(key);
+    setMsg(null);
+    try { await fn(); setMsg("Сохранено"); onUpdated(); }
+    catch (e) { setMsg(e instanceof ApiError ? e.detail : "Ошибка"); }
+    finally { setBusy(null); }
+  };
+
+  const squadChip = (uuid: string, name: string, on: boolean, external: boolean) => (
+    <button
+      key={uuid}
+      disabled={busy !== null}
+      onClick={() => act((external ? "ex-" : "sq-") + uuid, () => subscriptionsAdminApi.squadToggle(userId, uuid, external))}
+      className={`rounded-lg border px-2 py-1 text-xs transition-colors disabled:opacity-40 ${on ? "border-accent/40 bg-accent/10 text-accent" : "border-[var(--border)] text-fg-muted hover:text-fg"}`}
+    >
+      {on ? "✓ " : ""}{name}
+    </button>
+  );
+
+  return (
+    <div>
+      <button onClick={toggle} className="flex items-center gap-1 text-xs text-fg-muted hover:text-fg transition-colors">
+        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+        Лимиты и серверы
+      </button>
+      {open && (
+        <div className="mt-2 space-y-3 rounded-xl border border-[var(--border)] p-3">
+          {msg && <p className="text-xs text-fg-subtle">{msg}</p>}
+          <div className="flex items-center gap-2">
+            <label className="w-24 text-xs text-fg-muted">Трафик, ГБ</label>
+            <input type="number" min={0} value={traffic} onChange={(e) => setTraffic(e.target.value)}
+              className="w-24 rounded-lg border border-[var(--border)] bg-bg px-2 py-1 text-xs text-fg" />
+            <span className="text-[10px] text-fg-subtle">0 = ∞</span>
+            <button onClick={() => act("traffic", () => subscriptionsAdminApi.setTrafficLimit(userId, Math.max(0, parseInt(traffic, 10) || 0)))}
+              disabled={busy !== null}
+              className="ml-auto rounded-lg bg-accent/10 px-3 py-1 text-xs text-accent hover:bg-accent/20 disabled:opacity-40">
+              {busy === "traffic" ? "…" : "OK"}
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="w-24 text-xs text-fg-muted">Устройства</label>
+            <input type="number" min={0} value={devices} onChange={(e) => setDevices(e.target.value)}
+              className="w-24 rounded-lg border border-[var(--border)] bg-bg px-2 py-1 text-xs text-fg" />
+            <span className="text-[10px] text-fg-subtle">0 = ∞</span>
+            <button onClick={() => act("devices", () => subscriptionsAdminApi.setDeviceLimit(userId, Math.max(0, parseInt(devices, 10) || 0)))}
+              disabled={busy !== null}
+              className="ml-auto rounded-lg bg-accent/10 px-3 py-1 text-xs text-accent hover:bg-accent/20 disabled:opacity-40">
+              {busy === "devices" ? "…" : "OK"}
+            </button>
+          </div>
+          {squads && squads.internal.length > 0 && (
+            <div>
+              <p className="mb-1 text-xs text-fg-muted">Внутренние сквады</p>
+              <div className="flex flex-wrap gap-1.5">
+                {squads.internal.map((s) => squadChip(s.uuid, s.name, sub.internal_squads.includes(s.uuid), false))}
+              </div>
+            </div>
+          )}
+          {squads && squads.external.length > 0 && (
+            <div>
+              <p className="mb-1 text-xs text-fg-muted">Внешние сквады</p>
+              <div className="flex flex-wrap gap-1.5">
+                {squads.external.map((s) => squadChip(s.uuid, s.name, sub.external_squad === s.uuid, true))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Сообщение пользователю ──────────────────────────────────────────────────
+
+function SendMessageBlock({ userId }: { userId: number }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const send = async () => {
+    const t = text.trim();
+    if (!t) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await subscriptionsAdminApi.sendMessage(userId, t);
+      setMsg(r.delivered ? "Отправлено ✓" : "Не доставлено — у пользователя нет привязанного Telegram");
+      if (r.delivered) setText("");
+    } catch (e) {
+      setMsg(e instanceof ApiError ? e.detail : "Ошибка");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <button onClick={() => setOpen(!open)} className="flex items-center gap-1 text-xs text-fg-muted hover:text-fg transition-colors">
+        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+        Сообщение пользователю
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2 rounded-xl border border-[var(--border)] p-3">
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={3}
+            placeholder="Текст сообщения (уйдёт в Telegram пользователю)"
+            className="w-full rounded-lg border border-[var(--border)] bg-bg px-2 py-1.5 text-xs text-fg"
+          />
+          <div className="flex items-center gap-2">
+            {msg && <span className="text-xs text-fg-subtle">{msg}</span>}
+            <button
+              onClick={send}
+              disabled={busy || !text.trim()}
+              className="ml-auto rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-40 transition-colors"
+            >
+              {busy ? "…" : "Отправить"}
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -533,6 +822,15 @@ function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClo
 
   useEffect(() => { load(); }, [load]);
 
+  // Моб. фикс: блокируем скролл фона (иначе на iOS «зависает») + Esc закрывает.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => { document.body.style.overflow = prev; window.removeEventListener("keydown", onKey); };
+  }, [onClose]);
+
   const toggleBlock = async () => {
     if (!detail) return;
     const willBlock = !detail.user.is_blocked;
@@ -559,10 +857,10 @@ function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClo
   const roleInfo = u ? (ROLE_LABELS[u.role] ?? { label: `Роль ${u.role}`, cls: "text-fg-muted" }) : null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-4 pt-8 backdrop-blur-sm overflow-y-auto">
-      <div className="w-full max-w-2xl rounded-xl border border-[var(--border)] bg-bg shadow-raised mb-10">
+    <div onClick={onClose} className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-3 pt-6 sm:p-4 sm:pt-8">
+      <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90dvh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-bg shadow-raised">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-4">
+        <div className="flex flex-shrink-0 items-center justify-between border-b border-[var(--border)] px-5 py-4">
           <div className="flex items-center gap-3">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/10 text-accent text-sm font-semibold">
               {u?.name?.[0]?.toUpperCase() ?? "?"}
@@ -572,9 +870,10 @@ function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClo
               {u?.username && <p className="text-xs text-fg-muted">@{u.username}</p>}
             </div>
           </div>
-          <button onClick={onClose} className="rounded-lg p-1 text-fg-muted hover:text-fg"><X className="h-5 w-5" /></button>
+          <button onClick={onClose} aria-label="Закрыть" className="-m-1 rounded-lg p-2 text-fg-muted hover:text-fg"><X className="h-5 w-5" /></button>
         </div>
 
+        <div className="flex-1 min-h-0 overflow-y-auto">
         {loading ? (
           <div className="flex justify-center py-10"><div className="h-6 w-6 animate-spin rounded-full border-2 border-border border-t-accent" /></div>
         ) : error ? (
@@ -681,6 +980,7 @@ function UserDetailModal({ userId, onClose, onUpdated }: { userId: number; onClo
             </div>
           </>
         ) : null}
+        </div>
       </div>
     </div>
   );
@@ -698,8 +998,13 @@ export default function AdminUsersPage() {
   const [statusFilter, setStatusFilter] = useState("");  // "", "active", "blocked"
   const [sortBy, setSortBy] = useState("created_at");    // created_at | last_login | name
   const [sortOrder, setSortOrder] = useState("desc");    // asc | desc
+  const [expiring, setExpiring] = useState("");          // "" = все, иначе N дней
   const [offset, setOffset] = useState(0);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [bulkAction, setBulkAction] = useState("");
+  const [bulkValue, setBulkValue] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkMsg, setBulkMsg] = useState<string | null>(null);
   const { isReadonlyAdmin } = useAuth();
 
   const load = useCallback(() => {
@@ -710,11 +1015,12 @@ export default function AdminUsersPage() {
       role: roleFilter ? Number(roleFilter) : undefined,
       blocked: statusFilter === "blocked" ? true : statusFilter === "active" ? false : undefined,
       sort: sortBy, order: sortOrder,
+      expiring: expiring ? Number(expiring) : undefined,
     })
       .then(r => { setUsers(r.items); setTotal(r.total); })
       .catch(e => setError(e instanceof ApiError ? e.detail : "Ошибка"))
       .finally(() => setLoading(false));
-  }, [offset, search, roleFilter, statusFilter, sortBy, sortOrder]);
+  }, [offset, search, roleFilter, statusFilter, sortBy, sortOrder, expiring]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -736,6 +1042,35 @@ export default function AdminUsersPage() {
       setError(e instanceof Error ? e.message : "Экспорт не удался");
     } finally {
       setExporting(false);
+    }
+  };
+
+  const BULK_LABELS: Record<string, string> = {
+    points: "начислить баллы", discount: "выставить персональную скидку",
+    block: "заблокировать", unblock: "разблокировать",
+  };
+  const applyBulk = async () => {
+    if (!bulkAction) return;
+    const v = Number(bulkValue) || 0;
+    if (bulkAction === "points" && v === 0) { setBulkMsg("Укажите ненулевое число баллов"); return; }
+    if (bulkAction === "discount" && (v < 0 || v > 100)) { setBulkMsg("Скидка 0..100%"); return; }
+    if (!confirm(`Массово: ${BULK_LABELS[bulkAction]} для ВСЕХ обычных пользователей текущего фильтра (примерно ${total}). Затрагивает реальных пользователей. Продолжить?`)) return;
+    setBulkBusy(true); setBulkMsg(null);
+    try {
+      const r = await usersAdminApi.bulkAction({
+        action: bulkAction as "points" | "discount" | "block" | "unblock",
+        value: v,
+        search: search || undefined,
+        role: roleFilter ? Number(roleFilter) : undefined,
+        blocked: statusFilter === "blocked" ? true : statusFilter === "active" ? false : undefined,
+        expiring: expiring ? Number(expiring) : undefined,
+      });
+      setBulkMsg(`Применено к ${r.applied} из ${r.matched}`);
+      load();
+    } catch (e) {
+      setBulkMsg(e instanceof ApiError ? e.detail : "Ошибка");
+    } finally {
+      setBulkBusy(false);
     }
   };
 
@@ -792,6 +1127,18 @@ export default function AdminUsersPage() {
           <option value="active">Активные</option>
           <option value="blocked">Заблокированные</option>
         </select>
+        <select
+          value={expiring}
+          onChange={e => setFilter(() => setExpiring(e.target.value))}
+          title="Подписка истекает в ближайшие N дней"
+          className="h-9 rounded-lg border border-[var(--border)] bg-bg px-2.5 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent"
+        >
+          <option value="">Истечение: любое</option>
+          <option value="3">Истекают ≤ 3 дн</option>
+          <option value="7">Истекают ≤ 7 дн</option>
+          <option value="14">Истекают ≤ 14 дн</option>
+          <option value="30">Истекают ≤ 30 дн</option>
+        </select>
         <div className="ml-auto flex items-center gap-2">
           <span className="text-xs text-fg-subtle">Сортировка:</span>
           <select
@@ -813,6 +1160,41 @@ export default function AdminUsersPage() {
           </button>
         </div>
       </div>
+
+      {/* Массовые действия над текущей выборкой (только обычные пользователи) */}
+      {!isReadonlyAdmin && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-bg-subtle px-3 py-2.5">
+          <span className="text-xs font-medium text-fg-muted">Массово по фильтру:</span>
+          <select
+            value={bulkAction}
+            onChange={e => { setBulkAction(e.target.value); setBulkMsg(null); }}
+            className="h-8 rounded-lg border border-[var(--border)] bg-bg px-2 text-xs text-fg focus:outline-none focus:ring-1 focus:ring-accent"
+          >
+            <option value="">— выбрать действие —</option>
+            <option value="points">Начислить баллы</option>
+            <option value="discount">Персональная скидка %</option>
+            <option value="block">Заблокировать</option>
+            <option value="unblock">Разблокировать</option>
+          </select>
+          {(bulkAction === "points" || bulkAction === "discount") && (
+            <input
+              type="number"
+              value={bulkValue}
+              onChange={e => setBulkValue(e.target.value)}
+              placeholder={bulkAction === "discount" ? "0–100 %" : "± баллы"}
+              className="h-8 w-28 rounded-lg border border-[var(--border)] bg-bg px-2 text-xs text-fg focus:outline-none focus:ring-1 focus:ring-accent"
+            />
+          )}
+          <button
+            onClick={applyBulk}
+            disabled={!bulkAction || bulkBusy}
+            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-40 transition-colors"
+          >
+            {bulkBusy ? "Применяю…" : "Применить"}
+          </button>
+          {bulkMsg && <span className="text-xs text-fg-subtle">{bulkMsg}</span>}
+        </div>
+      )}
 
       {error && <div className="flex items-center gap-2 rounded-lg bg-danger/8 px-4 py-3 text-sm text-danger"><AlertCircle className="h-4 w-4" />{error}</div>}
 
@@ -848,6 +1230,7 @@ export default function AdminUsersPage() {
                           <div className="min-w-0">
                             <p className="truncate font-medium text-fg">{u.name}</p>
                             {u.username && <p className="text-xs text-fg-subtle">@{u.username}</p>}
+                            {u.expire_at && <p className="text-xs text-warning">истекает {formatDate(u.expire_at)}</p>}
                           </div>
                         </div>
                       </td>
