@@ -22,6 +22,10 @@ async function adminFetch<T>(path: string, options: Omit<RequestInit, "body"> & 
       const data = await res.json();
       if (typeof data?.detail === "string") detail = data.detail;
     } catch {}
+    // 2FA админа: требуется разблокировка — сигналим глобально, модалка перехватит.
+    if (res.status === 403 && detail === "2fa_required") {
+      window.dispatchEvent(new CustomEvent("admin-2fa-required"));
+    }
     throw new ApiError(res.status, detail);
   }
 
@@ -229,7 +233,51 @@ export const statisticsApi = {
   sales: () => adminApi.get<SalesStatsResponse>("/statistics/sales"),
   daily: (days = 30) =>
     adminApi.get<DailyStatsResponse>(`/statistics/daily?days=${days}`),
+  cohorts: (months = 12) =>
+    adminApi.get<CohortsResponse>(`/statistics/cohorts?months=${months}`),
+  metrics: () => adminApi.get<MetricsResponse>("/statistics/metrics"),
 };
+
+export interface MetricsTopPlan {
+  name: string;
+  revenue: number;
+  count: number;
+}
+export interface MetricsTopGateway {
+  gateway_type: string;
+  revenue: number;
+  count: number;
+}
+export interface MetricsResponse {
+  currency: string;
+  mrr: number;
+  mrr_subs: number;
+  arpu: number;
+  arppu: number;
+  revenue_30d: number;
+  active_users: number;
+  payers_30d: number;
+  conversion: { trials: number; converted: number; pct: number };
+  churn: { active_now: number; churned_30d: number; pct: number };
+  payments: { completed_30d: number; canceled_30d: number; success_pct: number };
+  top_plans: MetricsTopPlan[];
+  top_gateways: MetricsTopGateway[];
+}
+
+export interface CohortCell {
+  offset: number;
+  users: number;
+  pct: number;
+}
+export interface CohortRow {
+  cohort: string;
+  size: number;
+  retention: CohortCell[];
+}
+export interface CohortsResponse {
+  cohorts: CohortRow[];
+  max_offset: number;
+}
 
 export const usersAdminApi = {
   list: (params: {
@@ -632,6 +680,184 @@ export const topupAdminApi = {
   update: (data: Partial<TopupAdminConfig>) => adminApi.put<TopupAdminConfig>("/topup", data),
 };
 
+// ---------- Скидка на первую покупку триальщикам ----------
+
+export interface TrialDiscountConfig {
+  enabled: boolean;
+  percent: number;
+  days_before: number;
+  lifetime_hours: number;
+}
+
+export const trialDiscountAdminApi = {
+  get: () => adminApi.get<TrialDiscountConfig>("/trial-discount"),
+  update: (data: Partial<TrialDiscountConfig>) =>
+    adminApi.put<TrialDiscountConfig>("/trial-discount", data),
+};
+
+// ---------- Резервный доступ истёкшим (1 ГБ на N дней) ----------
+
+export interface ReserveConfig {
+  enabled: boolean;
+  reserve_gb: number;
+  window_days: number;
+  squad_uuid: string;
+}
+
+export const reserveAdminApi = {
+  get: () => adminApi.get<ReserveConfig>("/reserve"),
+  update: (data: Partial<ReserveConfig>) => adminApi.put<ReserveConfig>("/reserve", data),
+};
+
+// ---------- Промо-баннер в кабинете ----------
+
+export interface PromoBannerConfig {
+  enabled: boolean;
+  title: string;
+  text: string;
+  cta_text: string;
+  cta_url: string;
+  color: "accent" | "red" | "green" | "amber";
+  audience: "all" | "no_sub" | "has_sub" | "trial" | "expiring";
+  dismissible: boolean;
+  starts_at: string;
+  ends_at: string;
+}
+
+export const promoBannerAdminApi = {
+  get: () => adminApi.get<PromoBannerConfig>("/promo-banner"),
+  update: (data: Partial<PromoBannerConfig>) =>
+    adminApi.put<PromoBannerConfig>("/promo-banner", data),
+};
+
+// ---------- Win-back истёкших ----------
+
+export interface WinbackConfig {
+  enabled: boolean;
+  percent: number;
+  days_after: number;
+  lifetime_hours: number;
+}
+
+export const winbackAdminApi = {
+  get: () => adminApi.get<WinbackConfig>("/winback"),
+  update: (data: Partial<WinbackConfig>) => adminApi.put<WinbackConfig>("/winback", data),
+};
+
+// ---------- Месячный дайджест пользователю ----------
+
+export interface DigestConfig {
+  enabled: boolean;
+  day_of_month: number;
+  hour: number;
+}
+
+export const digestAdminApi = {
+  get: () => adminApi.get<DigestConfig>("/digest"),
+  update: (data: Partial<DigestConfig>) => adminApi.put<DigestConfig>("/digest", data),
+};
+
+// ---------- Уведомление «трафик заканчивается» ----------
+
+export interface TrafficAlertConfig {
+  enabled: boolean;
+  threshold_percent: number;
+}
+
+export const trafficAlertAdminApi = {
+  get: () => adminApi.get<TrafficAlertConfig>("/traffic-alert"),
+  update: (data: Partial<TrafficAlertConfig>) =>
+    adminApi.put<TrafficAlertConfig>("/traffic-alert", data),
+};
+
+// ---------- Уведомление «новое устройство подключилось» ----------
+
+export interface NewDeviceConfig {
+  enabled: boolean;
+}
+
+export const newDeviceAdminApi = {
+  get: () => adminApi.get<NewDeviceConfig>("/new-device"),
+  update: (data: Partial<NewDeviceConfig>) => adminApi.put<NewDeviceConfig>("/new-device", data),
+};
+
+// ---------- Алерт пользователю о новом входе (новый IP/устройство) ----------
+
+export interface LoginAlertConfig {
+  enabled: boolean;
+}
+
+export const loginAlertAdminApi = {
+  get: () => adminApi.get<LoginAlertConfig>("/login-alert"),
+  update: (data: Partial<LoginAlertConfig>) =>
+    adminApi.put<LoginAlertConfig>("/login-alert", data),
+};
+
+// ---------- Обязательная верификация email перед триалом/покупкой ----------
+
+export interface EmailGateConfig {
+  enabled: boolean;
+}
+
+export const emailGateAdminApi = {
+  get: () => adminApi.get<EmailGateConfig>("/email-gate"),
+  update: (data: Partial<EmailGateConfig>) => adminApi.put<EmailGateConfig>("/email-gate", data),
+};
+
+// ---------- Заморозка (пауза) подписки ----------
+
+export interface FreezeConfig {
+  enabled: boolean;
+  max_days: number;
+}
+
+export const freezeAdminApi = {
+  get: () => adminApi.get<FreezeConfig>("/freeze"),
+  update: (data: Partial<FreezeConfig>) => adminApi.put<FreezeConfig>("/freeze", data),
+};
+
+// ---------- Импорт/экспорт настроек инсталляции ----------
+
+export interface SettingsBundle {
+  version: number;
+  exported_at: string;
+  assets: Record<string, unknown>;
+}
+
+// ---------- Ограничение админки по IP ----------
+
+export interface AdminIpConfig {
+  enabled: boolean;
+  allowed_ips: string[];
+  your_ip?: string;
+}
+
+export const adminIpApi = {
+  get: () => adminApi.get<AdminIpConfig>("/admin-ip"),
+  update: (data: Partial<AdminIpConfig>) => adminApi.put<AdminIpConfig>("/admin-ip", data),
+};
+
+// ---------- 2FA (TOTP) админа ----------
+
+export interface TwoFactorSetup { secret: string; otpauth: string; }
+
+export const twoFactorApi = {
+  status: () => adminApi.get<{ enabled: boolean }>("/2fa/status"),
+  setup: () => adminApi.post<TwoFactorSetup>("/2fa/setup", {}),
+  enable: (code: string) => adminApi.post<{ enabled: boolean }>("/2fa/enable", { code }),
+  unlock: (code: string) => adminApi.post<{ unlocked: boolean }>("/2fa/unlock", { code }),
+  disable: (code: string) => adminApi.post<{ enabled: boolean }>("/2fa/disable", { code }),
+};
+
+export const settingsIoAdminApi = {
+  export: () => adminApi.get<SettingsBundle>("/settings-io/export"),
+  import: (bundle: SettingsBundle) =>
+    adminApi.post<{ restored: string[]; skipped: string[]; count: number }>(
+      "/settings-io/import",
+      bundle,
+    ),
+};
+
 export interface MorningSummaryConfig {
   enabled: boolean;
   hour: number;
@@ -850,9 +1076,26 @@ export interface AuditEntry {
   created_at: string | null;
 }
 
+export interface AuditFilters {
+  limit?: number;
+  actor?: string;
+  method?: string;
+  path?: string;
+  date_from?: string;
+  date_to?: string;
+}
+
 export const auditAdminApi = {
-  list: (limit = 100) =>
-    adminApi.get<{ items: AuditEntry[] }>(`/audit?limit=${limit}`),
+  list: (f: AuditFilters = {}) => {
+    const q = new URLSearchParams();
+    q.set("limit", String(f.limit ?? 200));
+    if (f.actor) q.set("actor", f.actor);
+    if (f.method) q.set("method", f.method);
+    if (f.path) q.set("path", f.path);
+    if (f.date_from) q.set("date_from", f.date_from);
+    if (f.date_to) q.set("date_to", f.date_to);
+    return adminApi.get<{ items: AuditEntry[] }>(`/audit?${q.toString()}`);
+  },
 };
 
 // ---------- История уведомлений админам ----------
@@ -864,10 +1107,17 @@ export interface AdminNotification {
   created_at: string | null;
 }
 
+export interface NotifSettings {
+  admin_push_enabled: boolean;
+}
+
 export const notificationsAdminApi = {
   list: (limit = 100) =>
     adminApi.get<{ items: AdminNotification[] }>(`/notifications?limit=${limit}`),
   clear: () => adminApi.delete<{ ok: boolean }>("/notifications"),
+  getSettings: () => adminApi.get<NotifSettings>("/notifications/settings"),
+  updateSettings: (admin_push_enabled: boolean) =>
+    adminApi.put<NotifSettings>("/notifications/settings", { admin_push_enabled }),
 };
 
 // ---------- Импорт пользователей (как в боте) ----------

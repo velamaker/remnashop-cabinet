@@ -6,6 +6,7 @@ import { subscriptionApi } from "@/api/subscription";
 import { balanceApi } from "@/api/balance";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PromocodeCard } from "@/components/PromocodeCard";
+import { TrialDiscountBanner } from "@/components/TrialDiscountBanner";
 import { formatTrafficLimit } from "@/lib/format";
 import type {
   PaymentGatewayType,
@@ -306,6 +307,9 @@ export default function BillingPage() {
           {t("billing.subtitle")}
         </p>
       </div>
+
+      {/* Скидка на первую покупку триальщику — баннер-таймер (если активна) */}
+      <TrialDiscountBanner />
 
       {/* Промокод — можно активировать бонус, не покупая тариф */}
       <PromocodeCard />

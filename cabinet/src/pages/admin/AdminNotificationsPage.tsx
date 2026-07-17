@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, Bell, Trash2 } from "lucide-react";
+import { AlertCircle, Bell, Trash2, Smartphone } from "lucide-react";
 import { notificationsAdminApi, type AdminNotification } from "@/api/admin";
 import { ApiError } from "@/types/api";
 
@@ -19,6 +19,8 @@ export default function AdminNotificationsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
+  const [pushEnabled, setPushEnabled] = useState<boolean | null>(null);
+  const [pushSaving, setPushSaving] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -29,7 +31,28 @@ export default function AdminNotificationsPage() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    notificationsAdminApi.getSettings().then((s) => setPushEnabled(s.admin_push_enabled)).catch(() => {});
+    try { localStorage.setItem("admin_notif_seen", String(Date.now())); } catch { /* ignore */ }
+    window.dispatchEvent(new Event("admin-notif-seen"));
+  }, []);
+
+  const togglePush = async () => {
+    if (pushEnabled === null) return;
+    const next = !pushEnabled;
+    setPushSaving(true);
+    setPushEnabled(next); // оптимистично
+    try {
+      const s = await notificationsAdminApi.updateSettings(next);
+      setPushEnabled(s.admin_push_enabled);
+    } catch (e) {
+      setPushEnabled(!next); // откат
+      setError(e instanceof ApiError ? e.detail : "Не удалось сохранить настройку");
+    } finally {
+      setPushSaving(false);
+    }
+  };
 
   const clear = async () => {
     if (!confirm("Очистить всю историю уведомлений?")) return;
@@ -64,8 +87,40 @@ export default function AdminNotificationsPage() {
       </div>
 
       <p className="text-sm text-fg-muted">
-        История push-уведомлений, которые уходили админам (новые тикеты и т.п.).
+        История уведомлений админам (регистрации, оплаты, тикеты и т.п.). Копится
+        всегда — даже если пуш на телефон выключен ниже.
       </p>
+
+      {/* Тумблер: дублировать на телефон (web-push) */}
+      <div className="flex items-center justify-between gap-3 rounded-2xl border border-border-subtle bg-bg-subtle px-4 py-3">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-subtle text-accent">
+            <Smartphone className="h-4 w-4" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-fg">Дублировать на телефон (web-push)</p>
+            <p className="mt-0.5 text-xs text-fg-muted">
+              Выключите, чтобы не задваивать с Telegram — уведомления останутся в этом
+              центре и в Telegram, но не будут приходить push’ем на устройство.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={togglePush}
+          disabled={pushEnabled === null || pushSaving}
+          aria-pressed={pushEnabled ?? false}
+          className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
+            pushEnabled ? "bg-accent" : "bg-border"
+          }`}
+        >
+          <span
+            className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
+              pushEnabled ? "translate-x-5" : "translate-x-0.5"
+            }`}
+          />
+        </button>
+      </div>
 
       {error && (
         <div className="flex items-center gap-2 rounded-xl bg-danger/10 px-4 py-3 text-sm text-danger">

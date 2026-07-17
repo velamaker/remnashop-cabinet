@@ -123,7 +123,15 @@ def _assert_web_purchase_email_verified(user: UserDto) -> None:
     Skip email verification for Telegram / OAuth users — they never go through
     email+password registration, so requiring verification would block them.
     Only email-registered users must verify before purchasing or getting trial.
+
+    Гейт настраивается тумблером (assets/email_gate.json, дефолт ВКЛ) — установщик
+    может отключить обязательную верификацию email перед триалом/покупкой.
     """
+    from src.infrastructure.services.overlay_email_gate import is_enabled
+
+    if not is_enabled():
+        return
+
     if user.auth_type != AuthType.EMAIL:
         return
 

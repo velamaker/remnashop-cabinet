@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Activity, CheckCircle2, AlertTriangle } from "lucide-react";
-import { statusApi, type StatusResponse } from "@/api/status";
+import { statusApi, type StatusResponse, type UptimeDay } from "@/api/status";
 import { useNodePings } from "@/lib/ping";
 import { useBranding } from "@/contexts/BrandingContext";
 import { useT } from "@/i18n/I18nContext";
@@ -10,6 +10,36 @@ export function pingClass(ms: number): string {
   if (ms < 100) return "bg-success/10 text-success";
   if (ms < 250) return "bg-warning/10 text-warning";
   return "bg-danger/10 text-danger";
+}
+
+// Цвет «свечки» аптайма за день: зелёный ≥99%, жёлтый ≥95%, красный ниже.
+function uptimeBarClass(pct: number): string {
+  if (pct >= 99) return "bg-success";
+  if (pct >= 95) return "bg-warning";
+  return "bg-danger";
+}
+
+// Полоска аптайма за 30 дней («свечки», как у status-страниц).
+function UptimeBars({ history, uptime30d }: { history: UptimeDay[]; uptime30d: number | null | undefined }) {
+  if (!history.length) return null;
+  return (
+    <div className="mt-2">
+      <div className="flex items-center gap-[2px]">
+        {history.map((d) => (
+          <div
+            key={d.date}
+            title={`${d.date}: ${d.uptime}%`}
+            className={`h-4 flex-1 rounded-[1px] ${uptimeBarClass(d.uptime)}`}
+          />
+        ))}
+      </div>
+      {uptime30d != null && (
+        <p className="mt-1 text-[11px] text-fg-subtle">
+          Аптайм за 30 дней: <span className="font-semibold text-fg-muted">{uptime30d}%</span>
+        </p>
+      )}
+    </div>
+  );
 }
 
 // Публичная страница статуса — доступна без входа. Автообновление каждые 30 с.
@@ -62,25 +92,28 @@ export default function StatusPage() {
             ) : (
               <div className="space-y-2">
                 {data.nodes.map((n, i) => (
-                  <div key={i} className="flex items-center gap-3 rounded-2xl border border-border-subtle bg-bg-subtle px-5 py-3.5">
-                    {n.country_code && (
-                      <img
-                        src={`https://flagcdn.com/h24/${n.country_code.toLowerCase()}.png`}
-                        alt=""
-                        className="h-4 w-6 flex-shrink-0 rounded-[2px] object-cover shadow-sm"
-                        loading="lazy"
-                      />
-                    )}
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">{n.name}</span>
-                    {n.online && n.host && pings[n.host] != null && (
-                      <span className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium tabular-nums ${pingClass(pings[n.host]!)}`}>
-                        {pings[n.host]} {t("status.ms")}
+                  <div key={i} className="rounded-2xl border border-border-subtle bg-bg-subtle px-5 py-3.5">
+                    <div className="flex items-center gap-3">
+                      {n.country_code && (
+                        <img
+                          src={`https://flagcdn.com/h24/${n.country_code.toLowerCase()}.png`}
+                          alt=""
+                          className="h-4 w-6 flex-shrink-0 rounded-[2px] object-cover shadow-sm"
+                          loading="lazy"
+                        />
+                      )}
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">{n.name}</span>
+                      {n.online && n.host && pings[n.host] != null && (
+                        <span className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium tabular-nums ${pingClass(pings[n.host]!)}`}>
+                          {pings[n.host]} {t("status.ms")}
+                        </span>
+                      )}
+                      <span className={`flex items-center gap-1.5 text-xs font-medium ${n.online ? "text-success" : "text-danger"}`}>
+                        <span className={`h-2 w-2 rounded-full ${n.online ? "bg-success" : "bg-danger"}`} />
+                        {n.online ? t("info.online") : t("info.offline")}
                       </span>
-                    )}
-                    <span className={`flex items-center gap-1.5 text-xs font-medium ${n.online ? "text-success" : "text-danger"}`}>
-                      <span className={`h-2 w-2 rounded-full ${n.online ? "bg-success" : "bg-danger"}`} />
-                      {n.online ? t("info.online") : t("info.offline")}
-                    </span>
+                    </div>
+                    <UptimeBars history={n.history ?? []} uptime30d={n.uptime_30d} />
                   </div>
                 ))}
               </div>

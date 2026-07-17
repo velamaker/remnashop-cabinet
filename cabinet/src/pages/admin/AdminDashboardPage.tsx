@@ -8,6 +8,8 @@ import {
 } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { DailyCharts } from "@/components/admin/DailyCharts";
+import { CohortHeatmap } from "@/components/admin/CohortHeatmap";
+import { MetricsCards } from "@/components/admin/MetricsCards";
 
 // Форматирование выручки по валюте (RUB → ₽, USD → $, XTR → ⭐ звёзды Telegram).
 function fmtMoney(currency: string, amount: number): string {
@@ -195,8 +197,12 @@ export default function AdminDashboardPage() {
         </section>
       )}
 
+      {/* Ключевые метрики (KPI) */}
+      <MetricsCards />
+
       {/* Динамика по дням (графики) */}
       <DailyCharts />
+      <CohortHeatmap />
 
       {/* Gateways */}
       {transactions.gateways.length > 0 && (

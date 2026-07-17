@@ -287,6 +287,41 @@ body {
   box-shadow: inset 0 0 0 1px var(--accent-glow), 0 16px 40px -18px var(--accent-glow);
 }
 
+/* ---------- Interaction polish (аккуратный тех-проход) ---------- */
+/* Точечные переходы/полировка взаимодействий БЕЗ новых кричащих градиентов
+   (богатый набор поверхностей уже есть выше). Всё на существующих токенах. */
+
+/* Убираем серый тап-хайлайт на мобиле — нажатия по кнопкам/ссылкам чище. */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Выделение текста в бренд-акценте (мягко). */
+::selection {
+  background: var(--accent-subtle);
+  color: var(--fg);
+}
+
+/* Клавиатурная доступность: видимое кольцо фокуса ТОЛЬКО при tab-навигации
+   (мышь/тач его не показывают). Чисто аддитивно, вид для мыши не меняется. */
+a:focus-visible,
+button:focus-visible,
+[role="button"]:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+
+/* Мягкий дефолт-переход состояний для интерактивных элементов без своего
+   transition (чтобы hover/active не «щёлкали»). Элементы с Tailwind-утилитами
+   transition-* или своим классом (.btn-gradient и т.п.) перекрывают это. */
+button,
+a,
+[role="button"] {
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+
 /* ---------- Reduced motion ---------- */
 /* Уважаем системную настройку «уменьшить движение» — гасим появление страниц,
    шиммер, пульс статуса и hover-подъёмы для тех, кому анимации мешают. */

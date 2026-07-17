@@ -82,7 +82,7 @@ async def _github_releases() -> tuple[dict[str, str], dict[str, str]]:
     urls: dict[str, str] = {}
     dates: dict[str, str] = {}
     try:
-        async with httpx.AsyncClient(timeout=10) as cli:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as cli:
             rel = await cli.get(
                 f"https://api.github.com/repos/{REPO}/releases", params={"per_page": 50}
             )

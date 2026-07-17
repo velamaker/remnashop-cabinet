@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Save, AlertCircle, CheckCircle2, Bell, Lock, SlidersHorizontal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { settingsAdminApi, topupAdminApi, morningSummaryAdminApi, type AdminSettings, type TopupAdminConfig, type MorningSummaryConfig } from "@/api/admin";
+import { settingsAdminApi, topupAdminApi, morningSummaryAdminApi, trialDiscountAdminApi, reserveAdminApi, promoBannerAdminApi, winbackAdminApi, digestAdminApi, trafficAlertAdminApi, newDeviceAdminApi, loginAlertAdminApi, emailGateAdminApi, freezeAdminApi, type AdminSettings, type TopupAdminConfig, type MorningSummaryConfig, type TrialDiscountConfig, type ReserveConfig, type PromoBannerConfig, type WinbackConfig, type DigestConfig, type TrafficAlertConfig, type NewDeviceConfig, type LoginAlertConfig, type FreezeConfig } from "@/api/admin";
 import { ApiError } from "@/types/api";
 
 // Крупный блок настроек: заголовок с иконкой + вложенные секции (карточки).
@@ -270,7 +270,10 @@ export default function AdminSettingsPage() {
           <Field label="Ссылка на канал" value={settings.requirements.channel_link} onChange={(v) => upd(["requirements", "channel_link"], v)} />
           <Field label="Ссылка на правила" value={settings.requirements.rules_link} onChange={(v) => upd(["requirements", "rules_link"], v)} />
         </div>
+        <EmailGateToggle />
       </Section>
+
+      <LoginAlertCard />
 
       </Group>
 
@@ -331,8 +334,598 @@ export default function AdminSettingsPage() {
           ))}
         </div>
       </section>
+
       </Group>
     </div>
+  );
+}
+
+export function PromoBannerCard() {
+  const [cfg, setCfg] = useState<PromoBannerConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    promoBannerAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+  }, []);
+
+  const patch = (p: Partial<PromoBannerConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
+
+  const save = async () => {
+    if (!cfg) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await promoBannerAdminApi.update(cfg);
+      setCfg(updated);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return null;
+  if (!cfg) return <Section title="Промо-баннер">{error ?? "Ошибка"}</Section>;
+
+  const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
+
+  return (
+    <Section title="Промо-баннер в кабинете" desc="Показывает заметный баннер юзерам в кабинете (объявление/акция). Цену не меняет — для скидок используйте промокоды. Можно нацелить на аудиторию и задать период.">
+      <Toggle label="Показывать баннер" sub="По умолчанию выключено" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
+      <div>
+        <label className="mb-1 block text-xs text-fg-muted">Заголовок</label>
+        <input type="text" value={cfg.title} onChange={(e) => patch({ title: e.target.value })} className={inputCls} placeholder="Например: Летняя акция!" />
+      </div>
+      <div>
+        <label className="mb-1 block text-xs text-fg-muted">Текст</label>
+        <textarea value={cfg.text} onChange={(e) => patch({ text: e.target.value })} className={inputCls} rows={2} placeholder="Скидка 20% на годовой тариф до конца недели" />
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Текст кнопки (необяз.)</label>
+          <input type="text" value={cfg.cta_text} onChange={(e) => patch({ cta_text: e.target.value })} className={inputCls} placeholder="Оформить" />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Ссылка кнопки</label>
+          <input type="text" value={cfg.cta_url} onChange={(e) => patch({ cta_url: e.target.value })} className={inputCls} placeholder="/billing" />
+        </div>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Цвет</label>
+          <select value={cfg.color} onChange={(e) => patch({ color: e.target.value as PromoBannerConfig["color"] })} className={inputCls}>
+            <option value="accent">Акцент</option>
+            <option value="red">Красный</option>
+            <option value="green">Зелёный</option>
+            <option value="amber">Жёлтый</option>
+          </select>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Кому показывать</label>
+          <select value={cfg.audience} onChange={(e) => patch({ audience: e.target.value as PromoBannerConfig["audience"] })} className={inputCls}>
+            <option value="all">Всем</option>
+            <option value="no_sub">Без подписки</option>
+            <option value="has_sub">С подпиской</option>
+            <option value="trial">На пробном</option>
+            <option value="expiring">Истекающим (≤3 дн.)</option>
+          </select>
+        </div>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Показывать с (необяз.)</label>
+          <input type="datetime-local" value={cfg.starts_at ? cfg.starts_at.slice(0, 16) : ""} onChange={(e) => patch({ starts_at: e.target.value ? new Date(e.target.value).toISOString() : "" })} className={inputCls} />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Показывать до (необяз.)</label>
+          <input type="datetime-local" value={cfg.ends_at ? cfg.ends_at.slice(0, 16) : ""} onChange={(e) => patch({ ends_at: e.target.value ? new Date(e.target.value).toISOString() : "" })} className={inputCls} />
+        </div>
+      </div>
+      <Toggle label="Разрешить скрывать" sub="Юзер может закрыть баннер крестиком" checked={cfg.dismissible} onChange={(v) => patch({ dismissible: v })} />
+      <div className="flex items-center justify-between gap-3 pt-1">
+        <span className="text-xs">
+          {error && <span className="text-danger">{error}</span>}
+          {saved && <span className="text-success">Сохранено</span>}
+        </span>
+        <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
+          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+        </button>
+      </div>
+    </Section>
+  );
+}
+
+export function ReserveCard() {
+  const [cfg, setCfg] = useState<ReserveConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    reserveAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+  }, []);
+
+  const patch = (p: Partial<ReserveConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
+
+  const save = async () => {
+    if (!cfg) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await reserveAdminApi.update({
+        enabled: cfg.enabled,
+        reserve_gb: Math.min(100, Math.max(1, Number(cfg.reserve_gb) || 1)),
+        window_days: Math.min(60, Math.max(1, Number(cfg.window_days) || 1)),
+        squad_uuid: (cfg.squad_uuid || "").trim(),
+      });
+      setCfg(updated);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return null;
+  if (!cfg) return <Section title="Резервный доступ">{error ?? "Ошибка"}</Section>;
+
+  const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
+
+  return (
+    <Section title="Резервный доступ истёкшим" desc="Когда подписка заканчивается, юзер N дней сохраняет небольшой лимит трафика («спасательный круг»), чтобы успеть продлить. Дальше — доступ отключается. Надпись «подписка закончилась / продлите» приходит из настроек панели (уже по-русски).">
+      <Toggle label="Включить резерв" sub="По умолчанию выключено (раздаёт бесплатный трафик)" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Резерв трафика, ГБ</label>
+          <input type="number" min={1} max={100} value={String(cfg.reserve_gb)} onChange={(e) => patch({ reserve_gb: Number(e.target.value) })} className={inputCls} />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Окно резерва, дней</label>
+          <input type="number" min={1} max={60} value={String(cfg.window_days)} onChange={(e) => patch({ window_days: Number(e.target.value) })} className={inputCls} />
+        </div>
+      </div>
+      <div>
+        <label className="mb-1 block text-xs text-fg-muted">Сквад-резерв (UUID, необязательно — пусто = оставить текущий)</label>
+        <input type="text" value={cfg.squad_uuid} onChange={(e) => patch({ squad_uuid: e.target.value })} placeholder="напр. 03542796-2d7d-…" className={inputCls} />
+      </div>
+      <div className="flex items-center justify-between gap-3 pt-1">
+        <span className="text-xs">
+          {error && <span className="text-danger">{error}</span>}
+          {saved && <span className="text-success">Сохранено</span>}
+        </span>
+        <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
+          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+        </button>
+      </div>
+    </Section>
+  );
+}
+
+function EmailGateToggle() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    emailGateAdminApi.get().then((c) => setEnabled(c.enabled)).catch(() => setEnabled(null));
+  }, []);
+
+  if (enabled === null) return null;
+
+  const toggle = async (v: boolean) => {
+    setBusy(true);
+    try {
+      const c = await emailGateAdminApi.update({ enabled: v });
+      setEnabled(c.enabled);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Toggle
+      label="Подтверждение email перед покупкой"
+      sub={busy ? "Сохранение…" : "Email-юзер должен подтвердить email до триала/оплаты (Telegram/OAuth не касается)"}
+      checked={enabled}
+      onChange={toggle}
+    />
+  );
+}
+
+export function FreezeCard() {
+  const [cfg, setCfg] = useState<FreezeConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    freezeAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+  }, []);
+
+  const patch = (p: Partial<FreezeConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
+
+  const save = async () => {
+    if (!cfg) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await freezeAdminApi.update({
+        enabled: cfg.enabled,
+        max_days: Math.min(365, Math.max(1, Number(cfg.max_days) || 30)),
+      });
+      setCfg(updated);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return null;
+  if (!cfg) return <Section title="Заморозка подписки">{error ?? "Ошибка"}</Section>;
+
+  const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
+
+  return (
+    <Section title="Заморозка (пауза) подписки" desc="Юзер может поставить подписку на паузу — дни не сгорают, доступ отключается. При возобновлении срок сдвигается на остаток. Максимум N дней паузы, потом авто-возобновление.">
+      <Toggle label="Разрешить заморозку" sub="По умолчанию выключено" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
+      <div className="sm:max-w-xs">
+        <label className="mb-1 block text-xs text-fg-muted">Макс. длительность паузы, дней</label>
+        <input type="number" min={1} max={365} value={String(cfg.max_days)} onChange={(e) => patch({ max_days: Number(e.target.value) })} className={inputCls} />
+      </div>
+      <div className="flex items-center justify-between gap-3 pt-1">
+        <span className="text-xs">
+          {error && <span className="text-danger">{error}</span>}
+          {saved && <span className="text-success">Сохранено</span>}
+        </span>
+        <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
+          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+        </button>
+      </div>
+    </Section>
+  );
+}
+
+export function NewDeviceCard() {
+  const [cfg, setCfg] = useState<NewDeviceConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    newDeviceAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+  }, []);
+
+  const save = async (enabled: boolean) => {
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await newDeviceAdminApi.update({ enabled });
+      setCfg(updated);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return null;
+  if (!cfg) return <Section title="Новое устройство">{error ?? "Ошибка"}</Section>;
+
+  return (
+    <Section title="Уведомление «новое устройство»" desc="Когда к подписке юзера подключается новое устройство — ему приходит уведомление в Telegram/Push (доверие + антишеринг). Первый снимок = базовый, без уведомлений.">
+      <Toggle label="Включить уведомление" sub={saving ? "Сохранение…" : (saved ? "Сохранено" : "По умолчанию выключено")} checked={cfg.enabled} onChange={(v) => save(v)} />
+      {error && <span className="text-xs text-danger">{error}</span>}
+    </Section>
+  );
+}
+
+export function LoginAlertCard() {
+  const [cfg, setCfg] = useState<LoginAlertConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    loginAlertAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+  }, []);
+
+  const save = async (enabled: boolean) => {
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await loginAlertAdminApi.update({ enabled });
+      setCfg(updated);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return null;
+  if (!cfg) return <Section title="Алерт о новом входе">{error ?? "Ошибка"}</Section>;
+
+  return (
+    <Section title="Алерт о новом входе" desc="Когда в аккаунт заходят с нового IP (не первый вход, VPN-ноды исключены) — пользователю приходит уведомление в Telegram / Push / email со сменой пароля при необходимости.">
+      <Toggle label="Включить уведомление о новом входе" sub={saving ? "Сохранение…" : (saved ? "Сохранено" : "По умолчанию выключено")} checked={cfg.enabled} onChange={(v) => save(v)} />
+      {error && <span className="text-xs text-danger">{error}</span>}
+    </Section>
+  );
+}
+
+export function TrafficAlertCard() {
+  const [cfg, setCfg] = useState<TrafficAlertConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    trafficAlertAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+  }, []);
+
+  const patch = (p: Partial<TrafficAlertConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
+
+  const save = async () => {
+    if (!cfg) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await trafficAlertAdminApi.update({
+        enabled: cfg.enabled,
+        threshold_percent: Math.min(99, Math.max(50, Number(cfg.threshold_percent) || 80)),
+      });
+      setCfg(updated);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return null;
+  if (!cfg) return <Section title="Трафик заканчивается">{error ?? "Ошибка"}</Section>;
+
+  const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
+
+  return (
+    <Section title="Уведомление «трафик заканчивается»" desc="Когда юзер израсходовал заданный % лимита трафика — приходит предупреждение в Telegram/Push, чтобы успел продлить/сменить тариф. Только тарифы с лимитом.">
+      <Toggle label="Включить уведомление" sub="По умолчанию выключено" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
+      <div className="sm:max-w-xs">
+        <label className="mb-1 block text-xs text-fg-muted">Порог, % израсходованного (50–99)</label>
+        <input type="number" min={50} max={99} value={String(cfg.threshold_percent)} onChange={(e) => patch({ threshold_percent: Number(e.target.value) })} className={inputCls} />
+      </div>
+      <div className="flex items-center justify-between gap-3 pt-1">
+        <span className="text-xs">
+          {error && <span className="text-danger">{error}</span>}
+          {saved && <span className="text-success">Сохранено</span>}
+        </span>
+        <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
+          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+        </button>
+      </div>
+    </Section>
+  );
+}
+
+export function DigestCard() {
+  const [cfg, setCfg] = useState<DigestConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    digestAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+  }, []);
+
+  const patch = (p: Partial<DigestConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
+
+  const save = async () => {
+    if (!cfg) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await digestAdminApi.update({
+        enabled: cfg.enabled,
+        day_of_month: Math.min(28, Math.max(1, Number(cfg.day_of_month) || 1)),
+        hour: Math.min(23, Math.max(0, Number(cfg.hour) || 0)),
+      });
+      setCfg(updated);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return null;
+  if (!cfg) return <Section title="Месячный дайджест">{error ?? "Ошибка"}</Section>;
+
+  const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
+
+  return (
+    <Section title="Месячный дайджест пользователю" desc="Раз в месяц юзеру приходит сводка в Telegram/Push: сколько ГБ использовал за месяц и любимый сервер. Данные из Remnawave.">
+      <Toggle label="Включить дайджест" sub="По умолчанию выключено" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">День месяца (1–28)</label>
+          <input type="number" min={1} max={28} value={String(cfg.day_of_month)} onChange={(e) => patch({ day_of_month: Number(e.target.value) })} className={inputCls} />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Час (UTC, 0–23)</label>
+          <input type="number" min={0} max={23} value={String(cfg.hour)} onChange={(e) => patch({ hour: Number(e.target.value) })} className={inputCls} />
+        </div>
+      </div>
+      <div className="flex items-center justify-between gap-3 pt-1">
+        <span className="text-xs">
+          {error && <span className="text-danger">{error}</span>}
+          {saved && <span className="text-success">Сохранено</span>}
+        </span>
+        <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
+          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+        </button>
+      </div>
+    </Section>
+  );
+}
+
+export function WinbackCard() {
+  const [cfg, setCfg] = useState<WinbackConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    winbackAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+  }, []);
+
+  const patch = (p: Partial<WinbackConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
+
+  const save = async () => {
+    if (!cfg) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await winbackAdminApi.update({
+        enabled: cfg.enabled,
+        percent: Math.min(100, Math.max(1, Number(cfg.percent) || 1)),
+        days_after: Math.min(90, Math.max(1, Number(cfg.days_after) || 1)),
+        lifetime_hours: Math.min(1440, Math.max(1, Number(cfg.lifetime_hours) || 1)),
+      });
+      setCfg(updated);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return null;
+  if (!cfg) return <Section title="Win-back истёкших">{error ?? "Ошибка"}</Section>;
+
+  const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
+
+  return (
+    <Section title="Win-back истёкших" desc="Через N дней ПОСЛЕ окончания подписки юзеру приходит напоминание в Telegram/Push «вернись, вот скидка» + одноразовая скидка на возврат (применяется автоматически при следующей покупке).">
+      <Toggle label="Включить win-back" sub="По умолчанию выключено" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Скидка, %</label>
+          <input type="number" min={1} max={100} value={String(cfg.percent)} onChange={(e) => patch({ percent: Number(e.target.value) })} className={inputCls} />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Через сколько дней после окончания</label>
+          <input type="number" min={1} max={90} value={String(cfg.days_after)} onChange={(e) => patch({ days_after: Number(e.target.value) })} className={inputCls} />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Срок жизни промо, часов</label>
+          <input type="number" min={1} max={1440} value={String(cfg.lifetime_hours)} onChange={(e) => patch({ lifetime_hours: Number(e.target.value) })} className={inputCls} />
+        </div>
+      </div>
+      <div className="flex items-center justify-between gap-3 pt-1">
+        <span className="text-xs">
+          {error && <span className="text-danger">{error}</span>}
+          {saved && <span className="text-success">Сохранено</span>}
+        </span>
+        <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
+          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+        </button>
+      </div>
+    </Section>
+  );
+}
+
+export function TrialDiscountCard() {
+  const [cfg, setCfg] = useState<TrialDiscountConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    trialDiscountAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+  }, []);
+
+  const patch = (p: Partial<TrialDiscountConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
+
+  const save = async () => {
+    if (!cfg) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await trialDiscountAdminApi.update({
+        enabled: cfg.enabled,
+        percent: Math.min(100, Math.max(1, Number(cfg.percent) || 1)),
+        days_before: Math.min(30, Math.max(1, Number(cfg.days_before) || 1)),
+        lifetime_hours: Math.min(720, Math.max(1, Number(cfg.lifetime_hours) || 1)),
+      });
+      setCfg(updated);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return null;
+  if (!cfg) return <Section title="Скидка триальщикам">{error ?? "Ошибка"}</Section>;
+
+  const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
+
+  return (
+    <Section title="Скидка триальщикам на первую покупку" desc="За N дней до конца пробного периода юзеру выдаётся одноразовая скидка на первую оплату + баннер-таймер в кабинете и напоминание в Telegram. Скидка гаснет после покупки или по истечении срока.">
+      <Toggle label="Включить" sub="По умолчанию выключено" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Скидка, %</label>
+          <input type="number" min={1} max={100} value={String(cfg.percent)} onChange={(e) => patch({ percent: Number(e.target.value) })} className={inputCls} />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">За сколько дней до конца триала</label>
+          <input type="number" min={1} max={30} value={String(cfg.days_before)} onChange={(e) => patch({ days_before: Number(e.target.value) })} className={inputCls} />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Срок жизни промо, часов</label>
+          <input type="number" min={1} max={720} value={String(cfg.lifetime_hours)} onChange={(e) => patch({ lifetime_hours: Number(e.target.value) })} className={inputCls} />
+        </div>
+      </div>
+      <div className="flex items-center justify-between gap-3 pt-1">
+        <span className="text-xs">
+          {error && <span className="text-danger">{error}</span>}
+          {saved && <span className="text-success">Сохранено</span>}
+        </span>
+        <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
+          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+        </button>
+      </div>
+    </Section>
   );
 }
 

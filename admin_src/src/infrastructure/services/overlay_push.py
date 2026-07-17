@@ -170,6 +170,7 @@ async def push_user_standalone(user_id: int, payload: dict) -> int:
     """Web-push пользователю по user_id со своей сессией. НИКОГДА не бросает."""
     try:
         async with _get_sessionmaker()() as session:
+            await _record_user_notification(session, user_id, payload)
             sent = await send_to_user(session, user_id, payload)
             await session.commit()
             return sent
@@ -206,31 +207,113 @@ async def _record_admin_notification(session: AsyncSession, payload: dict) -> No
         logger.debug(f"push: не смог записать историю уведомления: {exc}")
 
 
+async def _record_user_notification(session: AsyncSession, user_id: int, payload: dict) -> None:
+    """История уведомлений пользователя (user_notifications) для центра в кабинете.
+
+    Best-effort: нет таблицы (старый деплой) — молча пропускаем. Храним последние
+    100 записей на юзера, чтобы push не терялся «в небытие» на мобиле.
+    """
+    try:
+        await session.execute(
+            text(
+                "INSERT INTO user_notifications (user_id, title, body, url) "
+                "VALUES (:u, :t, :b, :url)"
+            ),
+            {
+                "u": user_id,
+                "t": str(payload.get("title") or "")[:200],
+                "b": str(payload.get("body") or ""),
+                "url": str(payload.get("url") or "/")[:500],
+            },
+        )
+        await session.execute(
+            text(
+                "DELETE FROM user_notifications WHERE user_id = :u AND id <= "
+                "(SELECT id FROM user_notifications WHERE user_id = :u "
+                "ORDER BY id DESC OFFSET 100 LIMIT 1)"
+            ),
+            {"u": user_id},
+        )
+    except Exception as exc:  # noqa: BLE001 — история не должна ломать push
+        logger.debug(f"push: не смог записать историю юзер-уведомления: {exc}")
+
+
+# --- Настройки админ-уведомлений: один тумблер «слать web-push на телефон». ---
+# История (admin_notifications) пишется ВСЕГДА, а фактическая отправка push на
+# устройства админа гейтится этим флагом — чтобы не задваивать с Telegram, но
+# при этом центр уведомлений в админке оставался полным.
+_NOTIF_SETTINGS_PATH = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets")) / "notif_settings.json"
+
+
+def load_notif_settings() -> dict:
+    """{'admin_push_enabled': bool}. Дефолт — включено. Битый файл → дефолт."""
+    try:
+        if _NOTIF_SETTINGS_PATH.exists():
+            with _NOTIF_SETTINGS_PATH.open(encoding="utf-8") as fh:
+                data = json.load(fh)
+            if isinstance(data, dict):
+                return {"admin_push_enabled": bool(data.get("admin_push_enabled", True))}
+    except Exception:
+        pass
+    return {"admin_push_enabled": True}
+
+
+def save_notif_settings(admin_push_enabled: bool) -> None:
+    _NOTIF_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with _NOTIF_SETTINGS_PATH.open("w", encoding="utf-8") as fh:
+        json.dump({"admin_push_enabled": bool(admin_push_enabled)}, fh, ensure_ascii=False, indent=2)
+
+
+def _admin_push_enabled() -> bool:
+    return load_notif_settings()["admin_push_enabled"]
+
+
 async def push_admins_standalone(payload: dict) -> int:
     """Web-push всем админам (OWNER/DEV/ADMIN) с push-подписками. Best-effort.
 
-    Помимо отправки пишет уведомление в историю (admin_notifications) — даже если
-    ни одного устройства не подписано, чтобы владелец видел ленту в админке.
+    Историю (admin_notifications) пишет ВСЕГДА — даже если ни одного устройства не
+    подписано или push выключен, чтобы владелец видел ленту в админке. Сама
+    отправка на телефон — только если включён тумблер admin_push_enabled.
     """
     try:
         async with _get_sessionmaker()() as session:
             await _record_admin_notification(session, payload)
-            rows = (
-                await session.execute(
-                    text(
-                        "SELECT DISTINCT p.user_id FROM push_subscriptions p "
-                        "JOIN users u ON u.id = p.user_id "
-                        "WHERE u.role::text IN ('OWNER', 'DEV', 'ADMIN')"
-                    )
-                )
-            ).all()
             total = 0
-            for (uid,) in rows:
-                total += await send_to_user(session, uid, payload)
+            if _admin_push_enabled():
+                rows = (
+                    await session.execute(
+                        text(
+                            "SELECT DISTINCT p.user_id FROM push_subscriptions p "
+                            "JOIN users u ON u.id = p.user_id "
+                            "WHERE u.role::text IN ('OWNER', 'DEV', 'ADMIN')"
+                        )
+                    )
+                ).all()
+                for (uid,) in rows:
+                    total += await send_to_user(session, uid, payload)
             await session.commit()
             return total
     except Exception as exc:  # noqa: BLE001
         logger.debug(f"push: push_admins_standalone не удалось: {exc}")
+        return 0
+
+
+async def push_admin_event_standalone(user_id: int, payload: dict) -> int:
+    """Зеркало админ-уведомления конкретному админу-получателю (из notification.py).
+
+    Пишет в историю admin_notifications (центр уведомлений) ВСЕГДА; на устройства
+    этого админа шлёт push только при включённом admin_push_enabled. НИКОГДА не бросает.
+    """
+    try:
+        async with _get_sessionmaker()() as session:
+            await _record_admin_notification(session, payload)
+            sent = 0
+            if _admin_push_enabled():
+                sent = await send_to_user(session, user_id, payload)
+            await session.commit()
+            return sent
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"push: push_admin_event_standalone user={user_id} не удалось: {exc}")
         return 0
 
 
@@ -257,7 +340,9 @@ async def notify_user_push(
         payload = {"title": title, "body": body_tpl.format(**fmt), "url": url}
         if tag:
             payload["tag"] = tag
-        sent = await send_to_user(session, getattr(user, "id"), payload)
+        uid = getattr(user, "id")
+        await _record_user_notification(session, uid, payload)
+        sent = await send_to_user(session, uid, payload)
         await session.commit()
         return sent
     except Exception as exc:  # noqa: BLE001 — push не должен ломать оплату/рефералку

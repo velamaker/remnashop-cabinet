@@ -20,6 +20,9 @@ import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { TelegramLinkPrompt } from "@/components/TelegramLinkPrompt";
 import { RenewalBanner } from "@/components/RenewalBanner";
+import { TrialDiscountBanner } from "@/components/TrialDiscountBanner";
+import { PromoBanner } from "@/components/PromoBanner";
+import { OnboardingWizard } from "@/components/OnboardingWizard";
 import { TrafficChart } from "@/components/TrafficChart";
 import { ServerStatusCard } from "@/components/ServerStatusCard";
 import { formatBytes, formatTrafficLimit, formatDate, daysUntil } from "@/lib/format";
@@ -133,7 +136,10 @@ export default function HomePage() {
       </div>
 
       {/* Напоминание продлить подписку (скоро кончится / истекла) */}
+      <PromoBanner />
+      {subscription?.url && <OnboardingWizard subUrl={subscription.url} />}
       <RenewalBanner subscription={subscription} />
+      <TrialDiscountBanner />
 
       {/* Ненавязчивое предложение привязать Telegram (только email-пользователям) */}
       <TelegramLinkPrompt />

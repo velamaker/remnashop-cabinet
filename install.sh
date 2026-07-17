@@ -375,8 +375,17 @@ if [ "$MODE" = "site" ]; then
   fi
 
   say ""
+  # Идемпотентность повторного запуска: убираем прежний контейнер/сеть кабинета,
+  # чтобы застрявшее с прошлой (возможно неудачной) установки состояние не мешало —
+  # частая причина «встаёт только после переустановки ОС» (занятый порт 5002 /
+  # старый контейнер с тем же именем / протухший build-кэш). down чистит их, а
+  # --force-recreate гарантирует пересоздание с новой конфигурацией/образом.
+  if ss -ltn 2>/dev/null | grep -q '127.0.0.1:5002 '; then
+    warn "  Порт 127.0.0.1:5002 занят — освобождаю прежний контейнер кабинета."
+  fi
+  $DC --env-file .env -f cabinet/docker-compose.site.yml down --remove-orphans 2>/dev/null || true
   info "Собираю и поднимаю кабинет (проксирует /api/ → https://${API_DOM})…"
-  $DC --env-file .env -f cabinet/docker-compose.site.yml up -d --build
+  $DC --env-file .env -f cabinet/docker-compose.site.yml up -d --build --force-recreate
 
   say ""
   ok "${BOLD}Готово!${RST}"

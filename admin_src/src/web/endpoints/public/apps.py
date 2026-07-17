@@ -55,14 +55,41 @@ def sanitize_custom_apps(raw: Any) -> list[dict[str, Any]]:
     return out
 
 
+def sanitize_manual_links(raw: Any) -> dict[str, dict[str, str]]:
+    """Ручные оверрайды ссылок админа → {app_id(lower): {platform: http-url}}.
+
+    Побеждают резолверы/upstream. Нужны, когда приложение вернулось в стор под
+    новой ссылкой и авто-резолвер ещё не подхватил (или для замены на что угодно)."""
+    out: dict[str, dict[str, str]] = {}
+    if not isinstance(raw, dict):
+        return out
+    for aid, plats in list(raw.items())[:100]:
+        if not isinstance(plats, dict):
+            continue
+        app_id = str(aid).strip().lower()[:40]
+        if not app_id:
+            continue
+        clean: dict[str, str] = {}
+        for plat, url in plats.items():
+            if plat not in _PLATFORMS:
+                continue
+            u = str(url or "").strip()[:500]
+            if u.startswith(("http://", "https://")):
+                clean[plat] = u
+        if clean:
+            out[app_id] = clean
+    return out
+
+
 def load_apps_config() -> dict[str, Any]:
     """priority: str|None, enabled: list[str]|None (None = все), custom: list,
-    links_source_url: str|None (источник авто-подтяжки ссылок установки)."""
+    links_source_url: str|None, manual_links: {app:{platform:url}} (ручные оверрайды)."""
     data: dict[str, Any] = {
         "priority": None,
         "enabled": None,
         "custom": [],
         "links_source_url": None,
+        "manual_links": {},
     }
     try:
         if APPS_PATH.exists():
@@ -79,6 +106,7 @@ def load_apps_config() -> dict[str, Any]:
                 lsu = stored.get("links_source_url")
                 if lsu is None or isinstance(lsu, str):
                     data["links_source_url"] = lsu
+                data["manual_links"] = sanitize_manual_links(stored.get("manual_links"))
     except Exception:
         # Битый файл не должен ронять кабинет — отдаём дефолт (все приложения).
         pass
@@ -92,10 +120,24 @@ def save_apps_config(data: dict[str, Any]) -> None:
         "enabled": data.get("enabled"),
         "custom": data.get("custom") or [],
         "links_source_url": data.get("links_source_url"),
+        "manual_links": data.get("manual_links") or {},
     }
     APPS_PATH.parent.mkdir(parents=True, exist_ok=True)
     with APPS_PATH.open("w", encoding="utf-8") as fh:
         json.dump(payload, fh, ensure_ascii=False, indent=2)
+
+
+def apply_manual_links(
+    links: dict[str, dict[str, str]],
+    meta: dict[str, dict[str, Any]],
+    manual: dict[str, dict[str, str]],
+) -> None:
+    """Наложить ручные ссылки поверх резолвер-ссылок (in-place). Ручная всегда
+    главнее и считается рабочей → degraded=false, source=manual."""
+    for app_id, plats in (manual or {}).items():
+        for plat, url in plats.items():
+            links.setdefault(app_id, {})[plat] = url
+            meta.setdefault(app_id, {})[plat] = {"source": "manual", "version": None, "degraded": False}
 
 
 @router.get("")
@@ -106,6 +148,10 @@ async def get_apps_config() -> dict[str, Any]:
 
     cfg = load_apps_config()
     links = load_links()
-    cfg["link_overrides"] = links["links"]
+    overrides = links["links"]
+    meta = links.get("meta") or {}
+    apply_manual_links(overrides, meta, cfg.get("manual_links") or {})
+    cfg["link_overrides"] = overrides
+    cfg["link_meta"] = meta
     cfg["links_updated_at"] = links["updated_at"]
     return cfg

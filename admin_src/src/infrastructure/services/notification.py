@@ -65,7 +65,10 @@ from src.core.enums import Locale, Role
 from src.core.types import AnyKeyboard, NotificationType
 from src.infrastructure.services.event_bus import on_event
 from src.infrastructure.services.notification_queue import NotificationWorker
-from src.infrastructure.services.overlay_push import push_user_standalone  # [OVERLAY]
+from src.infrastructure.services.overlay_push import (  # [OVERLAY]
+    push_admin_event_standalone,
+    push_user_standalone,
+)
 from src.telegram.keyboards import (
     get_buy_keyboard,
     get_close_notification_button,
@@ -416,17 +419,21 @@ class NotificationService(Notifier):
 
         # [OVERLAY] Админ-пуши: любое уведомление, уходящее админу в Telegram
         # (включая admin-broadcast через _process_task/_broadcast — регистрации,
-        # оплаты, ошибки и т.п.), дублируем в web-push на его PWA, чтобы админ
-        # получал их на телефоне даже вне админки. Только админ-роли и реальные
-        # пользователи (есть .id); фоново — не влияет на TG-отправку.
+        # оплаты, ошибки и т.п.), зеркалим в центр уведомлений админки, а на
+        # телефон (web-push) — только если включён тумблер admin_push_enabled
+        # (чтобы не задваивать с Telegram). Историю центр видит всегда.
+        # Только админ-роли и реальные пользователи (есть .id); фоново — не влияет
+        # на TG-отправку. url=/ (главная), а НЕ /admin: врезка ловит и личные/
+        # рассылочные уведомления владельца. Целевые админ-алерты (новый тикет →
+        # /admin/support) шлются отдельно со своим deep-link и сюда не относятся.
         try:
             _role = getattr(user, "role", None)
             _uid = getattr(user, "id", None)
             if _uid and _role is not None and _role.includes(Role.ADMIN):
                 _pt, _pb = _push_title_body(text)
                 asyncio.create_task(
-                    push_user_standalone(
-                        _uid, {"title": _pt, "body": _pb, "url": "/admin", "tag": "admin"}
+                    push_admin_event_standalone(
+                        _uid, {"title": _pt, "body": _pb, "url": "/", "tag": "admin"}
                     )
                 )
         except Exception:  # noqa: BLE001 — зеркало push не должно мешать TG

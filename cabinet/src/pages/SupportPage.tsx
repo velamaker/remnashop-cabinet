@@ -8,6 +8,7 @@ import {
 } from "@/api/support";
 import { useBranding } from "@/contexts/BrandingContext";
 import { TicketThread } from "@/components/TicketThread";
+import { DiagnosticWizard } from "@/components/DiagnosticWizard";
 import { Button } from "@/components/ui/Button";
 import { ApiError } from "@/types/api";
 import { useT } from "@/i18n/I18nContext";
@@ -152,6 +153,8 @@ export default function SupportPage() {
           </a>
         </div>
       )}
+
+      <DiagnosticWizard />
 
       {/* Two-column */}
       <div className="grid gap-4 lg:grid-cols-[320px_1fr]">

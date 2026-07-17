@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, Zap, Check, Star, QrCode, X, Link2, Copy } from "lucide-react";
+import { Download, Zap, Check, Star, QrCode, X, Link2, Copy, AlertTriangle } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { APPS, PLATFORMS, DEFAULT_PRIORITY, type AppEntry, type Platform } from "@/data/apps";
 import { appsApi, type AppsConfig } from "@/api/apps";
 import { openExternalLink, useIsMiniApp } from "@/hooks/useTelegramWebApp";
 import { useT } from "@/i18n/I18nContext";
+
+// На iOS ряд клиентов снят из российского App Store (Apple), поэтому по умолчанию
+// рекомендуем тот, что реально ставится из RU-стора. Остальное решает админ.
+const PLATFORM_RECOMMENDED: Partial<Record<Platform, string>> = { ios: "incy" };
 
 function detectPlatform(): Platform {
   const ua = (navigator.userAgent || "").toLowerCase();
@@ -20,11 +24,13 @@ function AppCard({
   platform,
   sub,
   recommended,
+  degraded,
 }: {
   app: AppEntry;
   platform: Platform;
   sub: string;
   recommended?: boolean;
+  degraded?: boolean;
 }) {
   const t = useT();
   const [connected, setConnected] = useState(false);
@@ -37,39 +43,51 @@ function AppCard({
   };
 
   return (
-    <div className="surface flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-fg">{app.name}</span>
-          {recommended && (
-            <span className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent-subtle px-2 py-0.5 text-[10px] font-medium text-accent">
-              <Star className="h-3 w-3" />
-              {t("connect.recommended")}
-            </span>
-          )}
+    <div className="surface flex flex-col gap-2 p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-fg">{app.name}</span>
+            {recommended && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent-subtle px-2 py-0.5 text-[10px] font-medium text-accent">
+                <Star className="h-3 w-3" />
+                {t("connect.recommended")}
+              </span>
+            )}
+          </div>
+          <p className="mt-0.5 text-xs text-fg-muted">{t(app.desc)}</p>
         </div>
-        <p className="mt-0.5 text-xs text-fg-muted">{t(app.desc)}</p>
-      </div>
-      <div className="flex flex-shrink-0 gap-2">
-        {installUrl && (
-          <a
-            href={installUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] bg-bg-raised px-3 text-xs font-medium text-fg transition-colors hover:bg-bg-overlay"
+        <div className="flex flex-shrink-0 gap-2">
+          {installUrl && (
+            <a
+              href={installUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] bg-bg-raised px-3 text-xs font-medium text-fg transition-colors hover:bg-bg-overlay"
+            >
+              <Download className="h-3.5 w-3.5" />
+              {t("connect.install")}
+            </a>
+          )}
+          <button
+            onClick={handleConnect}
+            className="btn-gradient inline-flex h-9 items-center justify-center gap-1.5 rounded-lg px-4 text-xs font-semibold transition-all active:scale-[0.98]"
           >
-            <Download className="h-3.5 w-3.5" />
-            {t("connect.install")}
-          </a>
-        )}
-        <button
-          onClick={handleConnect}
-          className="btn-gradient inline-flex h-9 items-center justify-center gap-1.5 rounded-lg px-4 text-xs font-semibold transition-all active:scale-[0.98]"
-        >
-          {connected ? <Check className="h-3.5 w-3.5" /> : <Zap className="h-3.5 w-3.5" />}
-          {connected ? t("connect.opening") : t("connect.connect")}
-        </button>
+            {connected ? <Check className="h-3.5 w-3.5" /> : <Zap className="h-3.5 w-3.5" />}
+            {connected ? t("connect.opening") : t("connect.connect")}
+          </button>
+        </div>
       </div>
+      {degraded && installUrl && (
+        <p className="flex items-start gap-1.5 rounded-lg border border-warning/40 bg-warning/10 px-2.5 py-1.5 text-[11px] leading-snug text-fg">
+          <AlertTriangle className="mt-px h-3.5 w-3.5 flex-shrink-0 text-warning" />
+          <span>
+            Приложение убрано из российского App Store. Ссылка ведёт в стор другой
+            страны — установка возможна только с Apple ID этого региона. Проще
+            выбрать другое приложение выше.
+          </span>
+        </p>
+      )}
     </div>
   );
 }
@@ -104,7 +122,9 @@ export function ConnectGuide({ subUrl }: { subUrl: string }) {
       .catch(() => setConfig(null)); // при ошибке — показываем все (дефолт)
   }, []);
 
-  const priority = config?.priority || DEFAULT_PRIORITY;
+  // На платформах с ограничением стора (iOS) рекомендуем доступный клиент;
+  // на остальных — выбор админа либо дефолт.
+  const priority = PLATFORM_RECOMMENDED[platform] || config?.priority || DEFAULT_PRIORITY;
 
   const apps = useMemo(() => {
     // Оверрайды ссылок установки (авто-подтяжка из upstream app-config.json).
@@ -188,6 +208,7 @@ export function ConnectGuide({ subUrl }: { subUrl: string }) {
             platform={platform}
             sub={subUrl}
             recommended={app.id === priority}
+            degraded={config?.link_meta?.[app.id.toLowerCase()]?.[platform]?.degraded}
           />
         ))}
         {apps.length === 0 && (

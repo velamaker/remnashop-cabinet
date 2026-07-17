@@ -10,12 +10,31 @@ from typing import Any
 from dishka import FromDishka
 from dishka.integrations.fastapi import inject
 from fastapi import APIRouter
+from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.infrastructure.services.overlay_push import load_notif_settings, save_notif_settings
 
 from ._common import AdminUser
 
 router = APIRouter(prefix="/notifications", tags=["Admin - Notifications"])
+
+
+class NotifSettingsUpdate(BaseModel):
+    admin_push_enabled: bool
+
+
+@router.get("/settings")
+async def get_notif_settings(_admin: AdminUser) -> dict[str, Any]:
+    """Тумблер дублирования админ-уведомлений в web-push (на телефон)."""
+    return load_notif_settings()
+
+
+@router.put("/settings")
+async def update_notif_settings(body: NotifSettingsUpdate, _admin: AdminUser) -> dict[str, Any]:
+    save_notif_settings(body.admin_push_enabled)
+    return load_notif_settings()
 
 
 @router.get("")

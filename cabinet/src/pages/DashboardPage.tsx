@@ -27,6 +27,10 @@ import { ProgressBar } from "@/components/ui/ProgressBar";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { RenewalBanner } from "@/components/RenewalBanner";
+import { TrialDiscountBanner } from "@/components/TrialDiscountBanner";
+import { PromoBanner } from "@/components/PromoBanner";
+import { SubscriptionFreeze } from "@/components/SubscriptionFreeze";
+import { SpeedtestWidget } from "@/components/SpeedtestWidget";
 import {
   formatTrafficLimit,
   formatBytes,
@@ -155,7 +159,11 @@ export default function DashboardPage() {
       </div>
 
       {/* Заметные предупреждения: истечение подписки / окончание трафика */}
+      <PromoBanner />
       <RenewalBanner subscription={subscription} />
+      <TrialDiscountBanner />
+      <SubscriptionFreeze />
+      <SpeedtestWidget />
 
       <div className="card-hero p-6 sm:p-7">
         {/* Тариф */}
