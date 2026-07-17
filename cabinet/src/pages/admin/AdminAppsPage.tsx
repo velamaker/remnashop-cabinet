@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
-import { Save, CheckCircle2, Star, Smartphone, Plus, Trash2, RefreshCw, Link2 } from "lucide-react";
-import { appsAdminApi, type CustomApp } from "@/api/apps";
+import { Save, CheckCircle2, Star, Smartphone, Plus, Trash2, RefreshCw, Link2, Pencil } from "lucide-react";
+import { appsAdminApi, type CustomApp, type ManualLinks, type AppLinkMetaMap } from "@/api/apps";
 import { APPS, PLATFORMS, DEFAULT_PRIORITY } from "@/data/apps";
 import { ApiError } from "@/types/api";
+
+const APP_NAME: Record<string, string> = Object.fromEntries(APPS.map((a) => [a.id, a.name]));
+const PLAT_LABEL: Record<string, string> = Object.fromEntries(PLATFORMS.map((p) => [p.id, p.label]));
 
 const EMPTY_CUSTOM = { name: "", desc: "", deep_link: "", install_url: "", platforms: [] as string[] };
 
@@ -26,6 +29,13 @@ export default function AdminAppsPage() {
   const [linksUpdatedAt, setLinksUpdatedAt] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
+  // Ручная замена ссылок (побеждает резолвер) + мета для подсветки недоступных.
+  const [manualLinks, setManualLinks] = useState<ManualLinks>({});
+  const [linkMeta, setLinkMeta] = useState<AppLinkMetaMap>({});
+  const [linkMissing, setLinkMissing] = useState<string[]>([]);
+  const [mlApp, setMlApp] = useState(APPS[0]?.id ?? "");
+  const [mlPlatform, setMlPlatform] = useState(PLATFORMS[0]?.id ?? "");
+  const [mlUrl, setMlUrl] = useState("");
 
   useEffect(() => {
     appsAdminApi
@@ -38,6 +48,9 @@ export default function AdminAppsPage() {
         // Пусто → подставляем рекомендуемый upstream-источник (готов к «Обновить»).
         setLinksSourceUrl(cfg.links_source_url || RECOMMENDED_LINKS_SOURCE);
         setLinksUpdatedAt(cfg.links_updated_at ?? null);
+        setManualLinks(cfg.manual_links ?? {});
+        setLinkMeta(cfg.link_meta ?? {});
+        setLinkMissing(cfg.link_missing ?? []);
       })
       .catch((e) => setError(e instanceof ApiError ? e.detail : "Ошибка загрузки"))
       .finally(() => setLoading(false));
@@ -50,7 +63,15 @@ export default function AdminAppsPage() {
     try {
       const r = await appsAdminApi.refreshLinks(linksSourceUrl.trim() || undefined);
       setLinksUpdatedAt(r.updated_at);
-      setRefreshMsg(`Обновлено ссылок для ${r.count} приложений: ${r.apps.join(", ")}`);
+      setLinkMissing(r.missing ?? []);
+      let msg = `Обновлено ссылок для ${r.count} приложений: ${r.apps.join(", ")}`;
+      if (r.missing && r.missing.length > 0) msg += ` · без рабочей ссылки: ${r.missing.join(", ")}`;
+      setRefreshMsg(msg);
+      // Перечитываем конфиг, чтобы обновить таблицу статуса (link_meta/version).
+      appsAdminApi.get().then((cfg) => {
+        setLinkMeta(cfg.link_meta ?? {});
+        setLinkMissing(cfg.link_missing ?? []);
+      }).catch(() => {});
     } catch (e) {
       setError(e instanceof ApiError ? e.detail : "Не удалось обновить ссылки");
     } finally {
@@ -85,6 +106,63 @@ export default function AdminAppsPage() {
 
   const removeCustom = (i: number) => setCustom((prev) => prev.filter((_, idx) => idx !== i));
 
+  const addManual = () => {
+    const app = mlApp.trim().toLowerCase();
+    const url = mlUrl.trim();
+    if (!app || !mlPlatform || !/^https?:\/\//.test(url)) {
+      setError("Выберите приложение, платформу и корректную ссылку (http/https)");
+      return;
+    }
+    setError(null);
+    setManualLinks((prev) => ({ ...prev, [app]: { ...(prev[app] || {}), [mlPlatform]: url } }));
+    setMlUrl("");
+  };
+
+  const removeManual = (app: string, plat: string) =>
+    setManualLinks((prev) => {
+      const appLinks = { ...(prev[app] || {}) };
+      delete appLinks[plat];
+      const next = { ...prev };
+      if (Object.keys(appLinks).length === 0) delete next[app];
+      else next[app] = appLinks;
+      return next;
+    });
+
+  // Плоский список ручных ссылок для отображения.
+  const manualRows = Object.entries(manualLinks).flatMap(([app, plats]) =>
+    Object.entries(plats).map(([plat, url]) => ({ app, plat, url })),
+  );
+  // Подсказка: какие ссылки сейчас недоступны в родном сторе (degraded).
+  const degradedRows = Object.entries(linkMeta).flatMap(([app, plats]) =>
+    Object.entries(plats)
+      .filter(([, m]) => m.degraded)
+      .map(([plat]) => ({ app, plat })),
+  );
+
+  // Таблица статуса по каждой ссылке (тир 2): версия, источник, состояние.
+  const statusRows = [
+    ...Object.entries(linkMeta).flatMap(([app, plats]) =>
+      Object.entries(plats).map(([plat, m]) => ({
+        app,
+        plat,
+        version: m.version ?? null,
+        source: m.source ?? null,
+        status: m.degraded ? ("degraded" as const) : ("ok" as const),
+      })),
+    ),
+    // missing = резолвер есть, ссылки нет (в linkMeta такой записи не будет).
+    ...linkMissing
+      .map((k) => {
+        const idx = k.indexOf(":");
+        return idx < 0 ? { app: k, plat: "" } : { app: k.slice(0, idx), plat: k.slice(idx + 1) };
+      })
+      .filter(({ app, plat }) => Boolean(plat) && !linkMeta[app]?.[plat])
+      .map(({ app, plat }) => ({ app, plat, version: null, source: null, status: "missing" as const })),
+  ].sort((a, b) => {
+    const rank = { missing: 0, degraded: 1, ok: 2 } as const;
+    return rank[a.status] - rank[b.status] || a.app.localeCompare(b.app) || a.plat.localeCompare(b.plat);
+  });
+
   const toggle = (id: string) => {
     setEnabled((prev) => {
       const next = new Set(prev);
@@ -107,6 +185,7 @@ export default function AdminAppsPage() {
         enabled: Array.from(enabled),
         custom,
         links_source_url: linksSourceUrl.trim() || null,
+        manual_links: manualLinks,
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -250,6 +329,117 @@ export default function AdminAppsPage() {
             : "Ссылки ещё не подтягивались — сохраните URL и нажмите «Обновить сейчас»."}
         </p>
         {refreshMsg && <p className="mt-1 text-xs text-success">{refreshMsg}</p>}
+
+        {/* Статус по каждой ссылке (тир 2): версия / источник / состояние */}
+        {statusRows.length > 0 && (
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-fg-muted">
+                  <th className="py-1 pr-3 font-medium">Приложение</th>
+                  <th className="py-1 pr-3 font-medium">Платформа</th>
+                  <th className="py-1 pr-3 font-medium">Версия</th>
+                  <th className="py-1 pr-3 font-medium">Источник</th>
+                  <th className="py-1 font-medium">Статус</th>
+                </tr>
+              </thead>
+              <tbody>
+                {statusRows.map((r) => (
+                  <tr key={`${r.app}-${r.plat}`} className="border-t border-border-subtle/60">
+                    <td className="py-1 pr-3 text-fg">{APP_NAME[r.app] || r.app}</td>
+                    <td className="py-1 pr-3 text-fg-muted">{PLAT_LABEL[r.plat] || r.plat}</td>
+                    <td className="py-1 pr-3 font-mono text-fg-muted">{r.version || "—"}</td>
+                    <td className="py-1 pr-3 font-mono text-fg-subtle">{r.source || "—"}</td>
+                    <td className="py-1">
+                      {r.status === "ok" && <span className="text-success">🟢 родной стор</span>}
+                      {r.status === "degraded" && <span className="text-warning">🟡 не в родном сторе</span>}
+                      {r.status === "missing" && <span className="text-danger">🔴 нет ссылки</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="mt-2 text-xs text-fg-subtle">
+              🟡 приложение снято из родного (RU) стора — открыть можно только Apple ID
+              того региона. 🔴 рабочая ссылка не найдена ни одним резолвером — замените
+              вручную ниже. При новой деградации/смерти основной ссылки бот присылает
+              владельцу уведомление.
+            </p>
+          </div>
+        )}
+      </section>
+
+      {/* Ручная замена ссылок */}
+      <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-fg">
+          <Pencil className="h-4 w-4 text-accent" />
+          Заменить ссылку вручную
+        </h2>
+        <p className="mt-0.5 text-xs text-fg-muted">
+          Ручная ссылка <span className="text-fg">побеждает</span> авто-подтяжку и
+          снимает пометку «недоступно». Пригодится, когда приложение вернулось в
+          стор под новой ссылкой (напр. Happ снова в RU App Store) — вставьте её здесь.
+        </p>
+
+        {degradedRows.length > 0 && (
+          <div className="mt-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-fg">
+            Сейчас недоступны в родном сторе (стоит заменить):{" "}
+            <span className="font-medium">
+              {degradedRows.map((r) => `${APP_NAME[r.app] || r.app} · ${PLAT_LABEL[r.plat] || r.plat}`).join(", ")}
+            </span>
+          </div>
+        )}
+
+        {/* Список ручных ссылок */}
+        {manualRows.length > 0 && (
+          <div className="mt-4 space-y-2">
+            {manualRows.map((r) => (
+              <div key={`${r.app}-${r.plat}`} className="flex items-center gap-3 rounded-xl border border-border-subtle bg-bg p-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-fg">
+                    {APP_NAME[r.app] || r.app} <span className="text-fg-subtle">· {PLAT_LABEL[r.plat] || r.plat}</span>
+                  </p>
+                  <p className="truncate text-xs text-fg-muted font-mono">{r.url}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeManual(r.app, r.plat)}
+                  className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border border-danger/30 bg-danger/5 text-danger hover:bg-danger/10"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Форма добавления */}
+        <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr] rounded-xl border border-border-subtle bg-bg p-4">
+          <select className="input" value={mlApp} onChange={(e) => setMlApp(e.target.value)}>
+            {APPS.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+          <select className="input" value={mlPlatform} onChange={(e) => setMlPlatform(e.target.value)}>
+            {PLATFORMS.map((p) => (
+              <option key={p.id} value={p.id}>{p.label}</option>
+            ))}
+          </select>
+          <input
+            className="input font-mono sm:col-span-2"
+            placeholder="https://apps.apple.com/ru/app/..."
+            value={mlUrl}
+            onChange={(e) => setMlUrl(e.target.value)}
+          />
+          <button
+            type="button"
+            onClick={addManual}
+            className="inline-flex w-fit items-center gap-1.5 rounded-lg border border-border-subtle bg-bg-subtle px-3 py-1.5 text-sm font-medium text-fg hover:bg-bg-overlay sm:col-span-2"
+          >
+            <Plus className="h-4 w-4" /> Добавить / заменить
+          </button>
+        </div>
+        <p className="mt-2 text-[11px] text-fg-subtle">Не забудьте «Сохранить» вверху.</p>
       </section>
 
       {/* Свои приложения */}

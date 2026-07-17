@@ -1,3 +1,4 @@
+import { GiftCard } from "@/components/GiftCard";
 import { useEffect, useState, useCallback } from "react";
 import { Wallet, TrendingUp, ShoppingBag, ChevronLeft, ChevronRight, AlertCircle, CreditCard, PlusCircle } from "lucide-react";
 import { balanceApi, POINT_VALUE_RUB, type BalanceResponse, type BalanceTransaction, type TopupConfig } from "@/api/balance";
@@ -532,6 +533,9 @@ export default function BalancePage() {
 
       {/* Пополнить баланс через шлюз (скроется, если выключено/нет шлюзов) */}
       <TopupCard />
+
+      {/* Подарить подписку с баланса */}
+      <GiftCard />
 
       {/* Перевести баллы рефералки в рубли (скроется, если баллов нет) */}
       <ConvertPoints

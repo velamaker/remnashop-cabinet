@@ -36,10 +36,21 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Bell,
+  Megaphone,
+  Percent,
+  Undo2,
+  BarChart3,
+  Umbrella,
+  Gauge,
+  Snowflake,
+  Database,
+  ShieldCheck,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
+import { Admin2FAUnlock } from "@/components/admin/Admin2FA";
+import { AdminNotifBell } from "@/components/admin/AdminNotifBell";
 
 // section — ключ раздела прав (см. backend permissions.py). Пункт показывается,
 // только если у пользователя есть доступ к разделу (fullAccess или в списке).
@@ -73,6 +84,8 @@ export const navGroups: { title: string; items: NavItem[] }[] = [
       { to: "/admin/promocodes", icon: Tag, label: "Промокоды", section: "promocodes" },
       { to: "/admin/gateways", icon: Wallet, label: "Шлюзы", section: "gateways" },
       { to: "/admin/topup", icon: Coins, label: "Пополнение", section: "settings" },
+      { to: "/admin/reserve", icon: Umbrella, label: "Резервный доступ", section: "settings" },
+      { to: "/admin/freeze", icon: Snowflake, label: "Заморозка", section: "settings" },
     ],
   },
   {
@@ -80,6 +93,12 @@ export const navGroups: { title: string; items: NavItem[] }[] = [
     items: [
       { to: "/admin/ad-links", icon: Link2, label: "Рекл. ссылки", section: "ad_links" },
       { to: "/admin/broadcasts", icon: Radio, label: "Рассылки", section: "broadcasts" },
+      { to: "/admin/promo-banner", icon: Megaphone, label: "Промо-баннер", section: "settings" },
+      { to: "/admin/trial-discount", icon: Percent, label: "Скидка триальщикам", section: "settings" },
+      { to: "/admin/winback", icon: Undo2, label: "Win-back", section: "settings" },
+      { to: "/admin/digest", icon: BarChart3, label: "Дайджест", section: "settings" },
+      { to: "/admin/traffic-alert", icon: Gauge, label: "Трафик 80%", section: "settings" },
+      { to: "/admin/new-device", icon: Smartphone, label: "Новое устройство", section: "settings" },
     ],
   },
   {
@@ -108,6 +127,8 @@ export const navGroups: { title: string; items: NavItem[] }[] = [
       { to: "/admin/notifications", icon: Bell, label: "Уведомления", section: "settings" },
       { to: "/admin/summary", icon: Sunrise, label: "Утренняя сводка", section: "settings" },
       { to: "/admin/audit", icon: ShieldAlert, label: "Аудит", section: "audit" },
+      { to: "/admin/backup", icon: Database, label: "Бэкап настроек", section: "settings" },
+      { to: "/admin/admin-ip", icon: ShieldCheck, label: "Безопасность", section: "settings" },
       { to: "/admin/updates", icon: Sparkles, label: "Обновления", section: "updates" },
     ],
   },
@@ -204,6 +225,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="relative flex w-full h-[100dvh] overflow-hidden bg-bg">
+      <Admin2FAUnlock />
       {/* Sidebar */}
       <aside
         className={clsx(
@@ -223,14 +245,17 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             </div>
             {!collapsed && <span className="text-sm font-semibold tracking-tight text-fg">Админ</span>}
           </NavLink>
-          <button
-            onClick={toggleCollapsed}
-            title={collapsed ? "Развернуть меню" : "Свернуть меню"}
-            aria-label={collapsed ? "Развернуть меню" : "Свернуть меню"}
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-fg-subtle transition-colors hover:bg-bg-subtle hover:text-fg"
-          >
-            {collapsed ? <PanelLeftOpen className="h-4 w-4" strokeWidth={1.75} /> : <PanelLeftClose className="h-4 w-4" strokeWidth={1.75} />}
-          </button>
+          <div className={clsx("flex items-center", collapsed ? "flex-col gap-1" : "gap-0.5")}>
+            <AdminNotifBell />
+            <button
+              onClick={toggleCollapsed}
+              title={collapsed ? "Развернуть меню" : "Свернуть меню"}
+              aria-label={collapsed ? "Развернуть меню" : "Свернуть меню"}
+              className="flex h-7 w-7 items-center justify-center rounded-lg text-fg-subtle transition-colors hover:bg-bg-subtle hover:text-fg"
+            >
+              {collapsed ? <PanelLeftOpen className="h-4 w-4" strokeWidth={1.75} /> : <PanelLeftClose className="h-4 w-4" strokeWidth={1.75} />}
+            </button>
+          </div>
         </div>
 
         <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto min-h-0">
@@ -249,14 +274,13 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             <ChevronLeft className="h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
             {!collapsed && "Кабинет"}
           </NavLink>
-          <div className={clsx("mt-2 flex items-center", collapsed ? "justify-center" : "justify-between px-2.5")}>
-            {!collapsed && (
+          {!collapsed && (
+            <div className="mt-2 px-2.5">
               <span className="truncate text-xs text-fg-subtle">
                 {user?.username ? `@${user.username}` : user?.email || user?.name}
               </span>
-            )}
-            <ThemeSwitcher vertical={collapsed} />
-          </div>
+            </div>
+          )}
           <button
             onClick={handleLogout}
             title={collapsed ? "Выйти" : undefined}
@@ -288,7 +312,19 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             <span className="text-sm font-semibold tracking-tight text-fg">Админ</span>
           </NavLink>
         </div>
-        <ThemeSwitcher />
+        <div className="flex items-center gap-1">
+          <AdminNotifBell />
+          {/* Всегда на виду — выход в кабинет без скролла вниз по меню. */}
+          <NavLink
+            to="/"
+            title="В кабинет"
+            className="flex h-8 items-center gap-1 rounded-lg px-2 text-fg-muted transition-colors hover:bg-bg-subtle hover:text-fg"
+          >
+            <ChevronLeft className="h-4 w-4" strokeWidth={1.75} />
+            <span className="text-sm font-medium">Кабинет</span>
+          </NavLink>
+          <ThemeSwitcher />
+        </div>
       </div>
 
       {/* Mobile menu drawer — все разделы (не помещаются в нижний навбар) */}
@@ -298,7 +334,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             className="absolute inset-0 bg-black/40 animate-fade-in"
             onClick={() => setMenuOpen(false)}
           />
-          <aside className="absolute left-0 top-0 flex h-full w-72 max-w-[82%] flex-col overflow-y-auto border-r border-[var(--border)] bg-bg px-2 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))]">
+          <aside className="absolute left-0 top-0 flex h-full w-72 max-w-[82%] flex-col overflow-hidden border-r border-[var(--border)] bg-bg px-2 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))]">
             <div className="mb-4 flex items-center justify-between px-2.5">
               <div className="flex items-center gap-2">
                 <div className="flex h-6 w-6 items-center justify-center rounded-md bg-danger/10 text-danger">
@@ -315,11 +351,11 @@ export function AdminLayout({ children }: { children: ReactNode }) {
               </button>
             </div>
 
-            <nav ref={drawerNavRef} className="flex flex-1 flex-col gap-0.5">
+            <nav ref={drawerNavRef} className="flex flex-1 flex-col gap-0.5 overflow-y-auto min-h-0">
               <GroupedNav onNavigate={() => setMenuOpen(false)} itemPad="py-2.5" canSection={canSection} />
             </nav>
 
-            <div className="mt-4 flex flex-col gap-0.5 border-t border-[var(--border)] pt-4">
+            <div className="mt-4 flex flex-shrink-0 flex-col gap-0.5 border-t border-[var(--border)] pt-4">
               <NavLink
                 to="/"
                 onClick={() => setMenuOpen(false)}
@@ -342,6 +378,10 @@ export function AdminLayout({ children }: { children: ReactNode }) {
 
       {/* Main — единственный скролл-контейнер страницы (app-scroll) */}
       <main className="app-scroll flex-1 min-w-0 px-5 pb-8 pt-[calc(5rem+env(safe-area-inset-top))] md:px-8 md:pt-8">
+        {/* Переключатель темы — вверху справа области контента (в потоке: прокручивается со страницей, не парит). Десктоп; на мобиле он в верхней панели. */}
+        <div className="mb-3 hidden justify-end md:flex">
+          <ThemeSwitcher />
+        </div>
         <div key={location.pathname} className="mx-auto max-w-6xl animate-fade-in">
           {isReadonlyAdmin && (
             <div className="mb-5 flex items-center gap-2.5 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">

@@ -19,7 +19,10 @@ from loguru import logger
 
 from src.infrastructure.taskiq.broker import broker
 
-REPO = "alexdsndr161rus2015-maker/remnashop-cabinet"
+# Репо форка. Совпадает с admin/updates.py; override через env UPDATE_REPO.
+# ВАЖНО: при переименовании репо GitHub отдаёт 301 — поэтому клиент ниже идёт с
+# follow_redirects=True, иначе теги не подтянутся и уведомление не придёт.
+REPO = (os.environ.get("UPDATE_REPO") or "velamaker/remnashop-cabinet").strip()
 ASSETS_DIR = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets"))
 STATE_PATH = ASSETS_DIR / "update_state.json"
 VERSION_PATH = Path("/opt/remnashop/VERSION")
@@ -43,7 +46,7 @@ def _parse(v: str) -> tuple[int, ...]:
 
 async def _latest_tag() -> str | None:
     try:
-        async with httpx.AsyncClient(timeout=8) as cli:
+        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as cli:
             resp = await cli.get(f"https://api.github.com/repos/{REPO}/tags")
         tags = resp.json()
         names = [t["name"] for t in tags if isinstance(t, dict) and t.get("name")]

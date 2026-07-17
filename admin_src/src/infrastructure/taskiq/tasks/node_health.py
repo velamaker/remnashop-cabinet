@@ -30,7 +30,7 @@ from dishka.integrations.taskiq import FromDishka, inject
 from httpx import AsyncClient, Timeout
 from loguru import logger
 
-from src.application.common import Notifier
+from src.application.common import Notifier, Remnawave
 from src.application.dto import MessagePayloadDto
 from src.core.config import AppConfig
 from src.core.enums import Role
@@ -51,6 +51,59 @@ def _cert_warn_days() -> int:
         return int(os.environ.get("NODE_CERT_WARN_DAYS", "10"))
     except ValueError:
         return 10
+
+
+def _auto_restart_enabled() -> bool:
+    """Авто-рестарт ноды при упавшем xray. По умолчанию ВЫКЛ (осторожно)."""
+    return (os.environ.get("NODE_AUTO_RESTART_XRAY") or "false").strip().lower() in (
+        "1", "true", "yes", "on", "да",
+    )
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _minutes_since(iso: Optional[str]) -> float:
+    """Минут прошло с ISO-времени. None/битое → большое число (кулдаун пройден)."""
+    if not iso:
+        return 1e9
+    try:
+        t = datetime.fromisoformat(iso)
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - t).total_seconds() / 60.0
+    except Exception:
+        return 1e9
+
+
+def _record_uptime(st: dict[str, Any], up: bool) -> None:
+    """Суточный агрегат аптайма ноды для /status: history[YYYY-MM-DD]={t,u}. 30 дней."""
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    hist = st.setdefault("history", {})
+    slot = hist.setdefault(day, {"t": 0, "u": 0})
+    slot["t"] = int(slot.get("t", 0)) + 1
+    if up:
+        slot["u"] = int(slot.get("u", 0)) + 1
+    if len(hist) > 32:  # держим ~31 день
+        for k in sorted(hist.keys())[:-31]:
+            hist.pop(k, None)
+
+
+async def _restart_node_via_sdk(remnawave: Remnawave, uuid: str) -> bool:
+    """Авто-рестарт ноды через SDK панели. best-effort."""
+    try:
+        sdk = getattr(remnawave, "sdk", None)
+        if sdk is None:
+            return False
+        await sdk.nodes.restart_node(node_uuid=uuid)
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"node_health: авто-рестарт {uuid} не удался: {e}")
+        return False
 
 
 def _load_state() -> dict[str, Any]:
@@ -156,6 +209,7 @@ async def _cert_days_left(host: str) -> Optional[int]:
 async def check_node_health(
     config: FromDishka[AppConfig],
     notifier: FromDishka[Notifier],
+    remnawave: FromDishka[Remnawave],
 ) -> None:
     if not _enabled():
         return
@@ -194,6 +248,33 @@ async def check_node_health(
         elif not xray_down and st.get("xray_down"):
             alerts.append(f"✅ <b>{name}</b>: xray снова работает.")
             st["xray_down"] = False
+
+        # 1a) авто-восстановление: xray лежит дольше порога → авто-рестарт ноды.
+        #     Env: NODE_AUTO_RESTART_XRAY (вкл), NODE_AUTO_RESTART_AFTER_MIN (порог),
+        #     NODE_AUTO_RESTART_COOLDOWN_MIN (не чаще раза в N мин).
+        if xray_down:
+            if not st.get("xray_down_since"):
+                st["xray_down_since"] = now_iso
+            if _auto_restart_enabled():
+                down_min = _minutes_since(st.get("xray_down_since"))
+                cooldown_min = _minutes_since(st.get("last_auto_restart"))
+                uuid = n.get("uuid")
+                if (
+                    uuid
+                    and down_min >= _env_int("NODE_AUTO_RESTART_AFTER_MIN", 20)
+                    and cooldown_min >= _env_int("NODE_AUTO_RESTART_COOLDOWN_MIN", 60)
+                ):
+                    ok = await _restart_node_via_sdk(remnawave, str(uuid))
+                    st["last_auto_restart"] = now_iso
+                    alerts.append(
+                        f"🔁 <b>{name}</b>: xray лежал ~{int(down_min)} мин — "
+                        + ("отправлен <b>авто-рестарт</b> ноды." if ok else "авто-рестарт <b>не удался</b> (см. логи).")
+                    )
+        else:
+            st.pop("xray_down_since", None)
+
+        # 1b) история аптайма для /status (нода на связи и xray жив).
+        _record_uptime(st, connected and not xray_down)
 
         # 2) смена IP ноды (DNS)
         if address:

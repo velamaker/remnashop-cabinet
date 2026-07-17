@@ -46,6 +46,13 @@ from src.web.endpoints.public.support import router as support_router
 from src.web.endpoints.public.push import router as push_router
 from src.web.endpoints.public.promocode import router as promocode_router
 from src.web.endpoints.public.referral_stats import router as referral_stats_router
+from src.web.endpoints.public.trial_discount import router as trial_discount_public_router
+from src.web.endpoints.public.promo_banner import router as promo_banner_public_router
+from src.web.endpoints.public.freeze import router as freeze_public_router
+from src.web.endpoints.public.gift import router as gift_public_router
+from src.web.endpoints.public.sessions import router as sessions_public_router
+from src.web.endpoints.public.account import router as account_public_router
+from src.web.endpoints.public.notifications import router as notifications_public_router
 
 # DDL таблиц поддержки. Идемпотентно (IF NOT EXISTS) — повторный старт безопасен.
 _SUPPORT_TABLES_DDL = (
@@ -115,6 +122,84 @@ _SUPPORT_TABLES_DDL = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS ix_hwid_devices_hwid ON hwid_devices (hwid)",
+    # Модель/платформа устройства (из Remnawave HWID) — для наглядности группы
+    # «один девайс — разные аккаунты» в детекте абьюза.
+    "ALTER TABLE hwid_devices ADD COLUMN IF NOT EXISTS device_model VARCHAR(128)",
+    "ALTER TABLE hwid_devices ADD COLUMN IF NOT EXISTS platform VARCHAR(64)",
+    # Скидка на первую покупку триальщикам (за N дней до конца триала). Одна строка
+    # на юзера — трекает выданную скидку для дедупа, срока жизни и баннера в кабинете.
+    # Саму скидку крон пишет в users.purchase_discount (база гасит её после покупки).
+    """
+    CREATE TABLE IF NOT EXISTS trial_discounts (
+        user_id    INTEGER      NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        percent    INTEGER      NOT NULL,
+        granted_at TIMESTAMPTZ  NOT NULL DEFAULT now(),
+        expires_at TIMESTAMPTZ  NOT NULL,
+        used       BOOLEAN      NOT NULL DEFAULT false
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_trial_discounts_expires ON trial_discounts (expires_at)",
+    # Резервный доступ истёкшим подпискам (1 ГБ на N дней). Одна строка на юзера —
+    # дедуп «один резерв на юзера» + окончание окна (reserve_expire_at) → крон истекает.
+    """
+    CREATE TABLE IF NOT EXISTS reserve_grants (
+        user_id           INTEGER      NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        remna_uuid        VARCHAR(64)  NOT NULL,
+        granted_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
+        reserve_expire_at TIMESTAMPTZ  NOT NULL,
+        ended             BOOLEAN      NOT NULL DEFAULT false
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_reserve_grants_active ON reserve_grants (ended, reserve_expire_at)",
+    # Win-back: скидка «вернись» истёкшим через N дней. Одна строка на юзера (дедуп +
+    # срок жизни промо). Саму скидку крон пишет в users.purchase_discount.
+    """
+    CREATE TABLE IF NOT EXISTS winback_grants (
+        user_id    INTEGER      NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        percent    INTEGER      NOT NULL,
+        granted_at TIMESTAMPTZ  NOT NULL DEFAULT now(),
+        expires_at TIMESTAMPTZ  NOT NULL,
+        used       BOOLEAN      NOT NULL DEFAULT false
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_winback_grants_expires ON winback_grants (expires_at)",
+    # Известные HWID-устройства юзеров — база для детекта «новое устройство подключилось»
+    # (крон new_device.py). Первый снимок юзера = baseline (без уведомления).
+    """
+    CREATE TABLE IF NOT EXISTS known_devices (
+        user_id    INTEGER      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        hwid       VARCHAR(256) NOT NULL,
+        first_seen TIMESTAMPTZ  NOT NULL DEFAULT now(),
+        PRIMARY KEY (user_id, hwid)
+    )
+    """,
+    # Заморозка (пауза) подписки: одна активная пауза на юзера. remaining_seconds —
+    # сохранённый остаток срока на момент паузы (при возобновлении expire = now+остаток).
+    """
+    CREATE TABLE IF NOT EXISTS subscription_freezes (
+        user_id           INTEGER      NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        remna_uuid        VARCHAR(64)  NOT NULL,
+        frozen_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
+        remaining_seconds BIGINT       NOT NULL,
+        active            BOOLEAN      NOT NULL DEFAULT true
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_subscription_freezes_active ON subscription_freezes (active, frozen_at)",
+    # 2FA (TOTP) админов — opt-in на админа (см. services/overlay_admin_2fa.py).
+    """
+    CREATE TABLE IF NOT EXISTS admin_2fa (
+        user_id  INTEGER      NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        secret   VARCHAR(64)  NOT NULL,
+        enabled  BOOLEAN      NOT NULL DEFAULT false
+    )
+    """,
+    # «Выйти со всех устройств»: токены с iat раньше invalidated_at — недействительны.
+    """
+    CREATE TABLE IF NOT EXISTS session_invalidations (
+        user_id        INTEGER      NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        invalidated_at TIMESTAMPTZ  NOT NULL DEFAULT now()
+    )
+    """,
     # История email-рассылок из кабинета (TG-рассылки живут в базовой таблице
     # broadcasts; для email её enum-аудиторий не хватает — трекаем отдельно).
     # Фактическую отправку делает taskiq/tasks/broadcast_email.py.
@@ -184,6 +269,18 @@ _SUPPORT_TABLES_DDL = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS ix_admin_notifications_created ON admin_notifications (created_at DESC)",
+    """
+    CREATE TABLE IF NOT EXISTS user_notifications (
+        id         BIGSERIAL    PRIMARY KEY,
+        user_id    INTEGER      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title      VARCHAR(200) NOT NULL DEFAULT '',
+        body       TEXT         NOT NULL DEFAULT '',
+        url        VARCHAR(500) NOT NULL DEFAULT '/',
+        is_read    BOOLEAN      NOT NULL DEFAULT false,
+        created_at TIMESTAMPTZ  NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_user_notifications_user ON user_notifications (user_id, created_at DESC)",
 )
 
 
@@ -211,6 +308,13 @@ def _overlay_public_router() -> APIRouter:
     router.include_router(push_router)
     router.include_router(promocode_router)
     router.include_router(referral_stats_router)
+    router.include_router(trial_discount_public_router)
+    router.include_router(promo_banner_public_router)
+    router.include_router(freeze_public_router)
+    router.include_router(gift_public_router)
+    router.include_router(sessions_public_router)
+    router.include_router(account_public_router)
+    router.include_router(notifications_public_router)
     return router
 
 
@@ -277,8 +381,48 @@ def application() -> FastAPI:
     _wrap_lifespan_with_support_tables(app, container)
     _add_admin_audit_middleware(app, container)
     _add_login_tracking_middleware(app, container)
+    _add_session_check_middleware(app, container)
 
     return app
+
+
+def _add_session_check_middleware(app: FastAPI, container: AsyncContainer) -> None:
+    """«Выйти со всех устройств»: отклоняет токены с iat раньше user.invalidated_at.
+
+    Проверяет только аутентифицированные /api-запросы (кроме /auth/* — чтобы можно
+    было войти заново). Битый/истёкший токен пропускаем — с ним разберётся auth роута.
+    """
+    import jwt as _jwt
+    from fastapi.responses import JSONResponse
+
+    @app.middleware("http")
+    async def _check_session(request: Request, call_next):  # type: ignore[no-untyped-def]
+        token = request.cookies.get("access_token")
+        path = request.url.path
+        if token and "/api/" in path and "/auth/" not in path:
+            try:
+                cfg = AppConfig.get()
+                secret = (
+                    cfg.jwt_secret.get_secret_value() if getattr(cfg, "jwt_secret", None) else None
+                )
+                if secret:
+                    payload = _jwt.decode(
+                        token, secret, algorithms=["HS256"], options={"verify_sub": False}
+                    )
+                    uid = int(payload["sub"])
+                    iat = payload.get("iat")
+                    from src.infrastructure.services.overlay_sessions import token_invalidated
+
+                    sm = await container.get(async_sessionmaker[AsyncSession])
+                    async with sm() as s:
+                        if await token_invalidated(s, uid, iat):
+                            return JSONResponse(
+                                status_code=401,
+                                content={"detail": "Сессия завершена — войдите заново"},
+                            )
+            except Exception:  # noqa: BLE001 — не наша забота валидировать токен здесь
+                pass
+        return await call_next(request)
 
 
 # Пути входа (по суффиксу полного пути). При успехе они выставляют access_token —
@@ -366,6 +510,16 @@ def _add_login_tracking_middleware(app: FastAPI, container: AsyncContainer) -> N
                                 },
                             )
                             await s.commit()
+                            from src.infrastructure.services.overlay_login_alert import (
+                                maybe_alert_new_login,
+                            )
+
+                            await maybe_alert_new_login(
+                                s,
+                                uid,
+                                _client_ip(request),
+                                (request.headers.get("user-agent") or "")[:400],
+                            )
         except Exception:  # noqa: BLE001 — трекинг не должен ронять запрос
             logger.debug("login event write skipped")
         return response

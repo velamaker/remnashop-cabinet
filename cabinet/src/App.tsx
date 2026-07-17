@@ -10,6 +10,7 @@ import LoginPage from "@/pages/LoginPage";
 import RegisterPage from "@/pages/RegisterPage";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
 import StatusPage from "@/pages/StatusPage";
+import PricingPage from "@/pages/PricingPage";
 import DashboardPage from "@/pages/DashboardPage";
 import DevicesPage from "@/pages/DevicesPage";
 import BillingPage from "@/pages/BillingPage";
@@ -30,6 +31,16 @@ import AdminBroadcastsPage from "@/pages/admin/AdminBroadcastsPage";
 import AdminSettingsPage from "@/pages/admin/AdminSettingsPage";
 import AdminTopupPage from "@/pages/admin/AdminTopupPage";
 import AdminMorningSummaryPage from "@/pages/admin/AdminMorningSummaryPage";
+import AdminTrialDiscountPage from "@/pages/admin/AdminTrialDiscountPage";
+import AdminWinbackPage from "@/pages/admin/AdminWinbackPage";
+import AdminPromoBannerPage from "@/pages/admin/AdminPromoBannerPage";
+import AdminDigestPage from "@/pages/admin/AdminDigestPage";
+import AdminReservePage from "@/pages/admin/AdminReservePage";
+import AdminTrafficAlertPage from "@/pages/admin/AdminTrafficAlertPage";
+import AdminNewDevicePage from "@/pages/admin/AdminNewDevicePage";
+import AdminFreezePage from "@/pages/admin/AdminFreezePage";
+import AdminBackupPage from "@/pages/admin/AdminBackupPage";
+import AdminIpPage from "@/pages/admin/AdminIpPage";
 import AdminServerStatusPage from "@/pages/admin/AdminServerStatusPage";
 import AdminSubscriptionAppPage from "@/pages/admin/AdminSubscriptionAppPage";
 import AdminAppearancePage from "@/pages/admin/AdminAppearancePage";
@@ -59,6 +70,8 @@ export default function App() {
           <Routes>
             {/* Публичная страница статуса — без входа */}
             <Route path="/status" element={<StatusPage />} />
+            <Route path="/pricing" element={<PricingPage />} />
+            <Route path="/plans" element={<PricingPage />} />
             <Route
               path="/login"
               element={
@@ -251,6 +264,86 @@ export default function App() {
               element={
                 <AdminRoute>
                   <AdminMorningSummaryPage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/trial-discount"
+              element={
+                <AdminRoute>
+                  <AdminTrialDiscountPage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/winback"
+              element={
+                <AdminRoute>
+                  <AdminWinbackPage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/promo-banner"
+              element={
+                <AdminRoute>
+                  <AdminPromoBannerPage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/digest"
+              element={
+                <AdminRoute>
+                  <AdminDigestPage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/reserve"
+              element={
+                <AdminRoute>
+                  <AdminReservePage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/traffic-alert"
+              element={
+                <AdminRoute>
+                  <AdminTrafficAlertPage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/admin-ip"
+              element={
+                <AdminRoute>
+                  <AdminIpPage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/backup"
+              element={
+                <AdminRoute>
+                  <AdminBackupPage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/freeze"
+              element={
+                <AdminRoute>
+                  <AdminFreezePage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/new-device"
+              element={
+                <AdminRoute>
+                  <AdminNewDevicePage />
                 </AdminRoute>
               }
             />

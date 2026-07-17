@@ -49,6 +49,15 @@ assets/info_content.json
 assets/server_status.json
 assets/morning_summary_state.json
 assets/app_links.json
+# Все рантайм-стейт файлы кронов (дедуп/бейзлайны) — не часть кода, не публикуем.
+assets/*_state.json
+assets/app_links_alert_state.json
+
+# НАДЁЖНО: любой assets/*.json — это per-install конфиг/стейт/секрет (branding,
+# push_vapid=приватный ключ, admin_ip=IP владельца, тумблеры фич и т.п.), КРОМЕ
+# единственного сид-файла apps.json. Так новые конфиги фич не «протекут» в git.
+assets/*.json
+!assets/apps.json
 
 # Editor / OS
 .DS_Store
@@ -57,3 +66,19 @@ assets/app_links.json
 
 # Claude
 .claude/
+
+# Локальный HA-оверлей (инфра-кастом, не публиковать)
+docker-compose.local-ha.yml
+cabinet/nginx.failover.conf
+
+# Кастом страницы подписки Remnawave (sub.begemot.cc) — инфра конкретной установки,
+# НЕ в git (Фаза 14 роадмапа): бренд/цвета/патч index.html + re-patch скрипт.
+assets/sub_app_config.json
+assets/sub_app_config.base.json
+assets/sub_index.html
+scripts/patch-sub-index.sh
+
+# Приватный раздел абьюза в боте (Фаза 3, только владельцу) — в образ через COPY,
+# в публичный GitHub НЕ выкладываем (кабинетный детект открыт, ботовый — приватный).
+admin_src/src/telegram/routers/overlay_abuse.py
+assets/sub_index.html.bak

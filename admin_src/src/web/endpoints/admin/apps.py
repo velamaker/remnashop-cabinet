@@ -26,6 +26,7 @@ class AppsConfigUpdate(BaseModel):
     enabled: Optional[list[str]] = None  # список id (None — не менять)
     custom: Optional[list[dict[str, Any]]] = None  # свои приложения (None — не менять)
     links_source_url: Optional[str] = None  # URL источника авто-подтяжки ("" → сброс)
+    manual_links: Optional[dict[str, dict[str, str]]] = None  # ручные оверрайды (None — не менять)
 
 
 class RefreshLinksBody(BaseModel):
@@ -33,10 +34,25 @@ class RefreshLinksBody(BaseModel):
 
 
 def _with_links(data: dict[str, Any]) -> dict[str, Any]:
-    """Дополнить конфиг статусом авто-подтяжки (дата/оверрайды) для админки."""
+    """Дополнить конфиг эффективными ссылками (резолвер + ручные оверрайды) и метой."""
+    from src.infrastructure.services.overlay_app_links import RESOLVERS
+    from src.web.endpoints.public.apps import apply_manual_links
+
     links = load_links()
-    data["link_overrides"] = links["links"]
+    overrides = links["links"]
+    meta = links.get("meta") or {}
+    apply_manual_links(overrides, meta, data.get("manual_links") or {})
+    data["link_overrides"] = overrides
+    data["link_meta"] = meta
     data["links_updated_at"] = links["updated_at"]
+    # missing = у приложения есть резолвер на платформу, но эффективной ссылки нет
+    # (ни резолвер, ни ручной оверрайд не дали) — полностью мёртвая цель.
+    data["link_missing"] = sorted(
+        f"{aid}:{plat}"
+        for aid, plats in RESOLVERS.items()
+        for plat in plats
+        if not (overrides.get(aid) or {}).get(plat)
+    )
     return data
 
 
@@ -58,6 +74,10 @@ async def update_apps(body: AppsConfigUpdate, _admin: AdminUser) -> dict[str, An
         data["custom"] = sanitize_custom_apps(body.custom)
     if body.links_source_url is not None:
         data["links_source_url"] = body.links_source_url.strip() or None
+    if body.manual_links is not None:
+        from src.web.endpoints.public.apps import sanitize_manual_links
+
+        data["manual_links"] = sanitize_manual_links(body.manual_links)
 
     try:
         save_apps_config(data)
@@ -72,18 +92,15 @@ async def update_apps(body: AppsConfigUpdate, _admin: AdminUser) -> dict[str, An
 
 @router.post("/refresh-links")
 async def refresh_links(body: RefreshLinksBody, _admin: AdminUser) -> dict[str, Any]:
-    """Скачать актуальные ссылки установки из источника (app-config.json) сейчас.
+    """Подтянуть актуальные ссылки установки сейчас.
 
-    Если передан новый source_url — сохраняем его в конфиг. Иначе берём из конфига."""
+    Основа — курируемые резолверы (App Store bundleId / Play / GitHub), работают
+    всегда. `source_url` (upstream app-config.json) — необязательный доп.источник
+    для приложений без резолвера; если передан новый — сохраняем в конфиг."""
     data = load_apps_config()
     new_url = (body.source_url or "").strip() if body.source_url is not None else None
     url = new_url or (data.get("links_source_url") or "")
-    if not url:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Не задан URL источника ссылок",
-        )
-    if new_url and new_url != (data.get("links_source_url") or ""):
+    if new_url is not None and new_url != (data.get("links_source_url") or ""):
         data["links_source_url"] = new_url
         try:
             save_apps_config(data)

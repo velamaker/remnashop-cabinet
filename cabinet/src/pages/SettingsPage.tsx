@@ -10,6 +10,8 @@ import { Input } from "@/components/ui/Input";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
 import { TelegramLoginButton } from "@/components/TelegramLoginButton";
 import { PushToggle } from "@/components/PushToggle";
+import { SessionsCard } from "@/components/SessionsCard";
+import { AccountDangerZone } from "@/components/AccountDangerZone";
 import { ApiError } from "@/types/api";
 import type { TelegramAuthRequest } from "@/types/api";
 import { useT } from "@/i18n/I18nContext";
@@ -654,6 +656,8 @@ export default function SettingsPage() {
       <BackupAccessBlock />
       <ManageEmailBlock />
 
+      <SessionsCard />
+
       <Card variant="bordered">
         <CardHeader title={t("set.themeTitle")} subtitle={t("set.themeSub")} />
         <ThemeSwitcher />
@@ -681,6 +685,8 @@ export default function SettingsPage() {
           {t("set.logoutBtn")}
         </Button>
       </Card>
+
+      <AccountDangerZone />
     </div>
   );
 }

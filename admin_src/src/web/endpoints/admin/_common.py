@@ -43,6 +43,46 @@ async def _get_admin_user(
     if user.is_blocked:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Пользователь заблокирован")
 
+    # Ограничение админки по IP (owner настраивает; fail-safe: выкл/пустой список = разрешено).
+    from src.infrastructure.services.overlay_admin_ip import is_ip_allowed
+
+    xff = request.headers.get("x-forwarded-for", "")
+    client_ip = (xff.split(",")[0].strip() if xff else "") or (
+        request.client.host if request.client else ""
+    )
+    if not is_ip_allowed(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Доступ в админку с этого IP запрещён",
+        )
+
+    # 2FA (TOTP) — opt-in НА АДМИНА: требуем только у того, кто сам включил. Сами
+    # /admin/2fa/* ручки пропускаем (иначе не разблокировать/выключить). Разблокировка
+    # — подписанная кука admin_2fa (см. overlay_admin_2fa). 403 «2fa_required» → фронт
+    # покажет ввод кода. Ошибка/нет таблицы → пропускаем (fail-open для 2FA).
+    if "/admin/2fa/" not in request.url.path:
+        from sqlalchemy import text as _text
+
+        from src.infrastructure.services.overlay_admin_2fa import verify_unlock
+
+        two_fa_on = False
+        try:
+            two_fa_on = bool(
+                (
+                    await session.execute(
+                        _text("SELECT 1 FROM admin_2fa WHERE user_id = :u AND enabled = true"),
+                        {"u": user.id},
+                    )
+                ).first()
+            )
+        except Exception:
+            two_fa_on = False
+        if two_fa_on:
+            unlock = request.cookies.get("admin_2fa", "")
+            secret = config.jwt_secret.get_secret_value() if config.jwt_secret else ""
+            if not (secret and verify_unlock(unlock, user.id, secret)):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="2fa_required")
+
     # Единая точка контроля. Права считаем из enum-роли + гранта (таблица
     # admin_grants). Приоритет: OWNER+ = полный доступ; иначе действующий грант
     # (набор разделов + can_write + срок); иначе legacy-enum (ADMIN+ = полный,

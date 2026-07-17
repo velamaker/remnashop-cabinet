@@ -18,6 +18,7 @@ import { useT } from "@/i18n/I18nContext";
 import { BrandWordmark } from "@/components/BrandWordmark";
 import { BrandLogo } from "@/components/BrandLogo";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
+import { NotificationBell } from "@/components/NotificationBell";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { getTelegramWebApp } from "@/hooks/useTelegramWebApp";
 
@@ -172,6 +173,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
               <ShieldCheck className="h-5 w-5" strokeWidth={2} />
             </NavLink>
           )}
+          <NotificationBell />
           <LanguageSwitcher />
           <ThemeSwitcher />
         </div>
@@ -179,6 +181,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
       {/* Тема + язык — вверху справа (десктоп) */}
       <div className="fixed right-6 top-5 z-30 hidden items-center gap-2 md:flex">
+        <NotificationBell />
         <LanguageSwitcher />
         <ThemeSwitcher />
       </div>
