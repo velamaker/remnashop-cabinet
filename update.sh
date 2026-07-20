@@ -3,7 +3,8 @@
 # update.sh — обновление RemnaShop для НАШЕГО форка. Две вещи отдельно:
 #
 #   ./update.sh                  # НАШ код: git pull → пересборка overlay+кабинета
-#                                #   (заодно сообщит, если вышла новая версия базы)
+#                                #   (заодно сообщит, если вышла новая версия базы;
+#                                #    тарбол-установка без .git — код тянется свежим архивом)
 #   ./update.sh --base latest    # БАЗА бота: сам определит последнюю версию и обновит
 #   ./update.sh --base <тег>     # БАЗА бота: обновить базовый образ до конкретного <тег>
 #                                #   (snoups/remnashop) с валидацией и пересборкой
@@ -147,7 +148,26 @@ else
       ok "Код обновлён ($(git rev-parse --short HEAD))"
     fi
   else
-    warn "Не git-репозиторий — код через git не обновляю (если ставили тарболом — перекачайте архив)."
+    # Тарбол-установка (ставили по one-liner, без git): обновляем код свежим архивом
+    # и перезапускаемся на нём. Архив GitHub содержит ТОЛЬКО отслеживаемые файлы —
+    # .env и рантайм-конфиги (в .gitignore) в него не входят → остаются нетронутыми.
+    REPO_SLUG="${REPO_SLUG:-velamaker/remnashop-cabinet}"
+    UPD_BRANCH="${UPD_BRANCH:-main}"
+    if [ "${_SELF_UPDATED:-0}" != 1 ]; then
+      info "Тарбол-установка — тяну свежий код (архив ${REPO_SLUG}@${UPD_BRANCH})…"
+      TMP="$(mktemp -d)"
+      if curl -fL --max-time 180 "https://github.com/${REPO_SLUG}/archive/refs/heads/${UPD_BRANCH}.tar.gz" \
+           | tar xz -C "$TMP" --strip-components=1; then
+        cp -a "$TMP"/. .            # новый код поверх; рантайм (gitignore) не затрагивается
+        rm -rf "$TMP"
+        ok "Код обновлён из архива"
+        # Перезапуск на свежем update.sh (иначе bash может дочитать старую версию файла).
+        # Бэкап уже сделан этим запуском → на перезапуске его пропускаем.
+        exec env _SELF_UPDATED=1 bash "$0" --no-backup
+      fi
+      rm -rf "$TMP"
+      warn "Не удалось скачать архив (нет сети/доступа) — собираю из текущего кода."
+    fi
   fi
   # Заодно (best-effort) проверяем, не вышла ли новая версия базового бота.
   CUR_BASE="$(current_base_tag)"; LATEST_BASE="$(fetch_latest_base 2>/dev/null || true)"
