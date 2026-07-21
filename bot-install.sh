@@ -2,7 +2,7 @@
 #
 # RemnaShop — установка кабинета+админки на сервере С БОТОМ (co-located) одной командой.
 #
-#   curl -fsSL https://raw.githubusercontent.com/alexdsndr161rus2015-maker/remnashop-cabinet/main/bot-install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/velamaker/remnashop-cabinet/main/bot-install.sh | sudo bash
 #
 # Тонкая обёртка: бот уже установлен (значит Docker есть — НЕ ставим его заново).
 # Скрипт только тянет код в каталог бота и запускает install.sh (он допишет
@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-REPO_URL="https://github.com/alexdsndr161rus2015-maker/remnashop-cabinet"
+REPO_URL="https://github.com/velamaker/remnashop-cabinet"
 BRANCH="${BRANCH:-main}"
 DEST="${DEST:-/opt/remnashop}"
 

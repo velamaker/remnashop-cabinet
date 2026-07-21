@@ -15,6 +15,17 @@ export interface Appearance {
   // Вход через Telegram по OIDC (новый флоу). true — только если на боте заданы
   // TELEGRAM_OIDC_CLIENT_ID/SECRET; иначе кабинет показывает классический виджет.
   telegram_oidc_enabled?: boolean;
+  // Показывать прямую ссылку подписки и QR (тумблер админки).
+  sub_link_enabled?: boolean;
+  // Тех-работы: итоговый флаг (свой тумблер ИЛИ синхрон с ботом) + текст.
+  maintenance?: boolean;
+  maintenance_message?: string;
+  // Что ограничивать в тех-работах (по умолчанию всё — true).
+  maintenance_block_login?: boolean;
+  maintenance_block_registration?: boolean;
+  maintenance_block_payments?: boolean;
+  // Доступные языки кабинета: null/пусто = все; иначе список кодов (ru всегда есть).
+  enabled_languages?: string[] | null;
 }
 
 // Админское: brand_name может быть null (= авто-подхват),
@@ -27,6 +38,15 @@ export interface AdminAppearance {
   background_light: string | null;
   brand_name_resolved: string;
   logo_url?: string | null;
+  // Тумблеры кабинета (сырые — для страницы оформления в админке).
+  sub_link_enabled?: boolean;
+  maintenance_enabled?: boolean;
+  maintenance_follow_bot?: boolean;
+  maintenance_message?: string;
+  maintenance_block_login?: boolean;
+  maintenance_block_registration?: boolean;
+  maintenance_block_payments?: boolean;
+  enabled_languages?: string[] | null;
 }
 
 // Публичное оформление — доступно без авторизации.
@@ -40,6 +60,10 @@ export const appearanceAdminApi = {
   update: (data: {
     brand_name?: string; accent?: string; background?: string;
     background_dark?: string; background_light?: string;
+    sub_link_enabled?: boolean; maintenance_enabled?: boolean;
+    maintenance_follow_bot?: boolean; maintenance_message?: string;
+    maintenance_block_login?: boolean; maintenance_block_registration?: boolean;
+    maintenance_block_payments?: boolean; enabled_languages?: string[];
   }) =>
     adminApi.put<AdminAppearance>("/appearance", data),
   // Загрузка логотипа — multipart, поэтому отдельный fetch (adminApi шлёт JSON).

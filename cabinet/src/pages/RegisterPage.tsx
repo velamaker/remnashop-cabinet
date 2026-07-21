@@ -7,13 +7,20 @@ import { Card } from "@/components/ui/Card";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
 import { useT } from "@/i18n/I18nContext";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
+import { useBranding } from "@/contexts/BrandingContext";
 import { ApiError } from "@/types/api";
 
 export default function RegisterPage() {
   const t = useT();
   const { register } = useAuth();
+  const { appearance } = useBranding();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+
+  // Тех-работы: новые регистрации ограничены (галка в оформлении).
+  const regBlocked =
+    appearance?.maintenance === true &&
+    appearance?.maintenance_block_registration !== false;
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -24,6 +31,7 @@ export default function RegisterPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (regBlocked) return;
     setError(null);
     setIsLoading(true);
     try {
@@ -45,7 +53,7 @@ export default function RegisterPage() {
 
   return (
     <div className="app-scroll bg-grain flex min-h-screen items-center justify-center bg-bg px-4">
-      <div className="absolute right-4 top-4 flex items-center gap-2">
+      <div className="absolute right-4 top-4 z-30 flex items-center gap-2">
         <LanguageSwitcher />
         <ThemeSwitcher />
       </div>
@@ -58,6 +66,12 @@ export default function RegisterPage() {
           <h1 className="text-lg font-semibold text-fg">{t("register.title")}</h1>
           <p className="mt-1 text-sm text-fg-subtle">{t("register.subtitle")}</p>
         </div>
+
+        {regBlocked && (
+          <div className="mb-4 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-center text-sm text-fg-muted">
+            {appearance?.maintenance_message?.trim() || t("maintenance.registrationClosed")}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <Input
@@ -89,7 +103,7 @@ export default function RegisterPage() {
 
           {error && <p className="text-sm text-danger">{error}</p>}
 
-          <Button type="submit" isLoading={isLoading} className="mt-1 w-full">
+          <Button type="submit" isLoading={isLoading} disabled={regBlocked} className="mt-1 w-full">
             {t("register.submit")}
           </Button>
         </form>

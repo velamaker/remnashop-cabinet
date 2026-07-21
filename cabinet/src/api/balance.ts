@@ -3,6 +3,7 @@ import { api } from "./client";
 export interface BalanceResponse {
   balance: number; // рублёвый кошелёк
   points: number; // баллы рефералки (отдельно)
+  point_value_rub: number; // курс: 1 балл = столько ₽ (из настроек кэшбэка)
   total_spent: number;
   total_purchases: number;
   autopay_enabled: boolean;

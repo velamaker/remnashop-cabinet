@@ -11,7 +11,7 @@ from fastapi import APIRouter
 
 from src.application.common import Remnawave
 from src.application.common.dao import SubscriptionDao
-from src.infrastructure.services.overlay_server_status import load_config
+from src.infrastructure.services.overlay_server_status import load_config, visible_node_ids
 
 from ._common import CurrentUser
 
@@ -81,6 +81,7 @@ async def my_servers(
     except Exception:
         return empty
 
+    visible = visible_node_ids(cfg)  # пусто = показываем все
     raw = getattr(result, "root", result) or []
     all_nodes: dict[str, dict] = {}
     for n in raw:
@@ -89,6 +90,8 @@ async def my_servers(
         node_uuid = str(getattr(n, "uuid", "") or "")
         if not node_uuid:
             continue
+        if visible and node_uuid not in visible:
+            continue  # админ ограничил список видимых нод
         all_nodes[node_uuid] = {
             "name": getattr(n, "name", "") or "",
             "country_code": getattr(n, "country_code", "") or "",

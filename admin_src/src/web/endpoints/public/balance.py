@@ -20,13 +20,19 @@ from src.application.use_cases.subscription.commands.management import (
 )
 from src.application.use_cases.user.queries.plans import GetAvailablePlans
 from src.core.enums import Currency, PaymentGatewayType, PlanType, PurchaseType, TransactionStatus
-from src.infrastructure.services import overlay_topup
+from src.infrastructure.services import overlay_cashback, overlay_topup
 from src.web.endpoints.public._common import CurrentUser
 
 router = APIRouter(prefix="/balance", tags=["Public - Balance"])
 
-# 1 балл рефералки = 7 ₽ при оплате продления.
-POINT_VALUE_RUB = Decimal(7)
+
+def point_value_rub() -> Decimal:
+    """Курс баллов в рублях — ЕДИНЫЙ (из настроек кэшбэка, assets/cashback.json).
+    Используется и рефералкой, и кэшбэком: 1 балл = point_value_rub ₽. Дефолт 7."""
+    try:
+        return Decimal(str(overlay_cashback.load_config()["point_value_rub"]))
+    except Exception:
+        return Decimal(7)
 
 
 def _fmt(value: Any) -> str:
@@ -72,6 +78,7 @@ async def get_balance(
     return {
         "balance": float(balance),  # рублёвый кошелёк
         "points": user.points,  # баллы рефералки (отдельно)
+        "point_value_rub": int(point_value_rub()),  # курс: 1 балл = столько ₽ (из настроек)
         "total_spent": total_spent,
         "total_purchases": len(completed),
         "autopay_enabled": bool(autopay),
@@ -365,7 +372,7 @@ async def convert_points(
     возвращает и то, и другое (компенсирующий рефанд не нужен).
     """
     pts = body.points  # gt=0 из модели
-    rub = Decimal(pts) * POINT_VALUE_RUB
+    rub = Decimal(pts) * point_value_rub()
 
     # Атомарно списываем баллы (спишутся только если хватает — защита от гонок).
     points_left = (

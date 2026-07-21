@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Globe, Check } from "lucide-react";
-import { LANGUAGES } from "@/i18n/config";
+import { LANGUAGES, enabledLanguages } from "@/i18n/config";
 import { useI18n, useT } from "@/i18n/I18nContext";
+import { useBranding } from "@/contexts/BrandingContext";
 
 /** Флаг картинкой (emoji-флаги не рендерятся на Windows). */
 function Flag({ country, className }: { country: string; className?: string }) {
@@ -20,6 +21,11 @@ function Flag({ country, className }: { country: string; className?: string }) {
  * Дропдаун открывается вниз-вправо. Выбор запоминается (localStorage). */
 export function LanguageSwitcher() {
   const { lang, setLang } = useI18n();
+  const { appearance } = useBranding();
+  const languages = useMemo(
+    () => enabledLanguages(appearance?.enabled_languages),
+    [appearance?.enabled_languages],
+  );
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -35,6 +41,9 @@ export function LanguageSwitcher() {
   const t = useT();
   const current = LANGUAGES.find((l) => l.code === lang) ?? LANGUAGES[0]!;
 
+  // Один язык — переключать нечего, прячем селектор.
+  if (languages.length <= 1) return null;
+
   return (
     <div ref={ref} className="relative">
       <button
@@ -47,7 +56,7 @@ export function LanguageSwitcher() {
       </button>
       {open && (
         <div className="absolute right-0 top-full z-50 mt-2 max-h-[60vh] w-52 overflow-y-auto rounded-2xl border border-border-subtle bg-bg-raised p-1.5 shadow-xl">
-          {LANGUAGES.map((l) => (
+          {languages.map((l) => (
             <button
               key={l.code}
               onClick={() => {

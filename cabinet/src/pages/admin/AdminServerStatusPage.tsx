@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Activity, Save, AlertCircle, CheckCircle2, ShieldCheck } from "lucide-react";
-import { serverStatusAdminApi, type ServerStatusConfig } from "@/api/admin";
+import { serverStatusAdminApi, type ServerStatusConfig, type AdminPanelNode } from "@/api/admin";
 
 // Тумблер — тот же вид, что в остальных админ-разделах.
 function Switch({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
@@ -58,6 +58,7 @@ export default function AdminServerStatusPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [nodes, setNodes] = useState<AdminPanelNode[] | null>(null);
 
   useEffect(() => {
     serverStatusAdminApi
@@ -65,7 +66,28 @@ export default function AdminServerStatusPage() {
       .then(setCfg)
       .catch(() => setError("Не удалось загрузить"))
       .finally(() => setLoading(false));
+    serverStatusAdminApi
+      .nodes()
+      .then((r) => setNodes(r.nodes))
+      .catch(() => setNodes([]));
   }, []);
+
+  // Пустой список = показываем все ноды (в т.ч. будущие).
+  const showAllNodes = (cfg?.visible_nodes?.length ?? 0) === 0;
+
+  const setShowAllNodes = (all: boolean) => {
+    if (all) patch({ visible_nodes: [] });
+    else patch({ visible_nodes: (nodes ?? []).map((n) => n.uuid) }); // старт — все выбраны
+  };
+
+  const toggleNode = (uuid: string, on: boolean) => {
+    if (!cfg) return;
+    const cur = new Set(cfg.visible_nodes);
+    if (on) cur.add(uuid);
+    else cur.delete(uuid);
+    if (cur.size === 0) return; // нельзя оставить пусто — это означало бы «все»
+    patch({ visible_nodes: (nodes ?? []).map((n) => n.uuid).filter((u) => cur.has(u)) });
+  };
 
   const patch = (p: Partial<ServerStatusConfig>) => {
     setCfg((c) => (c ? { ...c, ...p } : c));
@@ -130,6 +152,65 @@ export default function AdminServerStatusPage() {
               disabled={!cfg.enabled}
               onChange={(v) => patch({ guest_visible: v })}
             />
+
+            {/* Какие ноды показывать */}
+            <div className={`rounded-xl bg-bg px-4 py-3 ${!cfg.enabled ? "opacity-50" : ""}`}>
+              <Row
+                label="Показывать все серверы"
+                sub="Выключите, чтобы выбрать вручную, какие ноды видны в статусе (остальные скрыты)."
+                checked={showAllNodes}
+                disabled={!cfg.enabled}
+                onChange={(v) => setShowAllNodes(v)}
+              />
+
+              {!showAllNodes && (
+                <div className="mt-3 border-t border-border-subtle pt-3">
+                  {nodes === null ? (
+                    <p className="text-sm text-fg-muted">Загрузка серверов…</p>
+                  ) : nodes.length === 0 ? (
+                    <p className="text-sm text-fg-muted">Ноды не найдены (панель недоступна?).</p>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+                      {nodes.map((n) => {
+                        const on = cfg.visible_nodes.includes(n.uuid);
+                        return (
+                          <label
+                            key={n.uuid}
+                            className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm text-fg hover:bg-bg-subtle"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={on}
+                              disabled={!cfg.enabled}
+                              onChange={(e) => toggleNode(n.uuid, e.target.checked)}
+                              className="h-4 w-4 accent-[var(--accent)]"
+                            />
+                            {n.country_code && (
+                              <img
+                                src={`https://flagcdn.com/h24/${n.country_code.toLowerCase()}.png`}
+                                alt=""
+                                loading="lazy"
+                                className="h-3.5 w-5 rounded-[2px] object-cover shadow-sm"
+                              />
+                            )}
+                            <span className="min-w-0 flex-1 truncate">{n.name || n.uuid}</span>
+                            <span
+                              className={`h-2 w-2 shrink-0 rounded-full ${
+                                n.disabled ? "bg-border" : n.online ? "bg-success" : "bg-danger"
+                              }`}
+                              title={n.disabled ? "Отключена в панели" : n.online ? "Онлайн" : "Офлайн"}
+                            />
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <p className="mt-2 text-xs text-fg-subtle">
+                    Отмеченные серверы видны в статусе. Отключённые в панели ноды не показываются в любом случае.
+                  </p>
+                </div>
+              )}
+            </div>
 
             <div className="flex items-start gap-2 rounded-xl border border-success/20 bg-success/5 px-4 py-3 text-xs text-fg-muted">
               <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-success" />

@@ -49,6 +49,15 @@ class AppearanceUpdate(BaseModel):
     background: Optional[str] = None  # legacy общий фон
     background_dark: Optional[str] = None   # фон тёмной темы (hex / "" сброс)
     background_light: Optional[str] = None  # фон светлой темы (hex / "" сброс)
+    # Тумблеры кабинета
+    sub_link_enabled: Optional[bool] = None        # показывать прямую ссылку/QR подписки
+    maintenance_enabled: Optional[bool] = None     # тех-работы (свой тумблер)
+    maintenance_follow_bot: Optional[bool] = None  # тех-работы = следовать за режимом бота
+    maintenance_message: Optional[str] = None      # текст на экране тех-работ
+    maintenance_block_login: Optional[bool] = None         # ограничивать вход
+    maintenance_block_registration: Optional[bool] = None  # ограничивать регистрацию
+    maintenance_block_payments: Optional[bool] = None      # ограничивать оплату
+    enabled_languages: Optional[list[str]] = None          # доступные языки (None = все)
 
 
 @router.get("")
@@ -86,6 +95,28 @@ async def update_appearance(body: AppearanceUpdate, _admin: AdminUser) -> dict[s
                     detail=f"{field}: ожидается hex-цвет (#RRGGBB) или пустая строка",
                 )
             data[field] = value or None
+
+    # Тумблеры кабинета (bool — как есть; сообщение — обрезаем).
+    for flag in (
+        "sub_link_enabled", "maintenance_enabled", "maintenance_follow_bot",
+        "maintenance_block_login", "maintenance_block_registration", "maintenance_block_payments",
+    ):
+        value = getattr(body, flag)
+        if value is not None:
+            data[flag] = bool(value)
+    if body.maintenance_message is not None:
+        data["maintenance_message"] = body.maintenance_message.strip()[:280]
+
+    # Доступные языки: нормализуем (2-буквенные коды, ru всегда включён, без дублей).
+    if body.enabled_languages is not None:
+        codes: list[str] = []
+        for raw in body.enabled_languages:
+            c = str(raw).strip().lower()[:5]
+            if c and c.isalpha() and c not in codes:
+                codes.append(c)
+        if "ru" not in codes:
+            codes.insert(0, "ru")  # русский — язык-исходник, отключить нельзя
+        data["enabled_languages"] = codes[:32]
 
     _save_branding(data)
     return data

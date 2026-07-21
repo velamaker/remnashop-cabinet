@@ -28,15 +28,29 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "enabled": True,
     "bind_to_subscription": True,
     "guest_visible": True,
+    # Какие ноды показывать в статусе. Пустой список = ВСЕ. Иначе — только эти
+    # UUID нод панели (админ выбирает в кабинете).
+    "visible_nodes": [],
 }
 
 
 def _normalize(data: dict[str, Any]) -> dict[str, Any]:
+    raw_nodes = data.get("visible_nodes") or []
+    if isinstance(raw_nodes, (list, tuple)):
+        visible = [str(x).strip() for x in raw_nodes if str(x).strip()]
+    else:
+        visible = []
     return {
         "enabled": bool(data.get("enabled", True)),
         "bind_to_subscription": bool(data.get("bind_to_subscription", True)),
         "guest_visible": bool(data.get("guest_visible", True)),
+        "visible_nodes": visible,
     }
+
+
+def visible_node_ids(cfg: dict[str, Any]) -> set[str]:
+    """Множество UUID нод для показа. Пустое = ограничения нет (показываем все)."""
+    return {str(x) for x in (cfg.get("visible_nodes") or [])}
 
 
 def load_config() -> dict[str, Any]:

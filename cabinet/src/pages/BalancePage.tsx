@@ -6,6 +6,7 @@ import { subscriptionApi } from "@/api/subscription";
 import { ApiError, type PlanOfferResponse } from "@/types/api";
 import { formatDate, activeLocale } from "@/lib/format";
 import { useT } from "@/i18n/I18nContext";
+import { useBranding } from "@/contexts/BrandingContext";
 
 const LIMIT = 15;
 
@@ -144,14 +145,14 @@ function TransactionRow({ t }: { t: BalanceTransaction }) {
   );
 }
 
-function ConvertPoints({ points, onConverted }: { points: number; onConverted: (balance: number, points: number) => void }) {
+function ConvertPoints({ points, rate, onConverted }: { points: number; rate: number; onConverted: (balance: number, points: number) => void }) {
   const tr = useT();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
   if (points <= 0) return null;
-  const rub = points * POINT_VALUE_RUB;
+  const rub = points * rate;
 
   const convert = async () => {
     setErr(null);
@@ -171,7 +172,7 @@ function ConvertPoints({ points, onConverted }: { points: number; onConverted: (
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border-subtle bg-bg-subtle p-4">
       <div className="min-w-0">
-        <p className="text-sm font-medium text-fg">{tr("balance.convertHave", { n: points })}</p>
+        <p className="text-sm font-medium text-fg">{tr("balance.convertHave", { n: points, rate })}</p>
         {(err || msg) && <p className={`mt-1 text-xs ${err ? "text-danger" : "text-success"}`}>{err ?? msg}</p>}
       </div>
       <button
@@ -228,6 +229,11 @@ function TopupCard() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const tr = useT();
+  const { appearance } = useBranding();
+  // Тех-работы: пополнение баланса — это оплата, ограничивается той же галкой.
+  const payBlocked =
+    appearance?.maintenance === true &&
+    appearance?.maintenance_block_payments !== false;
 
   useEffect(() => {
     balanceApi
@@ -242,12 +248,26 @@ function TopupCard() {
 
   if (!cfg || !cfg.enabled || cfg.gateways.length === 0) return null;
 
+  if (payBlocked) {
+    return (
+      <div className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
+        <h2 className="flex items-center gap-2 text-base font-semibold text-fg">
+          <PlusCircle className="h-4 w-4 text-accent" /> {tr("balance.topupTitle")}
+        </h2>
+        <p className="mt-2 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-fg-muted">
+          {appearance?.maintenance_message?.trim() || tr("maintenance.paymentsClosed")}
+        </p>
+      </div>
+    );
+  }
+
   const amt = Number(amount);
   const valid = Number.isFinite(amt) && amt >= cfg.min_amount && amt <= cfg.max_amount;
   const bonus = valid && cfg.bonus_percent > 0 ? Math.round(amt * cfg.bonus_percent) / 100 : 0;
 
   const pay = async () => {
     setErr(null);
+    if (payBlocked) return;
     if (!valid || !gateway) return;
     setBusy(true);
     try {
@@ -540,6 +560,7 @@ export default function BalancePage() {
       {/* Перевести баллы рефералки в рубли (скроется, если баллов нет) */}
       <ConvertPoints
         points={balance?.points ?? 0}
+        rate={balance?.point_value_rub ?? POINT_VALUE_RUB}
         onConverted={(bal, pts) => setBalance((prev) => (prev ? { ...prev, balance: bal, points: pts } : prev))}
       />
 

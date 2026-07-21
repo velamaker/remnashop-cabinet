@@ -27,6 +27,27 @@ def _brevo_api_key() -> str:
     return (os.environ.get("EMAIL_BREVO_API_KEY") or "").strip()
 
 
+def _logo_src() -> str:
+    """Абсолютный URL логотипа сервиса для письма (или '' — если логотип не задан).
+
+    Берём тот же логотип, что и кабинет (assets/branding.json → /api/appearance/logo),
+    и делаем ссылку абсолютной по WEB_CABINET_URL — в письме картинка грузится извне.
+    """
+    try:
+        from src.web.endpoints.public.appearance import load_branding, logo_url
+
+        rel = logo_url(load_branding().get("logo_file"))
+        if not rel:
+            return ""
+        base = (os.environ.get("WEB_CABINET_URL") or "").strip().rstrip("/")
+        if not base:
+            origins = (os.environ.get("APP_ORIGINS") or "").strip()
+            base = origins.split(",")[0].strip().rstrip("/") if origins else ""
+        return f"{base}{rel}" if base else ""
+    except Exception:
+        return ""
+
+
 def _escape(text: str) -> str:
     return (
         text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -80,14 +101,22 @@ def _render_verification(body: str, from_name: str) -> tuple[str, str, str]:
     safe_intro = _escape(intro)
     safe_expire = _escape(expire_note)
     safe_ignore = _escape(ignore_note)
+
+    # Логотип сервиса в шапке письма (если задан) — рядом с названием бренда.
+    logo_src = _logo_src()
+    logo_img = (
+        f'<img src="{logo_src}" alt="{safe_brand}" height="36" '
+        'style="height:36px;width:auto;max-width:150px;border-radius:8px;'
+        'vertical-align:middle;margin-right:12px;">'
+        if logo_src
+        else ""
+    )
     html = f"""\
 <div style="font-family:'Segoe UI',Arial,Helvetica,sans-serif;background:#f4f5f7;padding:32px 16px;">
   <div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:16px;
               overflow:hidden;border:1px solid #e6e8eb;">
-    <div style="background:#5b5bd6;padding:20px 28px;">
-      <span style="color:#ffffff;font-size:18px;font-weight:700;letter-spacing:.2px;">
-        {safe_brand}
-      </span>
+    <div style="background:#5b5bd6;padding:18px 28px;">
+      {logo_img}<span style="color:#ffffff;font-size:18px;font-weight:700;letter-spacing:.2px;vertical-align:middle;">{safe_brand}</span>
     </div>
     <div style="padding:28px;">
       <h1 style="margin:0 0 8px;font-size:20px;color:#16181d;">{safe_heading}</h1>
