@@ -101,29 +101,35 @@ async def my_servers(
         }
 
     # Привязка по подписке: показываем только ноды, доступные пользователю.
-    # Берём их напрямую через /users/{uuid}/accessible-nodes (одна точная ручка
-    # Remnawave) — надёжнее ручного обхода сквадов (у которого форма ответа
-    # плавала между версиями SDK и давала пустой список).
+    # Берём их через /users/{uuid}/accessible-nodes (точная ручка Remnawave).
+    #
+    # ПРИВАТНОСТЬ: host (адрес ноды) отдаём ТОЛЬКО тем, чей список доступных нод
+    # конкретно подтверждён этой ручкой. Если подтвердить не удалось (пустой ответ
+    # у истёкшего/без активных сквадов ИЛИ сбой API) — НЕ раскрываем чужие ноды с
+    # адресами: деградируем до host-less списка (как на публичном статусе). Раньше
+    # тут был фолбэк «показать ВСЕ ноды», из-за чего части юзеров утекали хосты.
     if cfg["bind_to_subscription"]:
         subscription = await subscription_dao.get_current(user.id)
-        allowed: set[str] = set()
-        if subscription is not None:
+        if subscription is None:
+            nodes = []  # нет активной подписки → серверов не показываем
+        else:
+            allowed: set[str] = set()
+            resolved = False  # удалось ли достоверно получить список доступных нод
             try:
                 acc = await sdk.users.get_user_accessible_nodes(subscription.user_remna_id)
                 for n in getattr(acc, "nodes", None) or []:
                     allowed.add(str(getattr(n, "uuid", "") or ""))
+                resolved = True
             except Exception:
-                allowed = set()
+                resolved = False
 
-        if allowed:
-            nodes = [v for k, v in all_nodes.items() if k in allowed]
-        elif subscription is not None:
-            # Есть активная подписка, но точный список нод не получили (пустой
-            # ответ/несовместимость SDK) — показываем все ноды, а не пустоту.
-            # Фикс: «подписка есть, а серверов нет».
-            nodes = list(all_nodes.values())
-        else:
-            nodes = []  # нет активной подписки → серверов не показываем
+            if resolved and allowed:
+                # Точный список получен — только эти ноды, с host (для пинга).
+                nodes = [v for k, v in all_nodes.items() if k in allowed]
+            else:
+                # Не подтвердили доступ (пусто/сбой) — показываем ноды БЕЗ host,
+                # чтобы блок не был пустым, но адреса чужих нод не утекали.
+                nodes = [{**v, "host": ""} for v in all_nodes.values()]
     else:
         nodes = list(all_nodes.values())
 
