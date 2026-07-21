@@ -99,7 +99,11 @@ body {
 
 #root {
   height: 100%;
-  height: var(--tg-viewport-stable-height, 100%);
+  height: 100dvh;
+  /* --app-height ставит JS (lib/viewport.ts) с защитой от нулей: на Android
+     Telegram при разворачивании из фона отдавал 0 → #root схлопывался и контент
+     пропадал (белый экран). Фолбэк 100dvh — для обычного браузера. */
+  height: var(--app-height, 100dvh);
   overflow: hidden;
   width: 100%;
 }
