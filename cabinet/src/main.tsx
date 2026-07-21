@@ -9,6 +9,10 @@ import "@fontsource/inter/800.css";
 import "./index.css";
 import App from "./App";
 import { registerServiceWorker } from "./registerSW";
+import { initViewport } from "./lib/viewport";
+
+// Фикс белого экрана в Telegram Mini App (Android) при сворачивании/разворачивании.
+initViewport();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
