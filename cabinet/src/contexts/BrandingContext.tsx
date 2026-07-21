@@ -11,6 +11,8 @@ import { appearanceApi, type Appearance } from "@/api/appearance";
 import { lighten, darken, rgba, luminance, normalizeHex } from "@/lib/color";
 import { useTheme } from "@/contexts/ThemeContext";
 import { translate } from "@/i18n/translate";
+import { useI18n } from "@/i18n/I18nContext";
+import { enabledLanguages, DEFAULT_LANG } from "@/i18n/config";
 
 const DEFAULT_BRAND = "RemnaShop";
 
@@ -79,6 +81,7 @@ export function applyBackground(background: string | null) {
 export function BrandingProvider({ children }: { children: ReactNode }) {
   const [appearance, setAppearance] = useState<Appearance | null>(null);
   const { resolved } = useTheme();  // "dark" | "light"
+  const { lang, setLang } = useI18n();
 
   const refresh = useCallback(async () => {
     try {
@@ -94,6 +97,13 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Если активный язык отключён в оформлении — возвращаемся к русскому.
+  useEffect(() => {
+    if (!appearance) return;
+    const allowed = enabledLanguages(appearance.enabled_languages);
+    if (!allowed.some((l) => l.code === lang)) setLang(DEFAULT_LANG);
+  }, [appearance, lang, setLang]);
 
   // Фон применяем ПО АКТИВНОЙ ТЕМЕ: свой для тёмной/светлой (с фолбэком на
   // общий legacy-фон). Реагирует на смену темы и на обновление оформления.

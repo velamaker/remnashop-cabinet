@@ -77,8 +77,16 @@ class GiveReferrerReward(Interactor[GiveReferrerRewardDto, None]):
         )
         if reward.type == ReferralRewardType.POINTS:
             # OVERLAY: reward.amount при PERCENT = сумма_платежа × % (в ₽).
-            # Начисляем БАЛЛЫ по курсу 1 балл = 7 ₽ → делим на 7.
-            points = max(1, round(reward.amount / 7))
+            # Начисляем БАЛЛЫ по ЕДИНОМУ курсу из настроек кэшбэка (1 балл = rate ₽).
+            from src.infrastructure.services import overlay_cashback
+
+            try:
+                rate = int(overlay_cashback.load_config()["point_value_rub"])
+            except Exception:
+                rate = 7
+            if rate <= 0:
+                rate = 7
+            points = max(1, round(reward.amount / rate))
             await self.change_user_points.system(
                 ChangeUserPointsDto(
                     user_id=user.id,

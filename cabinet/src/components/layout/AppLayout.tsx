@@ -158,11 +158,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
       {/* Mobile top bar — pt учитывает safe-area (в PWA standalone контент уходит
           под статус-бар/вырез iOS из-за viewport-fit=cover) */}
       <div className="fixed inset-x-0 top-0 z-30 flex items-center justify-between border-b border-[var(--border)] bg-bg px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] md:hidden">
-        <NavLink to="/" end className="flex items-center gap-2 transition-opacity active:opacity-70">
-          <BrandLogo size={28} className="!rounded-lg" />
-          <BrandWordmark className="text-sm" />
+        <NavLink to="/" end className="flex min-w-0 flex-1 items-center gap-2 transition-opacity active:opacity-70">
+          <BrandLogo size={28} className="!rounded-lg shrink-0" />
+          <BrandWordmark className="min-w-0 text-sm" />
         </NavLink>
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1 pl-1">
           {/* Вход в админку — только для админов (на мобиле другого входа нет) */}
           {isAdmin && (
             <NavLink

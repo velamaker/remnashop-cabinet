@@ -16,8 +16,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 import httpx
+from dishka import FromDishka
+from dishka.integrations.fastapi import inject
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import FileResponse
+
+from src.application.common.dao import SettingsDao
 
 router = APIRouter(prefix="/appearance", tags=["Public - Appearance"])
 
@@ -47,6 +51,19 @@ DEFAULTS: dict[str, Any] = {
     "background_dark": None,   # фон для тёмной темы
     "background_light": None,  # фон для светлой темы
     "logo_file": None,
+    # Показывать в кабинете прямую ссылку подписки и QR (тумблер админки).
+    "sub_link_enabled": True,
+    # Тех-работы: свой тумблер + опция «следовать за режимом доступа бота»
+    # (когда у бота AccessMode.RESTRICTED «Запрещён для всех» — кабинет тоже закрыт).
+    "maintenance_enabled": False,
+    "maintenance_follow_bot": False,
+    "maintenance_message": "",
+    # Что именно ограничивать в тех-работах (гранулярно). По умолчанию — всё.
+    "maintenance_block_login": True,         # вход в кабинет (полное закрытие для не-админов)
+    "maintenance_block_registration": True,  # новые регистрации
+    "maintenance_block_payments": True,      # оплата/пополнение
+    # Доступные языки кабинета: None = все; иначе список кодов (ru всегда включён).
+    "enabled_languages": None,
 }
 
 
@@ -130,7 +147,8 @@ def load_branding() -> dict[str, Any]:
 
 
 @router.get("")
-async def get_appearance() -> dict[str, Any]:
+@inject
+async def get_appearance(settings_dao: FromDishka[SettingsDao]) -> dict[str, Any]:
     """Для кабинета: brand_name всегда конкретный (авто-резолв)."""
     data = load_branding()
     if not data.get("brand_name"):
@@ -138,6 +156,18 @@ async def get_appearance() -> dict[str, Any]:
     data["support_username"] = _support_username()
     # logo_file — внутреннее имя файла; наружу отдаём готовый logo_url.
     data["logo_url"] = logo_url(data.pop("logo_file", None))
+
+    # Тех-работы: свой тумблер ИЛИ (следовать за ботом И у бота «Запрещён для всех»).
+    # Публичный эндпоинт не должен падать — чтение режима бота в try.
+    maintenance = bool(data.get("maintenance_enabled"))
+    if not maintenance and data.get("maintenance_follow_bot"):
+        try:
+            s = await settings_dao.get()
+            mode = getattr(s.access.mode, "value", s.access.mode)
+            maintenance = str(mode).upper() == "RESTRICTED"
+        except Exception:
+            maintenance = False
+    data["maintenance"] = maintenance
     # Вход через Telegram по OIDC доступен, если заданы client_id/secret и тумблер
     # не выключен. Креды/тумблер берутся из assets/auth.json (правятся в админке),
     # с фолбэком на .env (TELEGRAM_OIDC_CLIENT_ID/SECRET) — см. auth_settings.

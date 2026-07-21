@@ -4,6 +4,7 @@ import { BrandingProvider } from "@/contexts/BrandingContext";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute, PublicOnlyRoute } from "@/components/ProtectedRoute";
 import { AdminRoute } from "@/components/AdminRoute";
+import { MaintenanceGate } from "@/components/MaintenanceGate";
 import { I18nProvider } from "@/i18n/I18nContext";
 
 import LoginPage from "@/pages/LoginPage";
@@ -58,7 +59,7 @@ import AdminMenuPage from "@/pages/admin/AdminMenuPage";
 import AdminEmailPage from "@/pages/admin/AdminEmailPage";
 import AdminAuthPage from "@/pages/admin/AdminAuthPage";
 import SupportPage from "@/pages/SupportPage";
-import HomePage from "@/pages/HomePage";
+import RootPage from "@/pages/RootPage";
 
 export default function App() {
   return (
@@ -67,6 +68,7 @@ export default function App() {
       <BrandingProvider>
       <AuthProvider>
         <BrowserRouter>
+          <MaintenanceGate>
           <Routes>
             {/* Публичная страница статуса — без входа */}
             <Route path="/status" element={<StatusPage />} />
@@ -97,14 +99,7 @@ export default function App() {
               }
             />
 
-            <Route
-              path="/"
-              element={
-                <ProtectedRoute>
-                  <HomePage />
-                </ProtectedRoute>
-              }
-            />
+            <Route path="/" element={<RootPage />} />
             <Route
               path="/subscription"
               element={
@@ -476,6 +471,7 @@ export default function App() {
               }
             />
           </Routes>
+          </MaintenanceGate>
         </BrowserRouter>
       </AuthProvider>
       </BrandingProvider>

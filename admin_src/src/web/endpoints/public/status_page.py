@@ -18,7 +18,7 @@ from dishka.integrations.fastapi import inject
 from fastapi import APIRouter
 
 from src.application.common import Remnawave
-from src.infrastructure.services.overlay_server_status import load_config
+from src.infrastructure.services.overlay_server_status import load_config, visible_node_ids
 
 router = APIRouter(tags=["Public - Status"])
 
@@ -79,11 +79,14 @@ async def _fetch(remnawave: Remnawave) -> dict[str, Any]:
         return empty
 
     uptime = _load_uptime()
+    visible = visible_node_ids(cfg)  # пусто = показываем все
     raw = getattr(result, "root", result) or []
     nodes = []
     for n in raw:
         if getattr(n, "is_disabled", False):
             continue
+        if visible and str(getattr(n, "uuid", "") or "") not in visible:
+            continue  # админ ограничил список видимых нод
         name = getattr(n, "name", "") or ""
         u = uptime.get(name) or {}
         nodes.append(

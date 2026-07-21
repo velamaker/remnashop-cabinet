@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Activity, CheckCircle2, AlertTriangle } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Activity, CheckCircle2, AlertTriangle, ArrowLeft } from "lucide-react";
 import { statusApi, type StatusResponse, type UptimeDay } from "@/api/status";
 import { useNodePings } from "@/lib/ping";
 import { useBranding } from "@/contexts/BrandingContext";
@@ -19,9 +20,13 @@ function uptimeBarClass(pct: number): string {
   return "bg-danger";
 }
 
-// Полоска аптайма за 30 дней («свечки», как у status-страниц).
-function UptimeBars({ history, uptime30d }: { history: UptimeDay[]; uptime30d: number | null | undefined }) {
+// Полоска аптайма («свечки»). Период и процент — по РЕАЛЬНО имеющимся дням истории,
+// а не мнимые «30» (иначе 3 сегмента, а подпись «за месяц» — вводит в заблуждение).
+function UptimeBars({ history }: { history: UptimeDay[] }) {
+  const t = useT();
   if (!history.length) return null;
+  const days = history.length;
+  const avg = Math.round(history.reduce((s, d) => s + d.uptime, 0) / days);
   return (
     <div className="mt-2">
       <div className="flex items-center gap-[2px]">
@@ -33,11 +38,9 @@ function UptimeBars({ history, uptime30d }: { history: UptimeDay[]; uptime30d: n
           />
         ))}
       </div>
-      {uptime30d != null && (
-        <p className="mt-1 text-[11px] text-fg-subtle">
-          Аптайм за 30 дней: <span className="font-semibold text-fg-muted">{uptime30d}%</span>
-        </p>
-      )}
+      <p className="mt-1 text-[11px] text-fg-subtle">
+        {t("status.uptimeLabel", { n: days })} <span className="font-semibold text-fg-muted">{avg}%</span>
+      </p>
     </div>
   );
 }
@@ -60,14 +63,27 @@ export default function StatusPage() {
   const allOk = data?.all_operational ?? true;
   const pings = useNodePings(data?.nodes ?? []);
 
+  // Публичная страница (до входа) — не называем сервис впрямую: убираем суффикс бренда.
+  const bParts = (brandName || "").trim().split(/\s+/);
+  const bLast = bParts[bParts.length - 1] ?? "";
+  const brandMain =
+    bParts.length > 1 && /^[A-Z0-9]{2,4}$/.test(bLast) ? bParts.slice(0, -1).join(" ") : brandName;
+
   return (
-    <div className="min-h-[100dvh] bg-bg px-4 py-10">
-      <div className="mx-auto w-full max-w-lg space-y-6">
+    <div className="app-scroll h-full bg-bg">
+      <div className="mx-auto w-full max-w-lg px-4 py-8">
+        <Link
+          to="/"
+          className="mb-6 inline-flex items-center gap-1.5 text-sm font-medium text-fg-muted transition-colors hover:text-accent"
+        >
+          <ArrowLeft className="h-4 w-4" /> {t("common.back")}
+        </Link>
+        <div className="space-y-6">
         <div className="text-center">
           <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-subtle text-accent">
             <Activity className="h-6 w-6" />
           </div>
-          <h1 className="text-2xl font-bold text-fg">{brandName || "VPN"} · {t("status.title")}</h1>
+          <h1 className="text-2xl font-bold text-fg">{brandMain || "Сервис"} · {t("status.title")}</h1>
           <p className="mt-1 text-sm text-fg-muted">{t("status.autoRefresh")}</p>
         </div>
 
@@ -113,13 +129,14 @@ export default function StatusPage() {
                         {n.online ? t("info.online") : t("info.offline")}
                       </span>
                     </div>
-                    <UptimeBars history={n.history ?? []} uptime30d={n.uptime_30d} />
+                    <UptimeBars history={n.history ?? []} />
                   </div>
                 ))}
               </div>
             )}
           </>
         )}
+        </div>
       </div>
     </div>
   );

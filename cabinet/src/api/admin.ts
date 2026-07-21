@@ -876,12 +876,22 @@ export interface ServerStatusConfig {
   enabled: boolean;
   bind_to_subscription: boolean;
   guest_visible: boolean;
+  visible_nodes: string[]; // UUID нод для показа; [] = все
+}
+
+export interface AdminPanelNode {
+  uuid: string;
+  name: string;
+  country_code: string;
+  online: boolean;
+  disabled: boolean;
 }
 
 export const serverStatusAdminApi = {
   get: () => adminApi.get<ServerStatusConfig>("/server-status"),
   update: (data: Partial<ServerStatusConfig>) =>
     adminApi.put<ServerStatusConfig>("/server-status", data),
+  nodes: () => adminApi.get<{ nodes: AdminPanelNode[] }>("/server-status/nodes"),
 };
 
 // ---------- Подписка в приложении (настройки панели Remnawave) ----------

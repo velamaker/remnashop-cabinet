@@ -5,6 +5,7 @@ import { APPS, PLATFORMS, DEFAULT_PRIORITY, type AppEntry, type Platform } from 
 import { appsApi, type AppsConfig } from "@/api/apps";
 import { openExternalLink, useIsMiniApp } from "@/hooks/useTelegramWebApp";
 import { useT } from "@/i18n/I18nContext";
+import { useBranding } from "@/contexts/BrandingContext";
 
 // На iOS ряд клиентов снят из российского App Store (Apple), поэтому по умолчанию
 // рекомендуем тот, что реально ставится из RU-стора. Остальное решает админ.
@@ -94,6 +95,9 @@ function AppCard({
 
 export function ConnectGuide({ subUrl }: { subUrl: string }) {
   const t = useT();
+  const { appearance } = useBranding();
+  // Прямую ссылку/QR подписки показываем, если не выключено в админке (по умолчанию — да).
+  const showSubLink = appearance?.sub_link_enabled !== false;
   const [platform, setPlatform] = useState<Platform>(detectPlatform);
   const [showQr, setShowQr] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -218,6 +222,8 @@ export function ConnectGuide({ subUrl }: { subUrl: string }) {
         )}
       </div>
 
+      {showSubLink && (
+      <>
       {/* QR — подключить другое устройство (ТВ, второй телефон): отсканировать
           камерой приложения. Генерируется локально (qrcode.react), подписка
           наружу не уходит. */}
@@ -269,6 +275,8 @@ export function ConnectGuide({ subUrl }: { subUrl: string }) {
           </button>
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 }

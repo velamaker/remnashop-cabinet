@@ -139,7 +139,7 @@ export default function LoginPage() {
       {/* Ambient background glow — single subtle accent */}
       <div aria-hidden className="ambient-glow -top-32 left-1/2 h-96 w-96 -translate-x-1/2" />
 
-      <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
+      <div className="absolute right-4 top-4 z-30 flex items-center gap-2">
         <LanguageSwitcher />
         <ThemeSwitcher />
       </div>
@@ -149,7 +149,7 @@ export default function LoginPage() {
         <div className="mb-8 text-center">
           <BrandLogo size={48} className="mx-auto mb-4" />
           <div className="flex items-baseline justify-center">
-            <BrandWordmark className="text-2xl" />
+            <BrandWordmark className="text-2xl" showSuffix={false} />
           </div>
           <p className="mt-2 text-sm text-fg-muted">
             {t("login.subtitle")}

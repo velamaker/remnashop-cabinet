@@ -15,6 +15,7 @@ import type {
 } from "@/types/api";
 import { ApiError } from "@/types/api";
 import { useT } from "@/i18n/I18nContext";
+import { useBranding } from "@/contexts/BrandingContext";
 
 const gatewayLabels: Record<string, string> = {
   YOOKASSA: "billing.gwYookassa",
@@ -174,6 +175,11 @@ function PlanCard({
 
 export default function BillingPage() {
   const t = useT();
+  const { appearance } = useBranding();
+  // Тех-работы: оплата ограничена (галка в оформлении).
+  const payBlocked =
+    appearance?.maintenance === true &&
+    appearance?.maintenance_block_payments !== false;
   const [offers, setOffers] = useState<SubscriptionOffersResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -218,6 +224,7 @@ export default function BillingPage() {
   }, [offers]);
 
   const handlePurchase = async (plan: PlanOfferResponse) => {
+    if (payBlocked) return;
     if (!selectedDays || !selectedGateway) return;
     setPurchasingCode(plan.public_code);
     setPurchaseError(null);
@@ -247,6 +254,7 @@ export default function BillingPage() {
   };
 
   const handleBuyBalance = async (plan: PlanOfferResponse) => {
+    if (payBlocked) return;
     if (!selectedDays || !selectedGateway) return;
     setPurchasingCode(plan.public_code);
     setPurchaseError(null);
@@ -266,6 +274,17 @@ export default function BillingPage() {
       setPurchasingCode(null);
     }
   };
+
+  if (payBlocked) {
+    return (
+      <div className="flex flex-col gap-5">
+        <h1 className="text-2xl font-bold tracking-tight text-fg">{t("billing.title")}</h1>
+        <div className="rounded-xl border border-warning/30 bg-warning/10 px-4 py-4 text-sm text-fg-muted">
+          {appearance?.maintenance_message?.trim() || t("maintenance.paymentsClosed")}
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (
