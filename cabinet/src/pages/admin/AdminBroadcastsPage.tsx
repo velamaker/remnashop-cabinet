@@ -99,7 +99,8 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
     setMsg(null);
     setSelected((prev) => {
       const n = new Set(prev);
-      n.has(k) ? n.delete(k) : n.add(k);
+      if (n.has(k)) n.delete(k);
+      else n.add(k);
       return n;
     });
   };
@@ -313,7 +314,9 @@ export default function AdminBroadcastsPage() {
     try {
       const updated = await broadcastsAdminApi.get(task_id);
       setBroadcasts(prev => prev.map(b => b.task_id === task_id ? updated : b));
-    } catch {}
+    } catch {
+      /* обновление статуса не критично */
+    }
   };
 
   return (

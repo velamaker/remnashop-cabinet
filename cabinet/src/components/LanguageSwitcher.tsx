@@ -3,18 +3,11 @@ import { Globe, Check } from "lucide-react";
 import { LANGUAGES, enabledLanguages } from "@/i18n/config";
 import { useI18n, useT } from "@/i18n/I18nContext";
 import { useBranding } from "@/contexts/BrandingContext";
+import { Flag as SharedFlag } from "@/components/Flag";
 
-/** Флаг картинкой (emoji-флаги не рендерятся на Windows). */
+/** Флаг картинкой из локального пакета (см. components/Flag). */
 function Flag({ country, className }: { country: string; className?: string }) {
-  return (
-    <img
-      src={`https://flagcdn.com/h24/${country}.png`}
-      srcSet={`https://flagcdn.com/h48/${country}.png 2x`}
-      alt=""
-      loading="lazy"
-      className={className ?? "h-3.5 w-5 rounded-[2px] object-cover shadow-sm"}
-    />
-  );
+  return <SharedFlag code={country} className={className ?? "h-3.5 w-5"} />;
 }
 
 /** Селектор языка — инлайн (ставится в шапку рядом с переключателем темы).

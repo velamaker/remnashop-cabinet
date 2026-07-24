@@ -43,7 +43,7 @@ async function parseErrorDetail(res: Response): Promise<string> {
     try {
       const data = JSON.parse(text);
       if (typeof data?.detail === "string") return data.detail;
-      if (Array.isArray(data?.detail)) return data.detail.map((d: any) => d.msg ?? d).join("; ");
+      if (Array.isArray(data?.detail)) return data.detail.map((d: { msg?: string }) => d.msg ?? d).join("; ");
       return JSON.stringify(data);
     } catch {
       // HTML or plain text — strip tags and return first meaningful line

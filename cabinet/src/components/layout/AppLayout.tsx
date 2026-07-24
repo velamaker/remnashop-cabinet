@@ -187,7 +187,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
       </div>
 
       {/* Main content — единственный скролл-контейнер страницы (app-scroll) */}
-      <main className="app-scroll relative z-10 flex-1 min-w-0 px-5 pb-28 pt-[calc(5rem+env(safe-area-inset-top))] md:px-8 md:pb-8 md:pt-8">
+      <main className="app-scroll relative z-10 flex-1 min-w-0 overflow-x-hidden px-5 pb-28 pt-[calc(5rem+env(safe-area-inset-top))] md:px-8 md:pb-8 md:pt-8">
         {/* key={pathname} → обёртка перемонтируется на смене роута и заново
             проигрывает fade-in (плавное появление каждой страницы, не только первой) */}
         <div key={location.pathname} className="mx-auto max-w-4xl animate-fade-in">{children}</div>

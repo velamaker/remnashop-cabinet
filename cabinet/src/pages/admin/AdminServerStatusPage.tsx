@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Activity, Save, AlertCircle, CheckCircle2, ShieldCheck } from "lucide-react";
 import { serverStatusAdminApi, type ServerStatusConfig, type AdminPanelNode } from "@/api/admin";
+import { Flag } from "@/components/Flag";
 
 // Тумблер — тот же вид, что в остальных админ-разделах.
 function Switch({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
@@ -59,11 +60,17 @@ export default function AdminServerStatusPage() {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [nodes, setNodes] = useState<AdminPanelNode[] | null>(null);
+  // Явный режим «выбирать вручную» — НЕ выводим из visible_nodes.length, иначе при
+  // невыгруженном списке нод тумблер отскакивал назад (visible_nodes=[]=«все»).
+  const [manual, setManual] = useState(false);
 
   useEffect(() => {
     serverStatusAdminApi
       .get()
-      .then(setCfg)
+      .then((c) => {
+        setCfg(c);
+        setManual((c.visible_nodes?.length ?? 0) > 0);
+      })
       .catch(() => setError("Не удалось загрузить"))
       .finally(() => setLoading(false));
     serverStatusAdminApi
@@ -72,12 +79,12 @@ export default function AdminServerStatusPage() {
       .catch(() => setNodes([]));
   }, []);
 
-  // Пустой список = показываем все ноды (в т.ч. будущие).
-  const showAllNodes = (cfg?.visible_nodes?.length ?? 0) === 0;
+  const showAllNodes = !manual;
 
   const setShowAllNodes = (all: boolean) => {
-    if (all) patch({ visible_nodes: [] });
-    else patch({ visible_nodes: (nodes ?? []).map((n) => n.uuid) }); // старт — все выбраны
+    setManual(!all);
+    if (all) patch({ visible_nodes: [] }); // все (в т.ч. будущие)
+    // при переходе в ручной режим оставляем текущий выбор как есть (можно пустой)
   };
 
   const toggleNode = (uuid: string, on: boolean) => {
@@ -85,8 +92,11 @@ export default function AdminServerStatusPage() {
     const cur = new Set(cfg.visible_nodes);
     if (on) cur.add(uuid);
     else cur.delete(uuid);
-    if (cur.size === 0) return; // нельзя оставить пусто — это означало бы «все»
-    patch({ visible_nodes: (nodes ?? []).map((n) => n.uuid).filter((u) => cur.has(u)) });
+    const order = (nodes ?? []).map((n) => n.uuid);
+    // сохраняем в порядке списка нод; неизвестные (нет в списке) — в конец
+    const ordered = order.filter((u) => cur.has(u));
+    for (const u of cur) if (!order.includes(u)) ordered.push(u);
+    patch({ visible_nodes: ordered });
   };
 
   const patch = (p: Partial<ServerStatusConfig>) => {
@@ -185,14 +195,7 @@ export default function AdminServerStatusPage() {
                               onChange={(e) => toggleNode(n.uuid, e.target.checked)}
                               className="h-4 w-4 accent-[var(--accent)]"
                             />
-                            {n.country_code && (
-                              <img
-                                src={`https://flagcdn.com/h24/${n.country_code.toLowerCase()}.png`}
-                                alt=""
-                                loading="lazy"
-                                className="h-3.5 w-5 rounded-[2px] object-cover shadow-sm"
-                              />
-                            )}
+                            {n.country_code && <Flag code={n.country_code} className="h-3.5 w-5" />}
                             <span className="min-w-0 flex-1 truncate">{n.name || n.uuid}</span>
                             <span
                               className={`h-2 w-2 shrink-0 rounded-full ${
@@ -210,6 +213,30 @@ export default function AdminServerStatusPage() {
                   </p>
                 </div>
               )}
+            </div>
+
+            {/* Сервисные хосты-заглушки */}
+            <div className={`rounded-xl bg-bg px-4 py-3 ${!cfg.enabled ? "opacity-50" : ""}`}>
+              <p className="text-sm font-medium text-fg">Сервисные хосты (заглушки)</p>
+              <p className="mt-0.5 text-xs text-fg-muted">
+                Слова из названий хостов-заглушек (через запятую): «ПОДПИСКА, Продлите, Оплата, Резерв,
+                Автовыбор». Такие хосты скрыты у активных подписчиков и показываются только тем, у кого
+                подписка кончилась. Пусто — ничего не прячем.
+              </p>
+              <input
+                value={(cfg.service_keywords ?? []).join(", ")}
+                disabled={!cfg.enabled}
+                onChange={(e) =>
+                  patch({
+                    service_keywords: e.target.value
+                      .split(",")
+                      .map((s) => s.trim())
+                      .filter(Boolean),
+                  })
+                }
+                placeholder="ПОДПИСКА, Продлите, Оплата, Резерв, Автовыбор"
+                className="mt-2 w-full rounded-lg border border-border-subtle bg-bg-subtle px-3 py-2 text-sm text-fg outline-none focus:border-accent"
+              />
             </div>
 
             <div className="flex items-start gap-2 rounded-xl border border-success/20 bg-success/5 px-4 py-3 text-xs text-fg-muted">

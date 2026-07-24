@@ -3,6 +3,7 @@ import { Activity, CheckCircle2, AlertTriangle } from "lucide-react";
 import { statusApi, type StatusResponse } from "@/api/status";
 import { pingClass } from "@/pages/StatusPage";
 import { useNodePings } from "@/lib/ping";
+import { Flag } from "@/components/Flag";
 import { useT } from "@/i18n/I18nContext";
 
 // Компактный блок статуса серверов для кабинета — те же данные, что на публичной
@@ -65,14 +66,7 @@ export function ServerStatusCard() {
       <div className="space-y-1.5">
         {data.nodes.map((n, i) => (
           <div key={i} className="flex items-center gap-3 rounded-xl bg-bg-subtle px-3.5 py-2.5">
-            {n.country_code && (
-              <img
-                src={`https://flagcdn.com/h24/${n.country_code.toLowerCase()}.png`}
-                alt=""
-                className="h-4 w-6 flex-shrink-0 rounded-[2px] object-cover shadow-sm"
-                loading="lazy"
-              />
-            )}
+            {n.country_code && <Flag code={n.country_code} className="h-4 w-6" />}
             <span className="min-w-0 truncate text-sm font-medium text-fg">{n.name}</span>
             {n.host && n.host === bestHost && (
               <span className="flex-shrink-0 rounded-md bg-accent px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">

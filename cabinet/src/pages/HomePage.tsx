@@ -26,25 +26,14 @@ import { OnboardingWizard } from "@/components/OnboardingWizard";
 import { TrafficChart } from "@/components/TrafficChart";
 import { ServerStatusCard } from "@/components/ServerStatusCard";
 import { formatBytes, formatTrafficLimit, formatDate, daysUntil } from "@/lib/format";
+import { Flag } from "@/components/Flag";
 import { ApiError } from "@/types/api";
 
 const REFRESH_SECONDS = 60 * 60; // автообновление раз в час
 
-/** Флаг страны картинкой (emoji-флаги не рендерятся на Windows). */
+/** Флаг страны — локальный self-hosted пакет (см. components/Flag). */
 function CountryFlag({ code }: { code: string }) {
-  const cc = (code || "").trim().toLowerCase();
-  if (!/^[a-z]{2}$/.test(cc)) {
-    return <span className="text-xl leading-none">🌍</span>;
-  }
-  return (
-    <img
-      src={`https://flagcdn.com/h24/${cc}.png`}
-      srcSet={`https://flagcdn.com/h48/${cc}.png 2x`}
-      alt={cc.toUpperCase()}
-      className="h-5 w-auto rounded-[3px] shadow-sm"
-      loading="lazy"
-    />
-  );
+  return <Flag code={code} className="h-5 w-7" />;
 }
 
 export default function HomePage() {

@@ -275,8 +275,9 @@ export default function AdminRemnaWavePage() {
         const d = await adminApi.get<{ inbounds: RwInbound[] }>("/remnawave/inbounds");
         setInbounds(d.inbounds ?? []);
       }
-    } catch (e: any) {
-      setErr(e?.detail ?? e?.message ?? "Ошибка соединения с RemnaWave");
+    } catch (e) {
+      const err = e as { detail?: string; message?: string };
+      setErr(err?.detail ?? err?.message ?? "Ошибка соединения с RemnaWave");
     } finally {
       setLoading(false);
       setRefreshing(false);

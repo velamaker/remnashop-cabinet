@@ -767,7 +767,7 @@ function AccessGrantBlock({ userId }: { userId: number }) {
 
   const applyPreset = (p: GrantPreset) => { setFullAccess(p.full_access); setSecs(new Set(p.sections)); };
   const toggleSec = (k: string) =>
-    setSecs(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
+    setSecs(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
 
   const save = async () => {
     setBusy(true); setMsg(null);

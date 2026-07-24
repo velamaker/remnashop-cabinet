@@ -21,6 +21,7 @@ import {
   SquareMenu,
   Mail,
   Info,
+  DoorOpen,
   Menu,
   X,
   Eye,
@@ -105,6 +106,7 @@ export const navGroups: { title: string; items: NavItem[] }[] = [
     title: "Кабинет",
     items: [
       { to: "/admin/appearance", icon: Palette, label: "Оформление", section: "content" },
+      { to: "/admin/cabinet", icon: DoorOpen, label: "Доступ и язык", section: "content" },
       { to: "/admin/info", icon: Info, label: "Информация", section: "content" },
       { to: "/admin/menu", icon: SquareMenu, label: "Меню", section: "content" },
       { to: "/admin/apps", icon: Smartphone, label: "Приложения", section: "content" },

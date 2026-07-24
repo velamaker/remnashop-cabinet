@@ -4,6 +4,7 @@ import { Activity, CheckCircle2, AlertTriangle, ArrowLeft } from "lucide-react";
 import { statusApi, type StatusResponse, type UptimeDay } from "@/api/status";
 import { useNodePings } from "@/lib/ping";
 import { useBranding } from "@/contexts/BrandingContext";
+import { Flag } from "@/components/Flag";
 import { useT } from "@/i18n/I18nContext";
 
 // Цвет пинг-бейджа: зелёный <100 мс, жёлтый <250 мс, красный выше.
@@ -110,14 +111,7 @@ export default function StatusPage() {
                 {data.nodes.map((n, i) => (
                   <div key={i} className="rounded-2xl border border-border-subtle bg-bg-subtle px-5 py-3.5">
                     <div className="flex items-center gap-3">
-                      {n.country_code && (
-                        <img
-                          src={`https://flagcdn.com/h24/${n.country_code.toLowerCase()}.png`}
-                          alt=""
-                          className="h-4 w-6 flex-shrink-0 rounded-[2px] object-cover shadow-sm"
-                          loading="lazy"
-                        />
-                      )}
+                      {n.country_code && <Flag code={n.country_code} className="h-4 w-6" />}
                       <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">{n.name}</span>
                       {n.online && n.host && pings[n.host] != null && (
                         <span className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium tabular-nums ${pingClass(pings[n.host]!)}`}>

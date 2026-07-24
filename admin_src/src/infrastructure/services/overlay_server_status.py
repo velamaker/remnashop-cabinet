@@ -31,6 +31,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Какие ноды показывать в статусе. Пустой список = ВСЕ. Иначе — только эти
     # UUID нод панели (админ выбирает в кабинете).
     "visible_nodes": [],
+    # Ключевые слова в названии хоста, помечающие «сервисный» хост-заглушку
+    # (не реальный сервер): «ПОДПИСКА ЗАКОНЧИЛАСЬ», «Продлите», «Оплата»,
+    # «Резерв», «Автовыбор» и т.п. Такие хосты скрыты у активных подписчиков и
+    # показываются только тем, у кого подписка кончилась. Пусто = ничего не прячем.
+    "service_keywords": [],
 }
 
 
@@ -40,11 +45,17 @@ def _normalize(data: dict[str, Any]) -> dict[str, Any]:
         visible = [str(x).strip() for x in raw_nodes if str(x).strip()]
     else:
         visible = []
+    raw_kw = data.get("service_keywords") or []
+    if isinstance(raw_kw, (list, tuple)):
+        keywords = [str(x).strip() for x in raw_kw if str(x).strip()]
+    else:
+        keywords = []
     return {
         "enabled": bool(data.get("enabled", True)),
         "bind_to_subscription": bool(data.get("bind_to_subscription", True)),
         "guest_visible": bool(data.get("guest_visible", True)),
         "visible_nodes": visible,
+        "service_keywords": keywords[:40],
     }
 
 

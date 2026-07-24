@@ -6,6 +6,8 @@ import "@fontsource/inter/500.css";
 import "@fontsource/inter/600.css";
 import "@fontsource/inter/700.css";
 import "@fontsource/inter/800.css";
+// Флаги стран — локальный self-hosted пакет (внешний flagcdn режется DPI в РФ).
+import "flag-icons/css/flag-icons.min.css";
 import "./index.css";
 import App from "./App";
 import { registerServiceWorker } from "./registerSW";
