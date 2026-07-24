@@ -45,6 +45,7 @@ import AdminIpPage from "@/pages/admin/AdminIpPage";
 import AdminServerStatusPage from "@/pages/admin/AdminServerStatusPage";
 import AdminSubscriptionAppPage from "@/pages/admin/AdminSubscriptionAppPage";
 import AdminAppearancePage from "@/pages/admin/AdminAppearancePage";
+import AdminCabinetPage from "@/pages/admin/AdminCabinetPage";
 import AdminInfoPage from "@/pages/admin/AdminInfoPage";
 import AdminRemnaWavePage from "@/pages/admin/AdminRemnaWavePage";
 import AdminSupportPage from "@/pages/admin/AdminSupportPage";
@@ -363,6 +364,14 @@ export default function App() {
               element={
                 <AdminRoute>
                   <AdminAppearancePage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/cabinet"
+              element={
+                <AdminRoute>
+                  <AdminCabinetPage />
                 </AdminRoute>
               }
             />

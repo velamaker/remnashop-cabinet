@@ -431,11 +431,15 @@ class NotificationService(Notifier):
             _uid = getattr(user, "id", None)
             if _uid and _role is not None and _role.includes(Role.ADMIN):
                 _pt, _pb = _push_title_body(text)
-                asyncio.create_task(
-                    push_admin_event_standalone(
-                        _uid, {"title": _pt, "body": _pb, "url": "/", "tag": "admin"}
+                # Пустые уведомления (текст отрендерился пустым → дефолтный заголовок
+                # без тела) в центр не зеркалим — иначе появляются бессмысленные
+                # «🔔 Уведомление» без содержимого.
+                if _pb or _pt != "🔔 Уведомление":
+                    asyncio.create_task(
+                        push_admin_event_standalone(
+                            _uid, {"title": _pt, "body": _pb, "url": "/", "tag": "admin"}
+                        )
                     )
-                )
         except Exception:  # noqa: BLE001 — зеркало push не должно мешать TG
             pass
 

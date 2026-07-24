@@ -24,6 +24,7 @@ class ServerStatusUpdate(BaseModel):
     bind_to_subscription: Optional[bool] = None
     guest_visible: Optional[bool] = None
     visible_nodes: Optional[list[str]] = None  # UUID нод для показа ([] = все)
+    service_keywords: Optional[list[str]] = None  # слова-заглушки в названии хоста
 
 
 @router.get("")

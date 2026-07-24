@@ -8,6 +8,7 @@ import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
 import { useT } from "@/i18n/I18nContext";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { useBranding } from "@/contexts/BrandingContext";
+import { BrandLogo } from "@/components/BrandLogo";
 import { ApiError } from "@/types/api";
 
 export default function RegisterPage() {
@@ -60,9 +61,7 @@ export default function RegisterPage() {
 
       <Card className="w-full max-w-sm animate-fade-in">
         <div className="mb-6 text-center">
-          <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-accent-fg shadow-glow">
-            <span className="text-base font-bold">R</span>
-          </div>
+          <BrandLogo size={44} className="mx-auto mb-3" />
           <h1 className="text-lg font-semibold text-fg">{t("register.title")}</h1>
           <p className="mt-1 text-sm text-fg-subtle">{t("register.subtitle")}</p>
         </div>

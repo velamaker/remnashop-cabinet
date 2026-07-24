@@ -121,9 +121,7 @@ export default function LoginPage() {
     return (
       <div className="app-scroll flex min-h-screen items-center justify-center bg-bg">
         <div className="text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-accent text-accent-fg shadow-glow">
-            <span className="text-lg font-bold">R</span>
-          </div>
+          <BrandLogo size={48} className="mx-auto mb-4" />
           {error ? (
             <p className="text-sm text-danger">{error}</p>
           ) : (

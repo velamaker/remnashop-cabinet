@@ -138,7 +138,7 @@ export default function AdminImportPage() {
                     <button
                       key={s.uuid}
                       type="button"
-                      onClick={() => setSelSquads((p) => { const n = new Set(p); n.has(s.uuid) ? n.delete(s.uuid) : n.add(s.uuid); return n; })}
+                      onClick={() => setSelSquads((p) => { const n = new Set(p); if (n.has(s.uuid)) n.delete(s.uuid); else n.add(s.uuid); return n; })}
                       className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${on ? "border-accent bg-accent-subtle text-accent" : "border-border-subtle bg-bg-raised text-fg-muted hover:border-[var(--border)]"}`}
                     >
                       {s.name}

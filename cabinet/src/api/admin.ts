@@ -21,7 +21,9 @@ async function adminFetch<T>(path: string, options: Omit<RequestInit, "body"> & 
     try {
       const data = await res.json();
       if (typeof data?.detail === "string") detail = data.detail;
-    } catch {}
+    } catch {
+      /* тело ответа не JSON — оставляем дефолтный текст ошибки */
+    }
     // 2FA админа: требуется разблокировка — сигналим глобально, модалка перехватит.
     if (res.status === 403 && detail === "2fa_required") {
       window.dispatchEvent(new CustomEvent("admin-2fa-required"));
@@ -877,6 +879,7 @@ export interface ServerStatusConfig {
   bind_to_subscription: boolean;
   guest_visible: boolean;
   visible_nodes: string[]; // UUID нод для показа; [] = все
+  service_keywords: string[]; // слова-заглушки в названии хоста; [] = ничего не прячем
 }
 
 export interface AdminPanelNode {
@@ -1150,7 +1153,9 @@ export const importAdminApi = {
       try {
         const d = await res.json();
         if (typeof d?.detail === "string") detail = d.detail;
-      } catch {}
+      } catch {
+        /* тело ответа не JSON — оставляем дефолтный текст ошибки */
+      }
       throw new ApiError(res.status, detail);
     }
     return (await res.json()) as { success: boolean; found: number; started: boolean };
