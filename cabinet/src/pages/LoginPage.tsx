@@ -12,6 +12,7 @@ import { ApiError, type TelegramAuthRequest } from "@/types/api";
 import { getTelegramWebApp, whenTelegramReady } from "@/hooks/useTelegramWebApp";
 import { BrandWordmark } from "@/components/BrandWordmark";
 import { BrandLogo } from "@/components/BrandLogo";
+import { safeInternalPath } from "@/lib/nav";
 import { useBranding } from "@/contexts/BrandingContext";
 
 const TELEGRAM_BOT_USERNAME = import.meta.env.VITE_TELEGRAM_BOT_USERNAME || "";
@@ -27,9 +28,8 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   // Куда вернуть после входа (напр. /devices из кнопки «Подключиться» в боте).
-  // Только безопасные внутренние пути.
-  const rawNext = searchParams.get("next");
-  const next = rawNext && rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/";
+  // Только безопасные внутренние пути (защита от open-redirect, вкл. обход через `\`).
+  const next = safeInternalPath(searchParams.get("next"));
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   // ?error=telegram прилетает с OIDC-callback при сбое обмена/проверки токена.
@@ -79,6 +79,8 @@ export default function LoginPage() {
     return () => {
       cancelled = true;
     };
+    // t нужен лишь для фолбэка ошибки; авто-вход отрабатывает один раз на монтировании
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loginWithTelegramWebApp, navigate, next]);
 
   // Уже залогинен (сессия жива — access 15 мин, refresh 30 дней) — не показываем

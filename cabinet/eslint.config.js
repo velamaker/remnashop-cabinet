@@ -19,10 +19,11 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
-      "react-refresh/only-export-components": [
-        "warn",
-        { allowConstantExport: true },
-      ],
+      // Отключено осознанно: правило — только про dev-HMR (Fast Refresh), на прод не
+      // влияет. Наши контексты (Auth/Theme/Branding/I18n) по идиоматичному паттерну
+      // React экспортят Provider + свой хук из одного файла; удовлетворить правило
+      // можно лишь неидиоматичным дроблением каждого контекста — не стоит того.
+      "react-refresh/only-export-components": "off",
       "@typescript-eslint/no-unused-vars": "off",
     },
   },

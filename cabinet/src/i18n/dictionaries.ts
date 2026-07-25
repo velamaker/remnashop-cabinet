@@ -1040,6 +1040,17 @@ const en: Dict = {
 };
 
 const tr: Dict = {
+  "ref.earnedTitle": "Referans kazançları",
+  "ref.earnedDays": "{n} gün",
+  "ref.earnedCount": "ödül: {n}",
+  "renewal.trafficWarn": "Trafik neredeyse bitti",
+  "renewal.trafficOut": "Trafik bitti",
+  "trialDiscount.title": "İlk alışverişte %{percent} indirim",
+  "trialDiscount.subtitle": "Deneme süreniz yakında bitiyor — indirimli abone olun.",
+  "trialDiscount.timeLeft": "Teklif {time} içinde sona erecek",
+  "trialDiscount.cta": "Abone ol",
+  "maintenance.registrationClosed": "Bakım çalışması sürüyor — yeni kayıtlar geçici olarak durduruldu. Lütfen daha sonra tekrar deneyin.",
+  "maintenance.paymentsClosed": "Bakım çalışması sürüyor — ödemeler geçici olarak kullanılamıyor. Lütfen daha sonra tekrar deneyin.",
   "landing.badge": "Sınırsız erişim",
   "landing.title": "İnternete güvenli erişiminiz",
   "landing.subtitle": "Yurt dışı servisleri ve siteleri açın — hızlı, kararlı ve verileriniz korunarak. Tüm cihazlarınızda çalışır.",
@@ -1535,6 +1546,17 @@ const tr: Dict = {
 };
 
 const kk: Dict = {
+  "ref.earnedTitle": "Рефералдардан табыс",
+  "ref.earnedDays": "{n} күн",
+  "ref.earnedCount": "есептеу: {n}",
+  "renewal.trafficWarn": "Трафик бітуге жақын",
+  "renewal.trafficOut": "Трафик бітті",
+  "trialDiscount.title": "Алғашқы сатып алуға {percent}% жеңілдік",
+  "trialDiscount.subtitle": "Сынақ мерзімі жақында аяқталады — жеңілдікпен жазылыңыз.",
+  "trialDiscount.timeLeft": "Ұсыныс {time} кейін жойылады",
+  "trialDiscount.cta": "Рәсімдеу",
+  "maintenance.registrationClosed": "Техникалық жұмыстар жүріп жатыр — тіркелу уақытша тоқтатылды. Кейінірек кіріңіз.",
+  "maintenance.paymentsClosed": "Техникалық жұмыстар жүріп жатыр — төлем уақытша қолжетімсіз. Кейінірек кіріңіз.",
   "landing.badge": "Шексіз қолжетімділік",
   "landing.title": "Интернетке қауіпсіз қолжетімділік",
   "landing.subtitle": "Кез келген шетелдік қызметтер мен сайттарды ашыңыз — жылдам, тұрақты және деректеріңіз қорғалған. Барлық құрылғыларда жұмыс істейді.",
@@ -2030,6 +2052,17 @@ const kk: Dict = {
 };
 
 const ky: Dict = {
+  "ref.earnedTitle": "Рефералдардан киреше",
+  "ref.earnedDays": "{n} күн",
+  "ref.earnedCount": "чегерүү: {n}",
+  "renewal.trafficWarn": "Трафик түгөнүп калды",
+  "renewal.trafficOut": "Трафик түгөндү",
+  "trialDiscount.title": "Биринчи сатып алууга {percent}% арзандатуу",
+  "trialDiscount.subtitle": "Сынак мөөнөтү жакында бүтөт — арзандатуу менен жазылыңыз.",
+  "trialDiscount.timeLeft": "Сунуш {time} кийин жоголот",
+  "trialDiscount.cta": "Жазылуу",
+  "maintenance.registrationClosed": "Техникалык иштер жүрүп жатат — каттоо убактылуу токтотулду. Кийинчерээк кириңиз.",
+  "maintenance.paymentsClosed": "Техникалык иштер жүрүп жатат — төлөм убактылуу жеткиликсиз. Кийинчерээк кириңиз.",
   "landing.badge": "Чексиз мүмкүнчүлүк",
   "landing.title": "Интернетке коопсуз мүмкүнчүлүк",
   "landing.subtitle": "Каалаган чет элдик кызматтарды жана сайттарды ачыңыз — тез, туруктуу жана дайындарыңыз корголгон. Бардык түзмөктөрдө иштейт.",
@@ -2525,6 +2558,17 @@ const ky: Dict = {
 };
 
 const uz: Dict = {
+  "ref.earnedTitle": "Referal daromadlari",
+  "ref.earnedDays": "{n} kun",
+  "ref.earnedCount": "hisoblangan: {n}",
+  "renewal.trafficWarn": "Trafik deyarli tugadi",
+  "renewal.trafficOut": "Trafik tugadi",
+  "trialDiscount.title": "Birinchi xaridga {percent}% chegirma",
+  "trialDiscount.subtitle": "Sinov muddati tez orada tugaydi — chegirma bilan obuna bo'ling.",
+  "trialDiscount.timeLeft": "Taklif {time} dan so'ng tugaydi",
+  "trialDiscount.cta": "Rasmiylashtirish",
+  "maintenance.registrationClosed": "Texnik ishlar olib borilmoqda — ro'yxatdan o'tish vaqtincha to'xtatildi. Iltimos, keyinroq kiring.",
+  "maintenance.paymentsClosed": "Texnik ishlar olib borilmoqda — to'lov vaqtincha mavjud emas. Iltimos, keyinroq kiring.",
   "landing.badge": "Chegarasiz kirish",
   "landing.title": "Internetga xavfsiz kirish",
   "landing.subtitle": "Istalgan xorijiy xizmat va saytlarni oching — tez, barqaror va ma'lumotlaringiz himoyalangan. Barcha qurilmalarda ishlaydi.",
@@ -3020,6 +3064,17 @@ const uz: Dict = {
 };
 
 const tg: Dict = {
+  "ref.earnedTitle": "Даромад аз рефералҳо",
+  "ref.earnedDays": "{n} рӯз",
+  "ref.earnedCount": "ҳисоб: {n}",
+  "renewal.trafficWarn": "Трафик қариб тамом шуд",
+  "renewal.trafficOut": "Трафик тамом шуд",
+  "trialDiscount.title": "Тахфифи {percent}% барои хариди аввал",
+  "trialDiscount.subtitle": "Давраи озмоишӣ ба зудӣ тамом мешавад — бо тахфиф обуна шавед.",
+  "trialDiscount.timeLeft": "Пешниҳод пас аз {time} тамом мешавад",
+  "trialDiscount.cta": "Ба расмият даровардан",
+  "maintenance.registrationClosed": "Корҳои техникӣ идома доранд — бақайдгирӣ муваққатан қатъ шуд. Лутфан, дертар ворид шавед.",
+  "maintenance.paymentsClosed": "Корҳои техникӣ идома доранд — пардохт муваққатан дастнорас аст. Лутфан, дертар ворид шавед.",
   "landing.badge": "Дастрасии бе марз",
   "landing.title": "Дастрасии бехатари шумо ба интернет",
   "landing.subtitle": "Ҳама гуна хизматҳо ва сайтҳои хориҷиро кушоед — зуд, устувор ва бо маълумоти ҳифзшуда. Дар ҳама дастгоҳҳо кор мекунад.",
@@ -3515,6 +3570,17 @@ const tg: Dict = {
 };
 
 const hy: Dict = {
+  "ref.earnedTitle": "Եկամուտ ռեֆերալներից",
+  "ref.earnedDays": "{n} օր",
+  "ref.earnedCount": "հաշվարկումներ՝ {n}",
+  "renewal.trafficWarn": "Տրաֆիկը գրեթե սպառվել է",
+  "renewal.trafficOut": "Տրաֆիկը սպառվել է",
+  "trialDiscount.title": "{percent}% զեղչ առաջին գնման համար",
+  "trialDiscount.subtitle": "Փորձնական ժամկետը շուտով ավարտվում է — բաժանորդագրվեք զեղչով։",
+  "trialDiscount.timeLeft": "Առաջարկը կավարտվի {time} հետո",
+  "trialDiscount.cta": "Ձևակերպել",
+  "maintenance.registrationClosed": "Ընթանում են տեխնիկական աշխատանքներ — գրանցումը ժամանակավորապես դադարեցված է։ Խնդրում ենք մտնել ավելի ուշ։",
+  "maintenance.paymentsClosed": "Ընթանում են տեխնիկական աշխատանքներ — վճարումը ժամանակավորապես անհասանելի է։ Խնդրում ենք մտնել ավելի ուշ։",
   "landing.badge": "Անսահման հասանելիություն",
   "landing.title": "Ձեր անվտանգ մուտքն ինտերնետ",
   "landing.subtitle": "Բացեք ցանկացած արտասահմանյան ծառայություն և կայք — արագ, կայուն և ձեր տվյալները պաշտպանված։ Աշխատում է ձեր բոլոր սարքերում։",
@@ -4010,6 +4076,17 @@ const hy: Dict = {
 };
 
 const az: Dict = {
+  "ref.earnedTitle": "Referallardan qazanc",
+  "ref.earnedDays": "{n} gün",
+  "ref.earnedCount": "hesablama: {n}",
+  "renewal.trafficWarn": "Trafik demək olar ki bitdi",
+  "renewal.trafficOut": "Trafik bitdi",
+  "trialDiscount.title": "İlk alış üçün {percent}% endirim",
+  "trialDiscount.subtitle": "Sınaq müddəti tezliklə bitir — endirimlə abunə olun.",
+  "trialDiscount.timeLeft": "Təklif {time} sonra bitəcək",
+  "trialDiscount.cta": "Rəsmiləşdir",
+  "maintenance.registrationClosed": "Texniki işlər gedir — qeydiyyat müvəqqəti dayandırılıb. Zəhmət olmasa, sonra daxil olun.",
+  "maintenance.paymentsClosed": "Texniki işlər gedir — ödəniş müvəqqəti əlçatmazdır. Zəhmət olmasa, sonra daxil olun.",
   "landing.badge": "Sərhədsiz giriş",
   "landing.title": "İnternetə təhlükəsiz girişiniz",
   "landing.subtitle": "İstənilən xarici xidmət və saytları açın — sürətli, sabit və məlumatlarınız qorunur. Bütün cihazlarınızda işləyir.",
@@ -4505,6 +4582,17 @@ const az: Dict = {
 };
 
 const be: Dict = {
+  "ref.earnedTitle": "Заробак на рэфералах",
+  "ref.earnedDays": "{n} дн.",
+  "ref.earnedCount": "налічэнняў: {n}",
+  "renewal.trafficWarn": "Трафік амаль скончыўся",
+  "renewal.trafficOut": "Трафік скончыўся",
+  "trialDiscount.title": "Зніжка {percent}% на першую пакупку",
+  "trialDiscount.subtitle": "Пробны перыяд неўзабаве скончыцца — аформіце падпіску са зніжкай.",
+  "trialDiscount.timeLeft": "Прапанова згарыць праз {time}",
+  "trialDiscount.cta": "Аформіць",
+  "maintenance.registrationClosed": "Ідуць тэхнічныя работы — рэгістрацыя часова прыпынена. Калі ласка, зайдзіце пазней.",
+  "maintenance.paymentsClosed": "Ідуць тэхнічныя работы — аплата часова недаступная. Калі ласка, зайдзіце пазней.",
   "landing.badge": "Доступ без межаў",
   "landing.title": "Ваш бяспечны доступ у інтэрнэт",
   "landing.subtitle": "Адкрывайце любыя замежныя сэрвісы і сайты — хутка, стабільна і з абаронай даных. Працуе на ўсіх вашых прыладах.",
@@ -5000,6 +5088,17 @@ const be: Dict = {
 };
 
 const ro: Dict = {
+  "ref.earnedTitle": "Câștiguri din recomandări",
+  "ref.earnedDays": "{n} zile",
+  "ref.earnedCount": "recompense: {n}",
+  "renewal.trafficWarn": "Traficul aproape s-a terminat",
+  "renewal.trafficOut": "Traficul s-a terminat",
+  "trialDiscount.title": "Reducere de {percent}% la prima achiziție",
+  "trialDiscount.subtitle": "Perioada de probă se termină curând — abonează-te cu reducere.",
+  "trialDiscount.timeLeft": "Oferta expiră în {time}",
+  "trialDiscount.cta": "Abonează-te",
+  "maintenance.registrationClosed": "Lucrări de mentenanță în curs — înregistrările noi sunt suspendate temporar. Te rugăm să revii mai târziu.",
+  "maintenance.paymentsClosed": "Lucrări de mentenanță în curs — plățile sunt temporar indisponibile. Te rugăm să revii mai târziu.",
   "landing.badge": "Acces fără frontiere",
   "landing.title": "Accesul tău sigur la internet",
   "landing.subtitle": "Deschide orice servicii și site-uri străine — rapid, stabil și cu datele protejate. Funcționează pe toate dispozitivele tale.",
@@ -5495,6 +5594,8 @@ const ro: Dict = {
 };
 
 const es: Dict = {
+  "maintenance.registrationClosed": "Estamos en mantenimiento — los nuevos registros están pausados. Vuelve más tarde, por favor.",
+  "maintenance.paymentsClosed": "Estamos en mantenimiento — los pagos no están disponibles temporalmente. Vuelve más tarde, por favor.",
   "pricing.subtitle": "Servicio rápido y confiable. Elige un plan — conéctate en un minuto, paga en tu cuenta.",
   "pricing.from": "desde",
   "pricing.perMonth": "/ mes",

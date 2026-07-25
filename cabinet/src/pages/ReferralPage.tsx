@@ -239,6 +239,8 @@ export default function ReferralPage() {
     } finally {
       setIsLoading(false);
     }
+    // t нужен лишь для фолбэка ошибки — лоадер не должен перезапускаться на смене языка
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   useEffect(() => {
