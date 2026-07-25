@@ -2,12 +2,7 @@ import { type ReactNode } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { AppLayout } from "@/components/layout/AppLayout";
-
-// Безопасный внутренний путь для редиректа после входа (защита от open-redirect).
-function safeNext(raw: string | null): string {
-  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/";
-  return raw;
-}
+import { safeInternalPath as safeNext } from "@/lib/nav";
 
 function FullScreenLoader() {
   return (

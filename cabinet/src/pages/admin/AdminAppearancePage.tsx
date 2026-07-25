@@ -100,6 +100,8 @@ export default function AdminAppearancePage() {
     applyAccent(form.accent);
     const themed = resolved === "dark" ? form.background_dark : form.background_light;
     applyBackground(themed ?? form.background);
+    // применяем только выбранные поля предпросмотра; полный form в deps не нужен
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form?.accent, form?.background, form?.background_dark, form?.background_light, resolved]);
 
   // При уходе со страницы восстанавливаем реально сохранённое оформление

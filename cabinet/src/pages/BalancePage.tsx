@@ -480,6 +480,8 @@ export default function BalancePage() {
       .then(setBalance)
       .catch((e) => setError(e instanceof ApiError ? e.detail : tr("balance.errLoad")))
       .finally(() => setLoading(false));
+    // t/tr нужны лишь для фолбэка ошибки — лоадер не должен перезапускаться на смене языка
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadTx = useCallback(() => {
@@ -492,6 +494,7 @@ export default function BalancePage() {
       })
       .catch((e) => setError(e instanceof ApiError ? e.detail : tr("balance.errLoad")))
       .finally(() => setTxLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offset]);
 
   useEffect(() => {
