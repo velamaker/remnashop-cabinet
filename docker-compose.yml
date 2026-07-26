@@ -68,7 +68,7 @@ services:
 
     command: >
       sh -c '
-      ARGS="--save \"\" --appendonly no --maxmemory-policy noeviction --loglevel warning";
+      ARGS="--appendonly yes --appendfsync everysec --maxmemory-policy noeviction --loglevel warning";
       if [ -n "$${REDIS_PASSWORD}" ]; then
         exec valkey-server $${ARGS} --requirepass "$${REDIS_PASSWORD}";
       else

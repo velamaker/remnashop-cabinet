@@ -48,6 +48,16 @@ def _local_changelog() -> dict[str, str]:
         text = CHANGELOG_PATH.read_text(encoding="utf-8")
     except Exception:
         return {}
+    return _parse_changelog_text(text)
+
+
+def _parse(v: str) -> tuple[int, ...]:
+    nums = re.findall(r"\d+", (v or "").lstrip("vV"))
+    return tuple(int(x) for x in nums) or (0,)
+
+
+def _parse_changelog_text(text: str) -> dict[str, str]:
+    """CHANGELOG.md → {'0.9.6': '• пункт\\n• пункт', ...} (общий парсер для локального/remote)."""
     result: dict[str, str] = {}
     cur: Optional[str] = None
     lines: list[str] = []
@@ -68,9 +78,23 @@ def _local_changelog() -> dict[str, str]:
     return result
 
 
-def _parse(v: str) -> tuple[int, ...]:
-    nums = re.findall(r"\d+", (v or "").lstrip("vV"))
-    return tuple(int(x) for x in nums) or (0,)
+async def _remote_changelog() -> dict[str, str]:
+    """CHANGELOG.md из репозитория (default-ветка) — чтобы показать НОВЫЕ версии и их
+    пункты ДО установки. Best-effort: приватный/недоступный репо → пусто, лента строится
+    из локального CHANGELOG (офлайн-режим). Репо публичный (см. update-notifier)."""
+    for branch in ("main", "master"):
+        try:
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as cli:
+                r = await cli.get(
+                    f"https://raw.githubusercontent.com/{REPO}/{branch}/CHANGELOG.md"
+                )
+            if r.status_code == 200 and r.text.strip():
+                parsed = _parse_changelog_text(r.text)
+                if parsed:
+                    return parsed
+        except Exception:
+            continue
+    return {}
 
 
 async def _github_releases() -> tuple[dict[str, str], dict[str, str]]:
@@ -100,10 +124,15 @@ async def _github_releases() -> tuple[dict[str, str], dict[str, str]]:
 
 
 async def _fetch_items() -> list[dict[str, Any]]:
-    # Источник версий — курируемый CHANGELOG.md (всегда в образе, без сети).
-    changelog = _local_changelog()  # {'0.8.6': '• ...', ...}
+    # Мержим локальный (в образе, офлайн) и УДАЛЁННЫЙ CHANGELOG. Remote даёт НОВЫЕ версии
+    # (ещё не установленные) и их пункты — чтобы показать «что изменится» ДО обновления;
+    # при совпадении версии remote приоритетнее (свежее). Офлайн → только локальный.
+    local = _local_changelog()
+    remote = await _remote_changelog()
+    changelog: dict[str, str] = {**local, **remote}
     urls, dates = await _github_releases()
 
+    current = _parse(_local_version())
     versions = sorted(changelog, key=_parse, reverse=True)[:20]
     items: list[dict[str, Any]] = []
     for v in versions:
@@ -113,15 +142,18 @@ async def _fetch_items() -> list[dict[str, Any]]:
             "name": label,
             "date": dates.get(v) or None,
             "notes": changelog.get(v, ""),
+            # installed=False → версия НОВЕЕ установленной (доступна, ещё не стоит).
+            "installed": _parse(v) <= current,
             "url": urls.get(v) or f"https://github.com/{REPO}/releases/tag/{label}",
         })
     return items
 
 
 @router.get("")
-async def get_updates(_admin: AdminUser) -> dict[str, Any]:
+async def get_updates(_admin: AdminUser, force: bool = False) -> dict[str, Any]:
     now = time.time()
-    if _cache["items"] is not None and now - _cache["at"] < _TTL:
+    # force=1 (кнопка «Проверить») — обходим кэш, чтобы новую версию видно было СРАЗУ.
+    if not force and _cache["items"] is not None and now - _cache["at"] < _TTL:
         items = _cache["items"]
     else:
         try:

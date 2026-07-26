@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Megaphone, ArrowRight, X } from "lucide-react";
 import { promoBannerApi, type PromoBannerStatus } from "@/api/promoBanner";
 import { useT } from "@/i18n/I18nContext";
+import { safeExternalUrl } from "@/lib/nav";
 
 const COLOR: Record<string, string> = {
   accent: "border-accent/40 bg-gradient-to-br from-accent/15 to-accent-2/15 text-accent",
@@ -58,10 +59,12 @@ export function PromoBanner() {
         <div className="min-w-0 flex-1">
           {data.title && <p className="text-base font-bold text-fg">{data.title}</p>}
           {data.text && <p className="mt-0.5 whitespace-pre-line text-sm text-fg-muted">{data.text}</p>}
-          {data.cta_text && data.cta_url && (
+          {data.cta_text && safeExternalUrl(data.cta_url) && (
             <a
-              href={data.cta_url}
-              target={data.cta_url.startsWith("http") ? "_blank" : undefined}
+              href={safeExternalUrl(data.cta_url)}
+              target={
+                safeExternalUrl(data.cta_url)?.startsWith("http") ? "_blank" : undefined
+              }
               rel="noreferrer"
               className="mt-2.5 inline-flex items-center gap-1 rounded-xl bg-white/10 px-3 py-1.5 text-sm font-semibold"
             >

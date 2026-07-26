@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { notificationsApi, type UserNotification } from "@/api/notifications";
 import { formatRelativeOnline } from "@/lib/format";
+import { safeInternalPath } from "@/lib/nav";
 import { useT } from "@/i18n/I18nContext";
 
 // Центр уведомлений в кабинете: колокольчик со счётчиком непрочитанных + лента.
@@ -92,7 +93,7 @@ export function NotificationBell() {
       setItems((prev) => prev.map((i) => (i.id === n.id ? { ...i, is_read: true } : i)));
     }
     setOpen(false);
-    if (n.url && n.url !== "/") navigate(n.url);
+    if (n.url && n.url !== "/") navigate(safeInternalPath(n.url));
   };
 
   const hasUnread = items.some((i) => !i.is_read);

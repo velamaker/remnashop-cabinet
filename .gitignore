@@ -58,6 +58,24 @@ assets/app_links_alert_state.json
 # единственного сид-файла apps.json. Так новые конфиги фич не «протекут» в git.
 assets/*.json
 !assets/apps.json
+# Бэкапы конфигов/секретов (напр. email.json.bak.<ts> — содержит SMTP-креды) и *.orig
+# от мержей — НИКОГДА в git (см. incident-db-dumps-leaked).
+*.bak
+*.bak.*
+*.orig
+
+# Пользовательские ассеты оператора — держим ТОЛЬКО в volume, НЕ в репо: иначе
+# апдейт (git reset --hard / архив) затирает правки, а фирменный баннер владельца
+# утекает в публичный репозиторий. Трекнутыми остаются шаблон custom.ftl.example и
+# .gitkeep (чтобы каталоги существовали); базовый образ досевает дефолты при отсутствии.
+assets/translations/*/custom.ftl
+# Баннеры оператора — все форматы, что отдаёт бот (BannerFormat: jpg/jpeg/png/gif/webp).
+# `**/*.ext` покрывает и корень assets/banners/, и подпапки локалей.
+assets/banners/**/*.jpg
+assets/banners/**/*.jpeg
+assets/banners/**/*.png
+assets/banners/**/*.gif
+assets/banners/**/*.webp
 
 # Editor / OS
 .DS_Store
@@ -70,6 +88,15 @@ assets/*.json
 # Локальный HA-оверлей (инфра-кастом, не публиковать)
 docker-compose.local-ha.yml
 cabinet/nginx.failover.conf
+
+# Внутренние security-аудиты — описывают конкретную установку (домены, недавно
+# закрытые дыры, внутреннюю архитектуру); в public git это карта для атакующего.
+docs/SECURITY-AUDIT-*.md
+
+# Owner-локальные компоненты кабинета (файлы с суффиксом .local) — держим только
+# в рабочем дереве конкретной установки, в публичный репозиторий не публикуем.
+cabinet/src/**/*.local.tsx
+cabinet/src/**/*.local.ts
 
 # Кастом страницы подписки Remnawave (sub.begemot.cc) — инфра конкретной установки,
 # НЕ в git (Фаза 14 роадмапа): бренд/цвета/патч index.html + re-patch скрипт.

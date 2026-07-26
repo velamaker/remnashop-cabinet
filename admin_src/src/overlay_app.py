@@ -14,6 +14,11 @@
 Развязка от alembic и примирение alembic_version — см. src/overlay_bootstrap.py.
 """
 
+import asyncio
+import hashlib
+import os
+import shutil
+import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -21,7 +26,7 @@ from dishka import AsyncContainer, Scope
 from fastapi import APIRouter, FastAPI, Request
 from loguru import logger
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from src.__main__ import application as _base_application
 from src.core.config import AppConfig
@@ -53,235 +58,52 @@ from src.web.endpoints.public.gift import router as gift_public_router
 from src.web.endpoints.public.sessions import router as sessions_public_router
 from src.web.endpoints.public.account import router as account_public_router
 from src.web.endpoints.public.notifications import router as notifications_public_router
+from src.web.endpoints.public.sub_alias import router as sub_alias_router
 
-# DDL таблиц поддержки. Идемпотентно (IF NOT EXISTS) — повторный старт безопасен.
-_SUPPORT_TABLES_DDL = (
+# Overlay-схема управляется ОТДЕЛЬНЫМ alembic-env (infrastructure/database/migrations_overlay/).
+# Baseline-миграция 0001 создаёт все overlay-таблицы идемпотентным DDL из
+# overlay_baseline_ddl.BASELINE_DDL. Прогон — в lifespan под advisory-lock (сериализует
+# старты primary+HA). Своя version-таблица alembic_version_overlay → без конфликта с
+# линейкой base (историю развязки см. overlay_bootstrap.py).
+_OVERLAY_ALEMBIC_INI = "src/infrastructure/database/migrations_overlay/alembic_overlay.ini"
+_OVERLAY_MIGRATE_LOCK = 728411
+
+
+async def _run_overlay_migrations() -> None:
+    """`alembic upgrade head` для overlay-схемы под advisory-lock.
+
+    Lock на ОТДЕЛЬНОМ соединении сериализует конкурентные старты (primary remnashop и
+    HA remnashop-web гонят lifespan одновременно): второй ждёт первого и видит версию
+    на head (no-op), без гонки на version-таблице. alembic запускается субпроцессом —
+    у него свой event loop (env.py делает asyncio.run), из работающего loop не позвать.
+    Падение alembic → RuntimeError → старт прерывается (fail-closed).
     """
-    CREATE TABLE IF NOT EXISTS support_tickets (
-        id          SERIAL PRIMARY KEY,
-        user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        subject     VARCHAR(200) NOT NULL,
-        status      VARCHAR(20)  NOT NULL DEFAULT 'open',
-        created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
-        updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS ix_support_tickets_user_id ON support_tickets (user_id)",
-    """
-    CREATE TABLE IF NOT EXISTS support_messages (
-        id          SERIAL PRIMARY KEY,
-        ticket_id   INTEGER NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
-        sender      VARCHAR(10) NOT NULL,
-        body        TEXT        NOT NULL,
-        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS ix_support_messages_ticket_id ON support_messages (ticket_id)",
-    """
-    CREATE TABLE IF NOT EXISTS admin_audit_log (
-        id          SERIAL PRIMARY KEY,
-        actor       VARCHAR(120) NOT NULL,
-        method      VARCHAR(10)  NOT NULL,
-        path        VARCHAR(300) NOT NULL,
-        status      INTEGER      NOT NULL,
-        created_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS ix_admin_audit_created ON admin_audit_log (created_at DESC)",
-    """
-    CREATE TABLE IF NOT EXISTS login_events (
-        id          BIGSERIAL PRIMARY KEY,
-        user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        ip          VARCHAR(64),
-        user_agent  VARCHAR(400),
-        method      VARCHAR(20),
-        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS ix_login_events_user ON login_events (user_id, created_at DESC)",
-    """
-    CREATE TABLE IF NOT EXISTS admin_grants (
-        user_id      INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-        full_access  BOOLEAN     NOT NULL DEFAULT false,
-        can_write    BOOLEAN     NOT NULL DEFAULT true,
-        sections     JSONB       NOT NULL DEFAULT '[]'::jsonb,
-        expires_at   TIMESTAMPTZ,
-        granted_by   VARCHAR(120),
-        updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-    )
-    """,
-    # Снимок HWID-устройств пользователей (для детекта абьюза «один девайс —
-    # разные аккаунты»). В нашей БД HWID нет — периодическая задача снимает их
-    # через Remnawave SDK (см. taskiq/tasks/abuse_hwid.py).
-    """
-    CREATE TABLE IF NOT EXISTS hwid_devices (
-        user_id    INTEGER      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        hwid       VARCHAR(256) NOT NULL,
-        updated_at TIMESTAMPTZ  NOT NULL DEFAULT now(),
-        PRIMARY KEY (user_id, hwid)
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS ix_hwid_devices_hwid ON hwid_devices (hwid)",
-    # Модель/платформа устройства (из Remnawave HWID) — для наглядности группы
-    # «один девайс — разные аккаунты» в детекте абьюза.
-    "ALTER TABLE hwid_devices ADD COLUMN IF NOT EXISTS device_model VARCHAR(128)",
-    "ALTER TABLE hwid_devices ADD COLUMN IF NOT EXISTS platform VARCHAR(64)",
-    # Скидка на первую покупку триальщикам (за N дней до конца триала). Одна строка
-    # на юзера — трекает выданную скидку для дедупа, срока жизни и баннера в кабинете.
-    # Саму скидку крон пишет в users.purchase_discount (база гасит её после покупки).
-    """
-    CREATE TABLE IF NOT EXISTS trial_discounts (
-        user_id    INTEGER      NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-        percent    INTEGER      NOT NULL,
-        granted_at TIMESTAMPTZ  NOT NULL DEFAULT now(),
-        expires_at TIMESTAMPTZ  NOT NULL,
-        used       BOOLEAN      NOT NULL DEFAULT false
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS ix_trial_discounts_expires ON trial_discounts (expires_at)",
-    # Резервный доступ истёкшим подпискам (1 ГБ на N дней). Одна строка на юзера —
-    # дедуп «один резерв на юзера» + окончание окна (reserve_expire_at) → крон истекает.
-    """
-    CREATE TABLE IF NOT EXISTS reserve_grants (
-        user_id           INTEGER      NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-        remna_uuid        VARCHAR(64)  NOT NULL,
-        granted_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
-        reserve_expire_at TIMESTAMPTZ  NOT NULL,
-        ended             BOOLEAN      NOT NULL DEFAULT false
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS ix_reserve_grants_active ON reserve_grants (ended, reserve_expire_at)",
-    # Win-back: скидка «вернись» истёкшим через N дней. Одна строка на юзера (дедуп +
-    # срок жизни промо). Саму скидку крон пишет в users.purchase_discount.
-    """
-    CREATE TABLE IF NOT EXISTS winback_grants (
-        user_id    INTEGER      NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-        percent    INTEGER      NOT NULL,
-        granted_at TIMESTAMPTZ  NOT NULL DEFAULT now(),
-        expires_at TIMESTAMPTZ  NOT NULL,
-        used       BOOLEAN      NOT NULL DEFAULT false
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS ix_winback_grants_expires ON winback_grants (expires_at)",
-    # Известные HWID-устройства юзеров — база для детекта «новое устройство подключилось»
-    # (крон new_device.py). Первый снимок юзера = baseline (без уведомления).
-    """
-    CREATE TABLE IF NOT EXISTS known_devices (
-        user_id    INTEGER      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        hwid       VARCHAR(256) NOT NULL,
-        first_seen TIMESTAMPTZ  NOT NULL DEFAULT now(),
-        PRIMARY KEY (user_id, hwid)
-    )
-    """,
-    # Заморозка (пауза) подписки: одна активная пауза на юзера. remaining_seconds —
-    # сохранённый остаток срока на момент паузы (при возобновлении expire = now+остаток).
-    """
-    CREATE TABLE IF NOT EXISTS subscription_freezes (
-        user_id           INTEGER      NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-        remna_uuid        VARCHAR(64)  NOT NULL,
-        frozen_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
-        remaining_seconds BIGINT       NOT NULL,
-        active            BOOLEAN      NOT NULL DEFAULT true
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS ix_subscription_freezes_active ON subscription_freezes (active, frozen_at)",
-    # 2FA (TOTP) админов — opt-in на админа (см. services/overlay_admin_2fa.py).
-    """
-    CREATE TABLE IF NOT EXISTS admin_2fa (
-        user_id  INTEGER      NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-        secret   VARCHAR(64)  NOT NULL,
-        enabled  BOOLEAN      NOT NULL DEFAULT false
-    )
-    """,
-    # «Выйти со всех устройств»: токены с iat раньше invalidated_at — недействительны.
-    """
-    CREATE TABLE IF NOT EXISTS session_invalidations (
-        user_id        INTEGER      NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-        invalidated_at TIMESTAMPTZ  NOT NULL DEFAULT now()
-    )
-    """,
-    # История email-рассылок из кабинета (TG-рассылки живут в базовой таблице
-    # broadcasts; для email её enum-аудиторий не хватает — трекаем отдельно).
-    # Фактическую отправку делает taskiq/tasks/broadcast_email.py.
-    """
-    CREATE TABLE IF NOT EXISTS email_broadcasts (
-        id            SERIAL PRIMARY KEY,
-        subject       VARCHAR(300) NOT NULL,
-        body          TEXT         NOT NULL,
-        status        VARCHAR(20)  NOT NULL DEFAULT 'PROCESSING',
-        total_count   INTEGER      NOT NULL DEFAULT 0,
-        success_count INTEGER      NOT NULL DEFAULT 0,
-        failed_count  INTEGER      NOT NULL DEFAULT 0,
-        created_at    TIMESTAMPTZ  NOT NULL DEFAULT now()
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS ix_email_broadcasts_created ON email_broadcasts (created_at DESC)",
-    # Web Push подписки PWA (браузерные push). Одна строка на устройство/endpoint.
-    # Отправка через pywebpush (см. services/overlay_push.py). Мёртвые (404/410)
-    # чистит send_to_user. VAPID-ключи — в assets/push_vapid.json.
-    """
-    CREATE TABLE IF NOT EXISTS push_subscriptions (
-        id          BIGSERIAL PRIMARY KEY,
-        user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        endpoint    VARCHAR(1000) NOT NULL UNIQUE,
-        p256dh      VARCHAR(200)  NOT NULL,
-        auth        VARCHAR(100)  NOT NULL,
-        created_at  TIMESTAMPTZ   NOT NULL DEFAULT now()
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS ix_push_subscriptions_user ON push_subscriptions (user_id)",
-    # Рублёвый баланс-кошелёк пользователя (ОТДЕЛЬНО от User.points/баллов рефералки).
-    # Пополняется (админ/картой) и тратится на продление по цене тарифа. Overlay-колонка.
-    "ALTER TABLE users ADD COLUMN IF NOT EXISTS cabinet_balance NUMERIC(12,2) NOT NULL DEFAULT 0",
-    # Автопродление с баланса: если включено, cron за N дней до конца подписки
-    # продлевает её, списывая ₽ с cabinet_balance. См. taskiq/tasks/autopay.py.
-    "ALTER TABLE users ADD COLUMN IF NOT EXISTS autopay_enabled BOOLEAN NOT NULL DEFAULT false",
-    # Сегмент аудитории email-рассылки (EMAIL_ALL / EMAIL_SUBSCRIBED / EMAIL_TRIAL /
-    # EMAIL_EXPIRING / EMAIL_EXPIRED). ADD COLUMN IF NOT EXISTS — для уже созданной таблицы.
-    "ALTER TABLE email_broadcasts ADD COLUMN IF NOT EXISTS segment VARCHAR(30) NOT NULL DEFAULT 'EMAIL_ALL'",
-    # Пополнения ₽-баланса через платёжные шлюзы (+бонус). Строка пишется ДО отдачи
-    # URL шлюза (по payment_id базовой транзакции); на вебхуке base ProcessPayment
-    # (overlay, вариант B) зачисляет amount+bonus на users.cabinet_balance и ставит
-    # credited. См. services/overlay_topup.py. Идемпотентность — по флагу credited.
-    """
-    CREATE TABLE IF NOT EXISTS balance_topups (
-        payment_id  UUID PRIMARY KEY,
-        user_id     INTEGER       NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        amount      NUMERIC(12,2) NOT NULL,
-        bonus       NUMERIC(12,2) NOT NULL DEFAULT 0,
-        credited    BOOLEAN       NOT NULL DEFAULT false,
-        created_at  TIMESTAMPTZ   NOT NULL DEFAULT now(),
-        credited_at TIMESTAMPTZ
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS ix_balance_topups_user ON balance_topups (user_id)",
-    # История уведомлений админам (web-push «новый тикет» и т.п.). Пишется в
-    # services/overlay_push.py::push_admins_standalone при каждой отправке админам,
-    # даже если ни одного устройства не подписано — чтобы владелец видел ленту.
-    # Показывается в админке (раздел «Уведомления»). Старые чистятся при вставке.
-    """
-    CREATE TABLE IF NOT EXISTS admin_notifications (
-        id         BIGSERIAL PRIMARY KEY,
-        title      VARCHAR(200) NOT NULL DEFAULT '',
-        body       TEXT         NOT NULL DEFAULT '',
-        url        VARCHAR(500) NOT NULL DEFAULT '/',
-        created_at TIMESTAMPTZ  NOT NULL DEFAULT now()
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS ix_admin_notifications_created ON admin_notifications (created_at DESC)",
-    """
-    CREATE TABLE IF NOT EXISTS user_notifications (
-        id         BIGSERIAL    PRIMARY KEY,
-        user_id    INTEGER      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        title      VARCHAR(200) NOT NULL DEFAULT '',
-        body       TEXT         NOT NULL DEFAULT '',
-        url        VARCHAR(500) NOT NULL DEFAULT '/',
-        is_read    BOOLEAN      NOT NULL DEFAULT false,
-        created_at TIMESTAMPTZ  NOT NULL DEFAULT now()
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS ix_user_notifications_user ON user_notifications (user_id, created_at DESC)",
-)
+    config = AppConfig.get()
+    alembic_bin = shutil.which("alembic") or "/opt/remnashop/.venv/bin/alembic"
+    engine = create_async_engine(config.database.dsn)
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": _OVERLAY_MIGRATE_LOCK})
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    alembic_bin, "-c", _OVERLAY_ALEMBIC_INI, "upgrade", "head",
+                    cwd="/opt/remnashop",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                out, _ = await proc.communicate()
+                if proc.returncode != 0:
+                    raise RuntimeError(
+                        f"overlay alembic upgrade завершился rc={proc.returncode}: "
+                        f"{out.decode(errors='replace')[-1000:]}"
+                    )
+                logger.info("Overlay: alembic upgrade head — overlay-схема актуальна")
+            finally:
+                await conn.execute(
+                    text("SELECT pg_advisory_unlock(:k)"), {"k": _OVERLAY_MIGRATE_LOCK}
+                )
+    finally:
+        await engine.dispose()
 
 
 def _overlay_public_router() -> APIRouter:
@@ -315,6 +137,7 @@ def _overlay_public_router() -> APIRouter:
     router.include_router(sessions_public_router)
     router.include_router(account_public_router)
     router.include_router(notifications_public_router)
+    router.include_router(sub_alias_router)
     return router
 
 
@@ -328,15 +151,30 @@ def _wrap_lifespan_with_support_tables(app: FastAPI, container: AsyncContainer) 
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-        try:
-            async with container(scope=Scope.REQUEST) as request_container:
-                session = await request_container.get(AsyncSession)
-                for stmt in _SUPPORT_TABLES_DDL:
-                    await session.execute(text(stmt))
-                await session.commit()
-            logger.info("Overlay: таблицы поддержки готовы (IF NOT EXISTS)")
-        except Exception as exc:  # не валим старт из-за overlay-таблиц
-            logger.exception(f"Overlay: не удалось создать таблицы поддержки: {exc}")
+        # Overlay-схема: alembic upgrade head (под advisory-lock). Падение → RuntimeError
+        # → старт прерван (fail-closed: без таблиц кабинет работать не должен). Запускается
+        # ПОСЛЕ base-alembic (тот прошёл в docker-entrypoint до uvicorn), поэтому FK на
+        # users уже валидны.
+        await _run_overlay_migrations()
+
+        # FAIL-CLOSED: без security-critical таблиц (2FA-гейт и отзыв сессий) кабинет
+        # работал бы небезопасно (2FA «выключена», logout-all не действует). Проверяем
+        # их наличие и НЕ стартуем, если их нет — лучше явный отказ, чем тихий fail-open.
+        critical = ("admin_2fa", "session_invalidations")
+        async with container(scope=Scope.REQUEST) as request_container:
+            session = await request_container.get(AsyncSession)
+            missing = [
+                t
+                for t in critical
+                if not (
+                    await session.execute(text("SELECT to_regclass(:t)"), {"t": t})
+                ).scalar()
+            ]
+        if missing:
+            raise RuntimeError(
+                f"Overlay: отсутствуют security-critical таблицы {missing} — старт прерван "
+                f"(без них 2FA/отзыв сессий не работают). Проверьте миграции/права БД."
+            )
 
         # Сверка роли владельца: гарантируем, что у BOT_OWNER_ID роль OWNER.
         # Веб-вход в кабинет (через Telegram) создаёт юзера БЕЗ owner-проверки —
@@ -382,8 +220,121 @@ def application() -> FastAPI:
     _add_admin_audit_middleware(app, container)
     _add_login_tracking_middleware(app, container)
     _add_session_check_middleware(app, container)
+    _add_csrf_protection_middleware(app)
+    _add_refresh_reuse_detection_middleware(app, container)
 
     return app
+
+
+def _add_refresh_reuse_detection_middleware(app: FastAPI, container: AsyncContainer) -> None:
+    """Reuse-detection ротации refresh-токенов (H-01).
+
+    Base-эндпоинт `/auth/refresh` ротирует refresh (single-use: старый удаляется, выдаётся
+    новый). Если УКРАДЕННЫЙ старый токен предъявят ПОВТОРНО после потребления — это признак
+    компрометации: рвём ВСЁ семейство токенов пользователя (revoke_all_user_tokens).
+
+    Механика: валидный refresh помечаем в Redis (sha256(token) → uid, TTL). При следующем
+    запросе, если токен уже НЕ валиден, но есть его consumed-маркер и прошло больше
+    GRACE секунд (окно гонки одновременных refresh из одной вкладки/двух вкладок) —
+    считаем переиспользованием и отзываем сессии. Детектор best-effort: не роняет refresh.
+
+    Секрет в Redis не храним — только sha256 токена.
+    """
+    from fastapi.responses import JSONResponse
+
+    CONSUMED_TTL = 7 * 24 * 3600  # маркер живёт неделю (окно возможного replay кражи)
+    GRACE = 15  # сек: одновременные refresh (гонка) — не караем
+
+    @app.middleware("http")
+    async def _reuse(request: Request, call_next):  # type: ignore[no-untyped-def]
+        if request.method == "POST" and request.url.path.endswith("/auth/refresh"):
+            rt = request.cookies.get("refresh_token")
+            if rt:
+                try:
+                    from redis.asyncio import Redis
+
+                    from src.application.common.dao.auth import AuthSessionDao
+
+                    h = hashlib.sha256(rt.encode()).hexdigest()
+                    key = f"overlay_consumed_refresh:{h}"
+                    async with container(scope=Scope.REQUEST) as rc:
+                        dao = await rc.get(AuthSessionDao)
+                        redis = await rc.get(Redis)
+                        uid = await dao.get_user_id_by_refresh_token(rt)
+                        if uid is None:
+                            raw = await redis.get(key)
+                            if raw:
+                                val = raw.decode() if isinstance(raw, bytes) else str(raw)
+                                cuid_s, _, cts_s = val.partition(":")
+                                cuid = int(cuid_s)
+                                cts = float(cts_s or 0)
+                                if time.time() - cts > GRACE:
+                                    # Реальное переиспользование → компрометация семейства.
+                                    await dao.revoke_all_user_tokens(cuid)
+                                    logger.warning(
+                                        f"Refresh reuse detected for user {cuid} — все токены отозваны"
+                                    )
+                                    return JSONResponse(
+                                        status_code=401,
+                                        content={"detail": "Сессия скомпрометирована — войдите заново"},
+                                    )
+                                # В пределах GRACE — гонка одновременных refresh, пропускаем.
+                        else:
+                            # Валидный токен → сейчас будет ротирован base-хендлером: помечаем.
+                            await redis.set(key, f"{uid}:{int(time.time())}", ex=CONSUMED_TTL)
+                except Exception:  # noqa: BLE001 — детектор не должен ломать refresh
+                    pass
+        return await call_next(request)
+
+
+def _add_csrf_protection_middleware(app: FastAPI) -> None:
+    """CSRF-защита для cookie-аутентифицированных мутаций (Origin/Referer allowlist).
+
+    Кабинет ходит cookie-сессией → уязвим к CSRF; SameSite=Lax снижает, но не закрывает
+    риск. Для небезопасных методов (POST/PUT/PATCH/DELETE), несущих НАШУ auth-куку,
+    требуем совпадения Origin (или, если его нет, Referer) с доменом кабинета.
+
+    ВАЖНО: платёжные вебхуки и серверные интеграции НЕ несут нашу куку → проверку не
+    проходят (у них своя подпись). Так CSRF-защита не ломает webhook'и, но закрывает
+    браузерные сессии. GET/HEAD/OPTIONS и запросы без нашей куки — пропускаем.
+    """
+    from urllib.parse import urlsplit
+
+    from fastapi.responses import JSONResponse
+
+    from src.web.csrf import csrf_blocked  # чистая логика (юнит-тесты — tests/test_csrf.py)
+
+    def _allowed_hosts(request: Request) -> set[str]:
+        hosts: set[str] = set()
+        cab = (os.environ.get("WEB_CABINET_URL") or "").strip()
+        if cab:
+            hosts.add(urlsplit(cab).netloc.lower())
+        # Собственный хост запроса (за прокси — X-Forwarded-Host), same-origin fetch.
+        for h in (
+            request.headers.get("x-forwarded-host", "").split(",")[0].strip(),
+            request.headers.get("host", "").strip(),
+        ):
+            if h:
+                hosts.add(h.lower())
+        return {x for x in hosts if x}
+
+    @app.middleware("http")
+    async def _csrf(request: Request, call_next):  # type: ignore[no-untyped-def]
+        has_cookie = bool(
+            request.cookies.get("access_token") or request.cookies.get("refresh_token")
+        )
+        if csrf_blocked(
+            request.method,
+            request.url.path,
+            has_cookie,
+            request.headers.get("origin"),
+            request.headers.get("referer"),
+            _allowed_hosts(request),
+        ):
+            return JSONResponse(
+                status_code=403, content={"detail": "CSRF: недопустимый источник запроса"}
+            )
+        return await call_next(request)
 
 
 def _add_session_check_middleware(app: FastAPI, container: AsyncContainer) -> None:
@@ -395,11 +346,30 @@ def _add_session_check_middleware(app: FastAPI, container: AsyncContainer) -> No
     import jwt as _jwt
     from fastapi.responses import JSONResponse
 
+    # /auth/* исключаем ТОЧЕЧНО — только неаутентифицированные пути повторного входа
+    # (с отозванной сессией юзер должен мочь войти заново / обновить токен / сбросить
+    # пароль). Аутентифицированные /auth/* (me/whoami/telegram/link/email/*/password/set/
+    # change-password) РАНЬШЕ тоже пропускались мимо проверки → logout-all и сброс пароля
+    # НЕ отзывали access на них (украденный токен жил дальше). Теперь они проверяются.
+    _SESSION_CHECK_EXEMPT = (
+        "/auth/login",
+        "/auth/register",
+        "/auth/refresh",
+        "/auth/logout",
+        "/auth/telegram",  # вход через Telegram (exact end; /telegram/link не сматчится)
+        "/auth/telegram/webapp",
+        "/auth/telegram/oidc/start",
+        "/auth/telegram/oidc/callback",
+        "/auth/password/reset/request",
+        "/auth/password/reset/confirm",
+    )
+
     @app.middleware("http")
     async def _check_session(request: Request, call_next):  # type: ignore[no-untyped-def]
         token = request.cookies.get("access_token")
         path = request.url.path
-        if token and "/api/" in path and "/auth/" not in path:
+        exempt = any(path.endswith(s) for s in _SESSION_CHECK_EXEMPT)
+        if token and "/api/" in path and not exempt:
             try:
                 cfg = AppConfig.get()
                 secret = (
@@ -450,12 +420,16 @@ def _login_method(path: str) -> str:
 
 
 def _client_ip(request: Request) -> str:
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()[:64]
+    # X-Real-IP ставит НАШ nginx из реального клиентского IP (после real_ip, который
+    # разрешает XFF через доверенный фронт-прокси) — доверяем ему для аудита/allowlist.
+    # Крайний ЛЕВЫЙ X-Forwarded-For клиентоуправляем (спуфится) → НЕ используем его;
+    # как фолбэк берём ПРАВЫЙ элемент XFF (добавлен последним доверенным хопом).
     xr = request.headers.get("x-real-ip")
     if xr:
         return xr.strip()[:64]
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[-1].strip()[:64]
     return (request.client.host if request.client else "")[:64]
 
 

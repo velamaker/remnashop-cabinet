@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Cabinet — build / lint / test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cabinet
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: cabinet/package-lock.json
+      - name: Install (clean)
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck + build
+        run: npm run build
+      - name: Unit tests
+        run: npm test --if-present
+      - name: Dependency audit (high+)
+        run: npm audit --audit-level=high
+        continue-on-error: true  # видимость, не блокируем (транзитивные фиксы бывают отложены)

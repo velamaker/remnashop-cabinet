@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { safeExternalUrl } from "@/lib/nav";
+
 interface TelegramWebApp {
   initData: string;
   colorScheme: "dark" | "light";
@@ -71,15 +73,19 @@ export function useIsMiniApp(): boolean {
  * отдаёт схему приложению по URL-scheme. Вне Mini App — обычный location.href.
  */
 export function openExternalLink(url: string) {
+  // Централизованный guard: url может прийти из админ-конфига (custom deep_link) —
+  // не открываем javascript:/data: и прочие неразрешённые схемы (иначе XSS в origin).
+  const safe = safeExternalUrl(url);
+  if (!safe) return;
   const app = getTelegramWebApp();
-  const isHttp = /^https?:\/\//i.test(url);
+  const isHttp = /^https?:\/\//i.test(safe);
   if (app) {
     const target = isHttp
-      ? url
-      : `${window.location.origin}/connect.html#${encodeURIComponent(url)}`;
+      ? safe
+      : `${window.location.origin}/connect.html#${encodeURIComponent(safe)}`;
     app.openLink(target, { try_instant_view: false });
   } else {
-    window.location.href = url;
+    window.location.href = safe;
   }
 }
 

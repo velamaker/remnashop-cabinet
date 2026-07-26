@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Блокирует коммит дампов БД и файлов секретов. Ловит даже `git add -f` (обход .gitignore).
+# 1) Блокирует коммит дампов БД и файлов секретов (ловит даже `git add -f`).
+# 2) Гоняет статанализ (типы+линт кабинета, синтаксис бэкенда) по изменённым файлам.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/_guard.sh"
@@ -7,15 +8,31 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 staged="$(git diff --cached --name-only --diff-filter=AM)"
 [ -z "$staged" ] && exit 0
 
+# --- 1. Секреты / дампы ---
 hits="$(printf '%s\n' "$staged" | forbidden_paths | sort -u)"
-[ -z "$hits" ] && exit 0
+if [ -n "$hits" ]; then
+  {
+    echo "🚫 КОММИТ ЗАБЛОКИРОВАН — чувствительные файлы в индексе:"
+    printf '%s\n' "$hits" | sed 's/^/  • /'
+    echo
+    echo "Их нельзя коммитить (утечка данных пользователей/секретов)."
+    echo "Убрать из индекса:  git restore --staged <файл>"
+    echo "Осознанный обход:   git commit --no-verify  (крайне не рекомендуется)"
+  } >&2
+  exit 1
+fi
 
-{
-  echo "🚫 КОММИТ ЗАБЛОКИРОВАН — чувствительные файлы в индексе:"
-  printf '%s\n' "$hits" | sed 's/^/  • /'
-  echo
-  echo "Их нельзя коммитить (утечка данных пользователей/секретов)."
-  echo "Убрать из индекса:  git restore --staged <файл>"
-  echo "Осознанный обход:   git commit --no-verify  (крайне не рекомендуется)"
-} >&2
-exit 1
+# --- 2. Статанализ изменённого кода (tsc + eslint / py_compile) ---
+if [ -x "$HERE/../check.sh" ]; then
+  if ! "$HERE/../check.sh" --staged; then
+    {
+      echo
+      echo "🚫 КОММИТ ЗАБЛОКИРОВАН — статанализ нашёл ошибки (см. выше)."
+      echo "Почини их, либо осознанный обход: git commit --no-verify"
+      echo "Разово выключить проверку: SKIP_CHECKS=1 git commit …"
+    } >&2
+    exit 1
+  fi
+fi
+
+exit 0

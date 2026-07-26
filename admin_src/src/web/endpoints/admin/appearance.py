@@ -1,7 +1,9 @@
 """Админ: изменение оформления кабинета (название, акцент, фон, логотип)."""
 
 import json
+import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
@@ -11,7 +13,6 @@ from pydantic import BaseModel
 from src.web.endpoints.public.appearance import (
     ASSETS_DIR,
     BRANDING_PATH,
-    LOGO_MEDIA_TYPES,
     load_branding,
     logo_url,
     resolve_brand_name,
@@ -24,12 +25,36 @@ router = APIRouter(prefix="/appearance", tags=["Admin - Appearance"])
 # Лимит размера логотипа (nginx admin-локация поднята до 4m под этот аплоад).
 MAX_LOGO_BYTES = 2 * 1024 * 1024
 
+# Только РАСТРОВЫЕ форматы к загрузке. SVG НЕ принимаем: он может содержать <script>,
+# и при прямом открытии /assets/logo.svg исполнится JS в origin кабинета (stored-XSS).
+# Растр в <img> скриптов не исполняет. (LOGO_MEDIA_TYPES оставляем для отдачи старых файлов.)
+LOGO_UPLOAD_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
 
 def _save_branding(data: dict[str, Any]) -> None:
     try:
         BRANDING_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with BRANDING_PATH.open("w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, indent=2)
+        # АТОМАРНО: пишем во временный файл в ТОМ ЖЕ каталоге + fsync + os.replace.
+        # Прямой open("w") усекал бы файл сразу; при сбое на середине json.dump (диск
+        # полон / краш / рестарт при деплое) на диске оставался бы ПУСТОЙ/битый
+        # branding.json → load_branding отдаёт дефолты (тихий сброс crypto_links_enabled
+        # → утечка реального sub-URL). os.replace атомарен на POSIX: читатель (в т.ч.
+        # HA-копия на том же томе) видит либо старый целый файл, либо новый целый.
+        fd, tmp = tempfile.mkstemp(
+            dir=str(BRANDING_PATH.parent), prefix=".branding.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False, indent=2)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, BRANDING_PATH)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -51,6 +76,7 @@ class AppearanceUpdate(BaseModel):
     background_light: Optional[str] = None  # фон светлой темы (hex / "" сброс)
     # Тумблеры кабинета
     sub_link_enabled: Optional[bool] = None        # показывать прямую ссылку/QR подписки
+    crypto_links_enabled: Optional[bool] = None    # прятать реальный sub-URL за крипто-алиасом
     maintenance_enabled: Optional[bool] = None     # тех-работы (свой тумблер)
     maintenance_follow_bot: Optional[bool] = None  # тех-работы = следовать за режимом бота
     maintenance_message: Optional[str] = None      # текст на экране тех-работ
@@ -98,7 +124,7 @@ async def update_appearance(body: AppearanceUpdate, _admin: AdminUser) -> dict[s
 
     # Тумблеры кабинета (bool — как есть; сообщение — обрезаем).
     for flag in (
-        "sub_link_enabled", "maintenance_enabled", "maintenance_follow_bot",
+        "sub_link_enabled", "crypto_links_enabled", "maintenance_enabled", "maintenance_follow_bot",
         "maintenance_block_login", "maintenance_block_registration", "maintenance_block_payments",
     ):
         value = getattr(body, flag)
@@ -129,10 +155,10 @@ async def upload_logo(
 ) -> dict[str, Any]:
     """Загрузить/заменить логотип кабинета. Хранится как assets/logo.<ext>."""
     ext = Path(file.filename or "").suffix.lower()
-    if ext not in LOGO_MEDIA_TYPES:
+    if ext not in LOGO_UPLOAD_EXTS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Поддерживаются PNG, JPG, WEBP, SVG, GIF",
+            detail="Поддерживаются PNG, JPG, WEBP, GIF (SVG не принимается из соображений безопасности)",
         )
 
     content = await file.read()

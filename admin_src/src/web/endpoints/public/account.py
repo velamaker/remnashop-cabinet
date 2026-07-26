@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.application.common import Remnawave
 from src.infrastructure.services.overlay_sessions import invalidate_all
 from src.web.endpoints.public._common import CurrentUser
+from src.web.endpoints.public.sub_alias import maybe_alias_url
 
 router = APIRouter(prefix="/account", tags=["Public - Account (GDPR)"])
 
@@ -62,6 +63,11 @@ async def export_account(
         "FROM subscriptions s WHERE s.user_id = :u ORDER BY s.id DESC",
         {"u": user.id},
     )
+    # Крипто-ссылки: экспорт не должен светить реальный sub-URL (файл экспорта могут
+    # сохранить/расшарить) — та же маскировка, что и в /subscription/current.
+    for _sub in subscription:
+        if _sub.get("url"):
+            _sub["url"] = maybe_alias_url(_sub["url"])
     transactions = await _rows(
         session,
         "SELECT id, status, purchase_type, gateway_type, gateway_display_name, "

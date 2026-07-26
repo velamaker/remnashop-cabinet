@@ -105,6 +105,55 @@ else
   info "Бэкап пропущен (--no-backup)"
 fi
 
+# ── 1b. Снимок пользовательских ассетов (перед синком кода) ────────────────────
+# assets/ бинд-маунтится = рабочее дерево git. Кастомные тексты (custom.ftl) и
+# баннеры оператора раньше были ТРЕКНУТЫ → git reset --hard / архив их затирали
+# (и фирменный баннер утекал в публичный репозиторий). Теперь они untracked+gitignore,
+# а этот снапшот-ДО-синка + restore-ПОСЛЕ страхует правки даже на одноразовой миграции
+# untrack и на случай случайного повторного трекинга. logo/branding/*.json уже
+# в .gitignore — кладём в снапшот для полноты (их git и так не трогает).
+ASSET_PRESERVE_DIR="${BACKUP_DIR}/assets-preserve-latest"
+
+_list_user_assets() {
+  find assets/translations -type f -name 'custom.ftl' 2>/dev/null
+  find assets/banners -type f \( -name '*.jpg' -o -name '*.jpeg' -o -name '*.png' \
+       -o -name '*.gif' -o -name '*.webp' \) 2>/dev/null
+  for f in assets/logo.* assets/branding.json; do [ -f "$f" ] && printf '%s\n' "$f"; done
+  # ВАЖНО: явный успех. Иначе статус функции = последняя итерация for (branding.json),
+  # и при его отсутствии (свежая/site/HA-установка) вернулось бы 1 → под set -e+pipefail
+  # это роняло ВЕСЬ апдейт до пересборки (тихий отказ обновлений).
+  return 0
+}
+
+snapshot_user_assets() {
+  rm -rf "$ASSET_PRESERVE_DIR" 2>/dev/null || true
+  mkdir -p "$ASSET_PRESERVE_DIR" 2>/dev/null || {
+    warn "нет доступа к ${ASSET_PRESERVE_DIR} — пропускаю снапшот ассетов"
+    return 0
+  }
+  _list_user_assets | while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    mkdir -p "$ASSET_PRESERVE_DIR/$(dirname "$f")" 2>/dev/null || continue
+    cp -a "$f" "$ASSET_PRESERVE_DIR/$f" 2>/dev/null || true
+  done
+  return 0
+}
+
+restore_user_assets() {
+  [ -d "$ASSET_PRESERVE_DIR" ] || return 0
+  ( cd "$ASSET_PRESERVE_DIR" && find . -type f 2>/dev/null ) | sed 's#^\./##' | while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    mkdir -p "$(dirname "$f")"
+    cp -a "$ASSET_PRESERVE_DIR/$f" "$f" 2>/dev/null || true
+  done
+}
+
+# Снапшот делаем только на ИСХОДНОМ запуске (не на self-update re-exec тарбол-ветки,
+# где код уже подменён). Снапшот персистентный (в $BACKUP_DIR) → переживает exec.
+if [ "${_SELF_UPDATED:-0}" != 1 ]; then
+  snapshot_user_assets || true  # снапшот ассетов best-effort — не блокирует обновление
+fi
+
 # ── 2. Что обновляем ──────────────────────────────────────────────────────────
 if [ "$BASE" = 1 ]; then
   # --base latest → скрипт сам определяет последнюю версию базы.
@@ -158,7 +207,8 @@ else
       TMP="$(mktemp -d)"
       if curl -fL --max-time 180 "https://github.com/${REPO_SLUG}/archive/refs/heads/${UPD_BRANCH}.tar.gz" \
            | tar xz -C "$TMP" --strip-components=1; then
-        cp -a "$TMP"/. .            # новый код поверх; рантайм (gitignore) не затрагивается
+        cp -a "$TMP"/. .            # новый код поверх; gitignored-рантайм не в архиве,
+                                    # а пользовательские ассеты вернёт restore ниже
         rm -rf "$TMP"
         ok "Код обновлён из архива"
         # Перезапуск на свежем update.sh (иначе bash может дочитать старую версию файла).
@@ -176,6 +226,10 @@ else
     warn "Подтянуть (с проверкой совместимости): ./update.sh --base latest"
   fi
 fi
+
+# Возвращаем пользовательские ассеты, если синк кода их затёр (см. секцию 1b).
+# Идемпотентно; в тарбол-ветке выполняется в re-exec-процессе (снапшот персистентный).
+restore_user_assets || true  # best-effort — не блокирует пересборку
 
 # ── 3. Пересборка и запуск (overlay бота + кабинет) ───────────────────────────
 info "Сборка и запуск (overlay бота + кабинет, --build)…"

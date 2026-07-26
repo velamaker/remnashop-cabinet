@@ -13,6 +13,7 @@ from fastapi import APIRouter, Response
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.application.common.dao.auth import AuthSessionDao
 from src.infrastructure.services.overlay_sessions import invalidate_all
 from src.web.endpoints.public._common import CurrentUser
 
@@ -59,9 +60,15 @@ async def list_sessions(
 async def logout_all(
     user: CurrentUser,
     session: FromDishka[AsyncSession],
+    auth_session: FromDishka[AuthSessionDao],
     response: Response,
 ) -> dict[str, Any]:
+    # 1) Инвалидируем access-токены по времени (iat < invalidated_at, проверяет middleware).
     await invalidate_all(session, user.id)
+    # 2) КРИТИЧНО: refresh-токен — непрозрачный серверный (Redis), проверку по iat он не
+    #    проходит. Без явного отзыва юзер тут же выпустил бы новый access через /auth/refresh
+    #    и «выход со всех устройств» ничего бы не давал. Убиваем все серверные refresh-токены.
+    await auth_session.revoke_all_user_tokens(user.id)
     # Текущую сессию тоже завершаем — юзер войдёт заново.
     response.delete_cookie("access_token", path="/")
     response.delete_cookie("refresh_token", path="/")

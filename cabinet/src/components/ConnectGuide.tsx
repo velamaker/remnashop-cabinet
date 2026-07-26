@@ -4,6 +4,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { APPS, PLATFORMS, DEFAULT_PRIORITY, type AppEntry, type Platform } from "@/data/apps";
 import { appsApi, type AppsConfig } from "@/api/apps";
 import { openExternalLink, useIsMiniApp } from "@/hooks/useTelegramWebApp";
+import { safeExternalUrl } from "@/lib/nav";
 import { useT } from "@/i18n/I18nContext";
 import { useBranding } from "@/contexts/BrandingContext";
 
@@ -59,9 +60,9 @@ function AppCard({
           <p className="mt-0.5 text-xs text-fg-muted">{t(app.desc)}</p>
         </div>
         <div className="flex flex-shrink-0 gap-2">
-          {installUrl && (
+          {safeExternalUrl(installUrl) && (
             <a
-              href={installUrl}
+              href={safeExternalUrl(installUrl)}
               target="_blank"
               rel="noreferrer"
               className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] bg-bg-raised px-3 text-xs font-medium text-fg transition-colors hover:bg-bg-overlay"

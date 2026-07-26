@@ -233,8 +233,11 @@ async def oidc_callback(
             audience=_client_id(),
             issuer=ISSUER,
         )
-        if nonce and claims.get("nonce") not in (None, nonce):
-            raise ValueError("nonce mismatch")
+        # Nonce ОБЯЗАТЕЛЕН и должен точно совпадать (защита от replay id_token). Раньше
+        # условие пропускало id_token вообще без claim nonce (None ∈ (None, nonce)) —
+        # это сводило защиту на нет. Теперь: нет nonce в tx или он не совпал → отказ.
+        if not nonce or not secrets.compare_digest(str(claims.get("nonce") or ""), str(nonce)):
+            raise ValueError("nonce missing/mismatch")
 
         # ВАЖНО: настоящий числовой Telegram-ID лежит в claim "id", а НЕ в "sub".
         # В id_token Telegram OIDC "sub" — это отдельный идентификатор и НЕ равен

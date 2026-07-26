@@ -9,8 +9,20 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ._common import AdminUser
+from ._redact import is_readonly_admin
 
 router = APIRouter(prefix="/support", tags=["Admin - Support"])
+
+
+def _user_block(uid: object, name: object, email: object, tg: object, redact: bool) -> dict:
+    """Блок пользователя тикета. Для read-only админа скрываем PII (email/telegram_id/id)
+    — согласовано с redact_user (в остальных разделах эти поля уже маскируются)."""
+    return {
+        "id": None if redact else uid,
+        "name": name,
+        "email": None if redact else email,
+        "telegram_id": None if redact else tg,
+    }
 
 
 class ReplyRequest(BaseModel):
@@ -24,10 +36,11 @@ class StatusRequest(BaseModel):
 @router.get("/tickets")
 @inject
 async def list_all_tickets(
-    _admin: AdminUser,
+    admin: AdminUser,
     session: FromDishka[AsyncSession],
     status: str | None = None,
 ) -> dict:
+    redact = is_readonly_admin(admin)
     where = "WHERE t.status = :status" if status else ""
     rows = (
         await session.execute(
@@ -57,12 +70,9 @@ async def list_all_tickets(
                 "created_at": r.created_at.isoformat() if r.created_at else None,
                 "updated_at": r.updated_at.isoformat() if r.updated_at else None,
                 "messages_count": r.messages_count,
-                "user": {
-                    "id": r.user_id,
-                    "name": r.user_name,
-                    "email": r.user_email,
-                    "telegram_id": r.user_telegram_id,
-                },
+                "user": _user_block(
+                    r.user_id, r.user_name, r.user_email, r.user_telegram_id, redact
+                ),
             }
             for r in rows
         ]
@@ -73,9 +83,10 @@ async def list_all_tickets(
 @inject
 async def get_ticket(
     ticket_id: int,
-    _admin: AdminUser,
+    admin: AdminUser,
     session: FromDishka[AsyncSession],
 ) -> dict:
+    redact = is_readonly_admin(admin)
     t = (
         await session.execute(
             text(
@@ -109,12 +120,7 @@ async def get_ticket(
         "status": t.status,
         "created_at": t.created_at.isoformat() if t.created_at else None,
         "updated_at": t.updated_at.isoformat() if t.updated_at else None,
-        "user": {
-            "id": t.user_id,
-            "name": t.user_name,
-            "email": t.user_email,
-            "telegram_id": t.user_telegram_id,
-        },
+        "user": _user_block(t.user_id, t.user_name, t.user_email, t.user_telegram_id, redact),
         "messages": [
             {
                 "id": m.id,

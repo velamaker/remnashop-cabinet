@@ -7,13 +7,23 @@ import { formatDate } from "@/lib/format";
 // Предпросмотр «как в Telegram»: экранируем всё, затем возвращаем только
 // разрешённый Telegram whitelist тегов (b/i/u/s/code/pre/a). Скрипты/атрибуты
 // не проходят — dangerouslySetInnerHTML безопасен.
+// Разрешаем ссылки ТОЛЬКО с безопасными схемами. javascript:/data:/vbscript: и пр.
+// в href — вектор XSS (клик исполняет скрипт в origin кабинета), поэтому режем их.
+function safeHref(url: string): string | null {
+  const u = url.trim();
+  return /^(https?:\/\/|tg:\/\/|mailto:)/i.test(u) ? u : null;
+}
+
 function toPreviewHtml(raw: string): string {
   let s = raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   s = s.replace(/&lt;(\/?)(b|strong|i|em|u|s|code|pre)&gt;/gi, "<$1$2>");
-  s = s.replace(
-    /&lt;a href="([^"]*)"&gt;/gi,
-    '<a href="$1" target="_blank" rel="noreferrer" class="text-accent underline">',
-  );
+  s = s.replace(/&lt;a href="([^"]*)"&gt;/gi, (_m, href: string) => {
+    const safe = safeHref(href);
+    // Небезопасная/пустая ссылка → показываем как текст (тег не восстанавливаем).
+    return safe
+      ? `<a href="${safe}" target="_blank" rel="noreferrer" class="text-accent underline">`
+      : "";
+  });
   s = s.replace(/&lt;\/a&gt;/gi, "</a>");
   return s;
 }

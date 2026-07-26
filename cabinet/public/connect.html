@@ -33,7 +33,12 @@
     // Диплинк передаётся во фрагменте (#...), чтобы не попадать в логи сервера.
     var link = "";
     try { link = decodeURIComponent((location.hash || "").slice(1)); } catch (e) { link = (location.hash || "").slice(1); }
-    if (link) {
+    // ВАЖНО (защита от reflected XSS / open-redirect): фрагмент контролируется атакующим,
+    // а мы кладём его в href и авто-навигируем. Пропускаем ТОЛЬКО известные схемы импорта
+    // приложений + http(s)/tg. javascript:/data:/blob:/vbscript: и любой не-allowlist —
+    // отвергаем (иначе клик по кнопке исполнил бы JS в origin кабинета с куками юзера).
+    var ALLOWED = /^(https?|tg|happ|hiddify|v2raytun|v2rayng|v2box|nekobox|nekoray|streisand|sub|karing|sing-box|clash|clashmeta|shadowrocket|foxray|sfi|sfa|fair):/i;
+    if (link && ALLOWED.test(link)) {
       var a = document.getElementById("open");
       a.setAttribute("href", link);
       // Мы уже во внешнем браузере — здесь кастомная схема отдаётся ОС и приложение открывается.

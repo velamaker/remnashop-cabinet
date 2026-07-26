@@ -34,18 +34,23 @@ export default function AdminCabinetPage() {
     setSaving(true);
     setError(null);
     try {
+      // enabled_languages шлём ТОЛЬКО если это строгое подмножество. Иначе (выбраны все /
+      // не тронуто) поле опускаем → бэкенд сохраняет null = «все, включая будущие языки».
+      // Раньше безусловный ALL_LANG_CODES морозил снимок → добавленный позже язык оказывался
+      // выключен, хотя админ его не отключал.
+      const langs = form.enabled_languages;
+      const isRestricted =
+        !!langs && langs.length > 0 && langs.length < ALL_LANG_CODES.length;
       await appearanceAdminApi.update({
         sub_link_enabled: form.sub_link_enabled !== false,
+        crypto_links_enabled: form.crypto_links_enabled === true,
         maintenance_enabled: form.maintenance_enabled === true,
         maintenance_follow_bot: form.maintenance_follow_bot === true,
         maintenance_message: form.maintenance_message ?? "",
         maintenance_block_login: form.maintenance_block_login !== false,
         maintenance_block_registration: form.maintenance_block_registration !== false,
         maintenance_block_payments: form.maintenance_block_payments !== false,
-        enabled_languages:
-          form.enabled_languages && form.enabled_languages.length
-            ? form.enabled_languages
-            : ALL_LANG_CODES,
+        ...(isRestricted ? { enabled_languages: langs } : {}),
       });
       await refresh();
       setSaved(true);
@@ -102,6 +107,21 @@ export default function AdminCabinetPage() {
         </label>
         <p className="ml-6 text-xs text-fg-subtle">
           Выключите, чтобы скрыть блок «Прямая ссылка подписки» и QR в разделе подключения.
+        </p>
+
+        <label className="mt-3 flex items-center gap-2.5 py-1 text-sm text-fg">
+          <input
+            type="checkbox"
+            checked={form.crypto_links_enabled === true}
+            onChange={(e) => setForm({ ...form, crypto_links_enabled: e.target.checked })}
+            className="h-4 w-4 accent-[var(--accent)]"
+          />
+          Крипто-ссылки (скрывать реальный адрес подписки)
+        </label>
+        <p className="ml-6 text-xs text-fg-subtle">
+          Все ссылки подключения (подписка, QR, deep-link'и приложений) идут через
+          непрозрачный крипто-алиас на домене кабинета — реальный адрес подписки не
+          виден ни в приложении, ни в коде страницы. Работает и когда кабинет на отдельном сервере.
         </p>
 
         <div className="mt-4 border-t border-border-subtle pt-4">
