@@ -24,8 +24,13 @@ def _require_owner(admin: Any) -> None:
 
 
 def _client_ip(request: Request) -> str:
+    # Доверенный X-Real-IP (nginx real_ip), иначе правый элемент XFF; крайний левый
+    # клиентоуправляем и им нельзя определять «свой IP» для allowlist.
+    xr = request.headers.get("x-real-ip", "").strip()
+    if xr:
+        return xr
     xff = request.headers.get("x-forwarded-for", "")
-    return (xff.split(",")[0].strip() if xff else "") or (
+    return (xff.split(",")[-1].strip() if xff else "") or (
         request.client.host if request.client else ""
     )
 

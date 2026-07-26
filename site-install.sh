@@ -21,6 +21,9 @@ set -euo pipefail
 
 REPO_URL="https://github.com/velamaker/remnashop-cabinet"
 BRANCH="${BRANCH:-main}"
+# Пиннинг supply-chain: REF = ветка/тег/commit-SHA; EXPECT_SHA256 — проверка целостности.
+REF="${REF:-$BRANCH}"
+EXPECT_SHA256="${EXPECT_SHA256:-}"
 DEST="${DEST:-/opt/remnashop-cabinet}"
 
 if [ -t 1 ]; then
@@ -63,9 +66,17 @@ install_caddy() {
 # ── 3. Код проекта (тарбол устойчивее git на плохом канале) ────────────────────
 # Тянем КАЖДЫЙ раз — поэтому повторный запуск этой команды = ОБНОВЛЕНИЕ кабинета
 # до последней версии. .env не в архиве, поэтому настройки сохраняются.
-info "Скачиваю/обновляю код в $DEST…"
+info "Скачиваю/обновляю код в $DEST (ref: $REF)…"
 mkdir -p "$DEST"
-curl -fL "$REPO_URL/archive/refs/heads/$BRANCH.tar.gz" | tar xz -C "$DEST" --strip-components=1
+TARBALL="$(mktemp)"
+curl -fL "$REPO_URL/archive/$REF.tar.gz" -o "$TARBALL" || die "Не удалось скачать код (ref=$REF)."
+if [ -n "$EXPECT_SHA256" ]; then
+  GOT="$(sha256sum "$TARBALL" | awk '{print $1}')"
+  [ "$GOT" = "$EXPECT_SHA256" ] || { rm -f "$TARBALL"; die "SHA-256 не совпал: ждали $EXPECT_SHA256, получили $GOT"; }
+  ok "Контрольная сумма архива верна"
+fi
+tar xz -C "$DEST" --strip-components=1 -f "$TARBALL" || { rm -f "$TARBALL"; die "Распаковка не удалась."; }
+rm -f "$TARBALL"
 cd "$DEST"
 ok "Код в $DEST"
 

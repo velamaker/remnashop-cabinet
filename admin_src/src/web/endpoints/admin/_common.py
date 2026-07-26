@@ -46,8 +46,12 @@ async def _get_admin_user(
     # Ограничение админки по IP (owner настраивает; fail-safe: выкл/пустой список = разрешено).
     from src.infrastructure.services.overlay_admin_ip import is_ip_allowed
 
+    # X-Real-IP ставит наш nginx из реального клиентского IP (real_ip). Крайний ЛЕВЫЙ
+    # X-Forwarded-For клиентоуправляем → им НЕЛЬЗЯ обходить IP-allowlist админки; берём
+    # X-Real-IP, иначе правый (последний доверенный хоп) элемент XFF.
+    xr = request.headers.get("x-real-ip", "").strip()
     xff = request.headers.get("x-forwarded-for", "")
-    client_ip = (xff.split(",")[0].strip() if xff else "") or (
+    client_ip = xr or (xff.split(",")[-1].strip() if xff else "") or (
         request.client.host if request.client else ""
     )
     if not is_ip_allowed(client_ip):
@@ -59,7 +63,12 @@ async def _get_admin_user(
     # 2FA (TOTP) — opt-in НА АДМИНА: требуем только у того, кто сам включил. Сами
     # /admin/2fa/* ручки пропускаем (иначе не разблокировать/выключить). Разблокировка
     # — подписанная кука admin_2fa (см. overlay_admin_2fa). 403 «2fa_required» → фронт
-    # покажет ввод кода. Ошибка/нет таблицы → пропускаем (fail-open для 2FA).
+    # покажет ввод кода.
+    #
+    # FAIL-CLOSED: раньше ЛЮБАЯ ошибка запроса статуса 2FA трактовалась как «выключено»
+    # (fail-open) — это позволяло обойти второй фактор, спровоцировав ошибку БД. Теперь
+    # только «таблицы ещё нет» (bootstrap до миграции) считается «2FA нигде не включена»;
+    # при любой другой ошибке НЕ пускаем (503), а не пропускаем.
     if "/admin/2fa/" not in request.url.path:
         from sqlalchemy import text as _text
 
@@ -75,8 +84,16 @@ async def _get_admin_user(
                     )
                 ).first()
             )
-        except Exception:
-            two_fa_on = False
+        except Exception as e:  # noqa: BLE001
+            msg = f"{getattr(getattr(e, 'orig', None), 'sqlstate', '')} {e}".lower()
+            if "42p01" in msg or "undefinedtable" in msg or "does not exist" in msg:
+                two_fa_on = False  # таблицы admin_2fa ещё нет → 2FA нигде не включена
+            else:
+                # Статус 2FA недоступен → fail-closed: не раскрываем доступ.
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Статус 2FA временно недоступен — повторите позже",
+                )
         if two_fa_on:
             unlock = request.cookies.get("admin_2fa", "")
             secret = config.jwt_secret.get_secret_value() if config.jwt_secret else ""

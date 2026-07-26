@@ -70,7 +70,10 @@ async def create_gift(
     if not row:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Недостаточно средств на балансе")
 
-    code = "GIFT-" + secrets.token_hex(4).upper()
+    # 128-бит энтропии: гифт-код = одноразовый ваучер на подписку (реальные деньги),
+    # а /promocode/activate брутфорсится. token_hex(4)=32 бита перебирался за часы;
+    # token_hex(16)=128 бит неперечислим. Колонка code — varchar без лимита длины.
+    code = "GIFT-" + secrets.token_hex(16).upper()
     try:
         snapshot = PlanSnapshotDto.from_plan(plan, body.duration_days)
         plan_snapshot = retort.dump(snapshot)
@@ -88,13 +91,13 @@ async def create_gift(
         )
         await promocode_dao.create(promo)
         await session.commit()
-    except Exception as e:  # noqa: BLE001 — рефанд при любой ошибке
-        await session.execute(
-            text("UPDATE users SET cabinet_balance = cabinet_balance + :amt WHERE id = :id"),
-            {"amt": price, "id": user.id},
-        )
-        await session.commit()
-        logger.warning(f"gift: создание подарка user_id={user.id} упало ({e}), средства возвращены")
+    except Exception as e:  # noqa: BLE001 — при любой ошибке откатываем всю транзакцию
+        # Списание и создание промокода — В ОДНОЙ незакоммиченной транзакции (единственный
+        # commit выше). Поэтому корректно и достаточно rollback: он отменяет списание.
+        # Ручной +price был опасен — при сбое самого commit (обрыв/timeout) списание уже
+        # откачено сервером, а +price в НОВОЙ транзакции создавал деньги из воздуха.
+        await session.rollback()
+        logger.warning(f"gift: создание подарка user_id={user.id} упало ({e}), списание отменено")
         raise HTTPException(status_code=502, detail="Не удалось создать подарок, средства возвращены")
 
     return {

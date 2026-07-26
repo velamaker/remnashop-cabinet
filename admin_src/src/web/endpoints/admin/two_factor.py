@@ -21,6 +21,7 @@ from src.infrastructure.services.overlay_admin_2fa import (
     make_unlock,
     otpauth_uri,
     verify_totp,
+    verify_unlock,
 )
 
 from ._common import AdminUser
@@ -57,7 +58,23 @@ async def status_2fa(admin: AdminUser, session: FromDishka[AsyncSession]) -> dic
 
 @router.post("/setup")
 @inject
-async def setup_2fa(admin: AdminUser, session: FromDishka[AsyncSession]) -> dict[str, Any]:
+async def setup_2fa(
+    admin: AdminUser,
+    session: FromDishka[AsyncSession],
+    config: FromDishka[AppConfig],
+    request: Request,
+) -> dict[str, Any]:
+    # ЗАЩИТА ОТ ОБХОДА 2FA: пути /admin/2fa/* гейт пропускает мимо 2FA-проверки, а
+    # setup перезаписывает секрет и ставит enabled=false. Без этой проверки укравший
+    # НЕразблокированную сессию мог бы вызвать setup → 2FA выключается → полный доступ
+    # без второго фактора. Поэтому переустановка при УЖЕ включённой 2FA требует, чтобы
+    # текущая сессия была разблокирована валидным кодом (кука admin_2fa).
+    existing = await _row(session, admin.id)
+    if existing and existing[1]:
+        unlock = request.cookies.get("admin_2fa", "")
+        secret_key = config.jwt_secret.get_secret_value() if config.jwt_secret else ""
+        if not (secret_key and verify_unlock(unlock, admin.id, secret_key)):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="2fa_required")
     secret = gen_secret()
     await session.execute(
         text(

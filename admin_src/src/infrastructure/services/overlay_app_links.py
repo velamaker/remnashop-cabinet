@@ -34,7 +34,7 @@ import httpx
 
 ASSETS_DIR = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets"))
 LINKS_PATH = ASSETS_DIR / "app_links.json"
-# Авто-синхрон страницы подписки Remnawave (sub.<домен>). BASE — снятый один раз
+# Авто-синхрон страницы подписки Remnawave. BASE — снятый один раз
 # baked app-config.json (шаблон со всей структурой/текстами), OUT — пропатченный
 # живыми ссылками; OUT bind-mount'ится в контейнер subscription-page. Если BASE
 # нет — синхрон просто не делается (фича опциональна).
@@ -268,8 +268,14 @@ async def _fetch_upstream(url: str) -> dict[str, dict[str, str]]:
     url = (url or "").strip()
     if not url.startswith(("http://", "https://")):
         return {}
+    # SSRF-гард: админ задаёт source_url, бэкенд его тянет → только публичный хост
+    # (не docker-сеть/метаданные/loopback). follow_redirects=False — 30x не уведёт внутрь.
+    from src.web.net_guard import is_safe_public_url
+
+    if not is_safe_public_url(url):
+        return {}
     try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
             resp = await client.get(url)
             resp.raise_for_status()
             return parse_app_config(resp.json())

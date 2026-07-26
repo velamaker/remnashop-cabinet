@@ -5,6 +5,7 @@ IP/секретов. Зовётся залогиненным пользоват�
 токену бота на сервере.
 """
 
+import re
 from datetime import datetime, timezone
 
 from dishka import FromDishka
@@ -24,9 +25,17 @@ router = APIRouter(prefix="/subscription", tags=["Public - Subscription"])
 
 
 def _is_service_host(remark: str, keywords: list[str]) -> bool:
-    """Хост-заглушка (не реальный сервер) — если в названии есть слово из списка."""
+    """Хост-заглушка (не реальный сервер) — если ОТДЕЛЬНОЕ слово названия совпадает с
+    ключевым. Матч по границам слова (\\w в Python 3 юникод-осведомлён → работает и для
+    кириллицы), чтобы короткое общее слово («auto»/«pay») не совпало подстрокой внутри
+    реального имени («Autobahn-DE»/«Paylan-NL») и адрес такого хоста не утёк истёкшему
+    пользователю (ветка has_sub раскрывает адрес заглушек)."""
     r = (remark or "").lower()
-    return any(kw.lower() in r for kw in keywords if kw)
+    for kw in keywords:
+        k = (kw or "").strip().lower()
+        if k and re.search(r"(?<!\w)" + re.escape(k) + r"(?!\w)", r):
+            return True
+    return False
 
 
 def _clean_remark(s: str) -> str:
@@ -37,6 +46,24 @@ def _clean_remark(s: str) -> str:
         if ch.isalnum():
             return s[idx:].strip() or s
     return s
+
+
+def _flag_emoji_to_iso2(s: str) -> str:
+    """Ведущий флаг-эмодзи хоста (пара regional indicators) → ISO2: '🇪🇸 …' → 'es'.
+
+    Возвращает '' если строка не начинается с флага. Это ЯВНЫЙ интент оператора о
+    стране хоста — авторитетнее страны ноды. Важно для балансиров/каскадов, чей
+    inbound живёт на нодах нескольких стран (LV-вход + ES): без этого флаг карточки
+    наследуется от первой ноды по порядку и получается чужим (Рига вместо Испании).
+    """
+    s = (s or "").strip()
+    if len(s) < 2:
+        return ""
+    base = 0x1F1E6  # 🇦 (regional indicator symbol letter A)
+    a, b = ord(s[0]), ord(s[1])
+    if base <= a <= base + 25 and base <= b <= base + 25:
+        return chr(ord("a") + (a - base)) + chr(ord("a") + (b - base))
+    return ""
 
 
 def _is_staff(user) -> bool:
@@ -53,6 +80,13 @@ async def service_status(
 ) -> dict:
     empty: dict = {"nodes": [], "all_operational": True}
 
+    # Зеркалим видимость из настроек (как /servers и /status): выключенный блок и
+    # ноды вне allowlist (visible_nodes) НЕ раскрываем даже залогиненному юзеру —
+    # иначе перечисляем скрытые админом ноды (имя/страна/онлайн).
+    cfg = load_config()
+    if not cfg["enabled"]:
+        return empty
+
     sdk = getattr(remnawave, "sdk", None)
     if sdk is None:
         return empty
@@ -62,11 +96,14 @@ async def service_status(
     except Exception:
         return empty
 
+    visible = visible_node_ids(cfg)  # пусто = все
     raw = getattr(result, "root", result) or []
     nodes = []
     for n in raw:
         if getattr(n, "is_disabled", False):
             continue  # отключённые админом ноды в публичный статус не показываем
+        if visible and str(getattr(n, "uuid", "") or "") not in visible:
+            continue  # админ ограничил список видимых нод
         nodes.append(
             {
                 "name": getattr(n, "name", "") or "",
@@ -185,15 +222,25 @@ async def my_servers(
     except Exception:
         hlist = []
 
-    def build_host(h, reveal: bool) -> dict | None:
+    def build_host(h, reveal: bool, include_hidden: bool = False) -> dict | None:
         if getattr(h, "is_disabled", False):
+            return None
+        # Скрытые хосты (isHidden) — члены балансира/каскада: в приложении и подписке
+        # их не видно, значит и обычному юзеру в кабинете нельзя (иначе утекает адрес
+        # скрытого хоста, по которому фронт пингует). Виден только сам балансир.
+        # Сотруднику (include_hidden) оставляем полный список — у него есть на это право.
+        if getattr(h, "is_hidden", False) and not include_hidden:
             return None
         iu = str(getattr(h, "inbound_uuid", "") or "")
         serving = inbound_nodes.get(iu)
         if not serving:
             return None  # inbound не на видимой/включённой ноде
         online = any(conn for (_cc, conn) in serving)
-        cc = next((c for (c, conn) in serving if conn and c), "") or (serving[0][0] if serving else "")
+        # Страна: приоритет — явный флаг-эмодзи в remark хоста (интент оператора),
+        # иначе страна первой онлайн-ноды с этим inbound. Балансир, чей inbound живёт
+        # на нодах разных стран (LV-вход + ES), больше не наследует чужой флаг Риги.
+        node_cc = next((c for (c, conn) in serving if conn and c), "") or (serving[0][0] if serving else "")
+        cc = _flag_emoji_to_iso2(getattr(h, "remark", "") or "") or node_cc
         return {
             "name": _clean_remark(getattr(h, "remark", "") or ""),
             "country_code": cc,
@@ -207,7 +254,7 @@ async def my_servers(
     if is_staff:
         items = []
         for h in hlist:
-            b = build_host(h, reveal=True)
+            b = build_host(h, reveal=True, include_hidden=True)
             if b and not b["_service"]:
                 items.append({k: v for k, v in b.items() if not k.startswith("_")})
         return _finalize(items)

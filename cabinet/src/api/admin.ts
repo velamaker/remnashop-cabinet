@@ -436,6 +436,7 @@ export interface UpdateItem {
   date: string | null;
   notes: string;
   url: string | null;
+  installed?: boolean; // false → версия новее установленной (доступна, ещё не стоит)
 }
 export interface UpdatesInfo {
   current: string;
@@ -445,7 +446,8 @@ export interface UpdatesInfo {
   items: UpdateItem[];
 }
 export const updatesAdminApi = {
-  get: () => adminApi.get<UpdatesInfo>("/updates"),
+  // force=true (кнопка «Проверить») — обходит серверный кэш для моментальной проверки.
+  get: (force = false) => adminApi.get<UpdatesInfo>(`/updates${force ? "?force=1" : ""}`),
 };
 
 export const grantsAdminApi = {

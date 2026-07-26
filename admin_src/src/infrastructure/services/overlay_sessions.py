@@ -36,7 +36,10 @@ async def token_invalidated(session: AsyncSession, user_id: int, iat: Optional[i
         try:
             await _reload(session)
         except Exception:  # noqa: BLE001 — не роняем запрос из-за кэша
-            return False
+            # FAIL-CLOSED по отзыву: НЕ возвращаем False (это трактовало бы отозванный
+            # токен как валидный при сбое БД). Используем последний известный кэш — уже
+            # известные инвалидации продолжают действовать. Обновим при следующем запросе.
+            pass
     inv = _CACHE.get(int(user_id))
     return inv is not None and float(iat) < inv
 

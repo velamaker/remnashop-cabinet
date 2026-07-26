@@ -40,6 +40,7 @@ export interface AdminAppearance {
   logo_url?: string | null;
   // Тумблеры кабинета (сырые — для страницы оформления в админке).
   sub_link_enabled?: boolean;
+  crypto_links_enabled?: boolean;
   maintenance_enabled?: boolean;
   maintenance_follow_bot?: boolean;
   maintenance_message?: string;
@@ -60,7 +61,7 @@ export const appearanceAdminApi = {
   update: (data: {
     brand_name?: string; accent?: string; background?: string;
     background_dark?: string; background_light?: string;
-    sub_link_enabled?: boolean; maintenance_enabled?: boolean;
+    sub_link_enabled?: boolean; crypto_links_enabled?: boolean; maintenance_enabled?: boolean;
     maintenance_follow_bot?: boolean; maintenance_message?: string;
     maintenance_block_login?: boolean; maintenance_block_registration?: boolean;
     maintenance_block_payments?: boolean; enabled_languages?: string[];

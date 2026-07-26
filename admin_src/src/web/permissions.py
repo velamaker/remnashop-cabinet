@@ -2,7 +2,7 @@
 
 Enum-роли (USER/PREVIEW/ADMIN/DEV/OWNER/SYSTEM) зашиты в базовый образ и не
 расширяемы. Поэтому тонкие права хранятся отдельно — в таблице `admin_grants`
-(создаётся идемпотентным DDL при старте, см. overlay_app._SUPPORT_TABLES_DDL).
+(создаётся идемпотентным DDL при старте, см. overlay_baseline_ddl.BASELINE_DDL / migrations_overlay).
 
 Модель — «гибрид»:
   • full_access=true  → доступ ко всем разделам;

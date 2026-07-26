@@ -3,16 +3,17 @@ import { RefreshCw, Sparkles, ExternalLink, CheckCircle2 } from "lucide-react";
 import { updatesAdminApi, type UpdatesInfo } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { formatDate } from "@/lib/format";
+import { safeExternalUrl } from "@/lib/nav";
 
 export default function AdminUpdatesPage() {
   const [data, setData] = useState<UpdatesInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const load = () => {
+  const load = (force = false) => {
     setLoading(true);
     updatesAdminApi
-      .get()
+      .get(force)
       .then(setData)
       .catch((e) => setError(e instanceof ApiError ? e.detail : "Не удалось загрузить обновления"))
       .finally(() => setLoading(false));
@@ -31,7 +32,7 @@ export default function AdminUpdatesPage() {
           <p className="mt-0.5 text-sm text-fg-muted">История релизов кабинета и админки.</p>
         </div>
         <button
-          onClick={load}
+          onClick={() => load(true)}
           disabled={loading}
           className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] bg-bg-raised px-3 py-2 text-sm font-medium text-fg-muted transition-colors hover:text-fg disabled:opacity-50"
         >
@@ -49,7 +50,8 @@ export default function AdminUpdatesPage() {
             <>
               <p className="text-sm font-semibold text-warning">Доступно обновление</p>
               <p className="mt-1 text-sm text-fg">
-                Текущая версия <b>{data.current}</b> → доступна <b>{data.latest}</b>.
+                Текущая версия <b>{data.current}</b> → доступна <b>{data.latest}</b>. Ниже отмечено
+                <span className="font-semibold text-warning"> «Новое»</span> — что изменится после обновления.
               </p>
               <p className="mt-2 rounded-lg bg-bg-raised px-3 py-2 font-mono text-xs text-fg-muted">
                 cd /opt/remnashop &amp;&amp; ./update.sh
@@ -70,13 +72,23 @@ export default function AdminUpdatesPage() {
         </div>
       ) : (
         <div className="space-y-3">
-          {(data?.items ?? []).map((it) => (
-            <div key={it.version} className="rounded-2xl border border-border-subtle bg-bg-subtle p-4">
+          {(data?.items ?? []).map((it) => {
+            const isNew = it.installed === false; // версия новее установленной
+            return (
+            <div
+              key={it.version}
+              className={`rounded-2xl border p-4 ${isNew ? "border-warning/40 bg-warning/8 ring-1 ring-warning/15" : "border-border-subtle bg-bg-subtle"}`}
+            >
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <span className="rounded-md bg-accent/10 px-2 py-0.5 text-sm font-semibold text-accent">
+                  <span className={`rounded-md px-2 py-0.5 text-sm font-semibold ${isNew ? "bg-warning/15 text-warning" : "bg-accent/10 text-accent"}`}>
                     {it.version}
                   </span>
+                  {isNew && (
+                    <span className="rounded-md bg-warning/15 px-2 py-0.5 text-xs font-semibold text-warning">
+                      🆕 Новое · не установлено
+                    </span>
+                  )}
                   {it.name && it.name !== it.version && (
                     <span className="text-sm font-medium text-fg">{it.name}</span>
                   )}
@@ -88,9 +100,9 @@ export default function AdminUpdatesPage() {
                   {it.notes}
                 </pre>
               ) : (
-                it.url && (
+                safeExternalUrl(it.url) && (
                   <a
-                    href={it.url}
+                    href={safeExternalUrl(it.url)}
                     target="_blank"
                     rel="noreferrer"
                     className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline"
@@ -100,7 +112,8 @@ export default function AdminUpdatesPage() {
                 )
               )}
             </div>
-          ))}
+            );
+          })}
           {data && data.items.length === 0 && (
             <p className="py-8 text-center text-sm text-fg-muted">Релизы не найдены.</p>
           )}

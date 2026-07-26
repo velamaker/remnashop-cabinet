@@ -4,7 +4,7 @@
 подтверждена, аккаунт не заблокирован) — опционально суженным по статусу
 подписки сегментом. У кого есть Telegram, тем шлёт бот (TG-аудитории), дублей нет.
 
-Прогресс пишется в overlay-таблицу email_broadcasts (см. overlay_app._SUPPORT_TABLES_DDL).
+Прогресс пишется в overlay-таблицу email_broadcasts (см. overlay_baseline_ddl.BASELINE_DDL / migrations_overlay).
 Запись создаёт эндпоинт POST /admin/broadcasts, сюда прилетает её id и сегмент.
 
 Авто-обнаруживается taskiq по глобу tasks/*.py (см. docker-compose.yml).

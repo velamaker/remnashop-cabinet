@@ -12,6 +12,8 @@
 import json
 import os
 import time
+
+from loguru import logger
 from pathlib import Path
 from typing import Any, Optional
 
@@ -53,6 +55,9 @@ DEFAULTS: dict[str, Any] = {
     "logo_file": None,
     # Показывать в кабинете прямую ссылку подписки и QR (тумблер админки).
     "sub_link_enabled": True,
+    # Крипто-ссылки: прятать реальный sub-URL за непрозрачным алиасом /c/<opaque>
+    # (reverse-proxy, см. sub_alias.py). Дефолт выключено — включается в админке.
+    "crypto_links_enabled": False,
     # Тех-работы: свой тумблер + опция «следовать за режимом доступа бота»
     # (когда у бота AccessMode.RESTRICTED «Запрещён для всех» — кабинет тоже закрыт).
     "maintenance_enabled": False,
@@ -129,21 +134,39 @@ def resolve_brand_name() -> str:
     return FALLBACK_BRAND
 
 
+# Последнее УСПЕШНО прочитанное branding — чтобы битый файл не сбрасывал настройки.
+_LAST_GOOD_BRANDING: Optional[dict[str, Any]] = None
+
+
 def load_branding() -> dict[str, Any]:
-    """Сырые сохранённые значения (brand_name может быть None = авто)."""
+    """Сырые сохранённые значения (brand_name может быть None = авто).
+
+    Отказоустойчивость: «файла нет» = штатно (дефолты). Но «файл ЕСТЬ и не распарсился»
+    (битый/частичный после disk-full/краша) НЕ должен тихо сбрасывать security-тумблеры
+    в дефолты — иначе crypto_links_enabled молча → False → утечка реального sub-URL.
+    Тогда отдаём последнее валидное значение из кэша, а без кэша — fail-CLOSED для
+    приватности (крипто-ссылки ON, чтобы адрес не утёк). Запись атомарна (см. admin
+    _save_branding), так что битый файл — редкий двойной сбой.
+    """
     data = dict(DEFAULTS)
     try:
-        if BRANDING_PATH.exists():
-            with BRANDING_PATH.open(encoding="utf-8") as fh:
-                stored = json.load(fh)
-            if isinstance(stored, dict):
-                for key in DEFAULTS:
-                    if key in stored:
-                        data[key] = stored[key]
+        if not BRANDING_PATH.exists():
+            return data
+        with BRANDING_PATH.open(encoding="utf-8") as fh:
+            stored = json.load(fh)
+        if isinstance(stored, dict):
+            for key in DEFAULTS:
+                if key in stored:
+                    data[key] = stored[key]
+        global _LAST_GOOD_BRANDING
+        _LAST_GOOD_BRANDING = dict(data)
+        return data
     except Exception:
-        # Битый файл не должен ронять кабинет — отдаём дефолты.
-        pass
-    return data
+        logger.warning("branding.json есть, но не распарсился — использую кэш/fail-closed")
+        if _LAST_GOOD_BRANDING is not None:
+            return dict(_LAST_GOOD_BRANDING)
+        data["crypto_links_enabled"] = True  # неизвестность → прячем ссылку (fail-closed)
+        return data
 
 
 @router.get("")

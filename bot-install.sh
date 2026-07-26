@@ -16,6 +16,11 @@ set -euo pipefail
 
 REPO_URL="https://github.com/velamaker/remnashop-cabinet"
 BRANCH="${BRANCH:-main}"
+# Пиннинг supply-chain: REF может быть веткой, тегом или commit-SHA (воспроизводимость).
+# Для проверки целостности задайте EXPECT_SHA256 (sha256 тарбола) — тогда установка
+# прервётся при несовпадении. По умолчанию — ветка (как раньше), но рекомендуется тег/SHA.
+REF="${REF:-$BRANCH}"
+EXPECT_SHA256="${EXPECT_SHA256:-}"
 DEST="${DEST:-/opt/remnashop}"
 
 # Режим установки для install.sh:
@@ -48,11 +53,20 @@ docker compose version >/dev/null 2>&1 || command -v docker-compose >/dev/null 2
   || die "Не найден 'docker compose'."
 ok "Docker на месте (не трогаю)"
 
-# Код проекта (тарбол устойчивее git на плохом канале).
+# Код проекта (тарбол устойчивее git на плохом канале). REF = ветка/тег/commit-SHA;
+# при заданном EXPECT_SHA256 проверяем целостность архива перед распаковкой.
 if [ ! -f "$DEST/install.sh" ]; then
-  info "Скачиваю код в $DEST…"
+  info "Скачиваю код в $DEST (ref: $REF)…"
   mkdir -p "$DEST"
-  curl -fL "$REPO_URL/archive/refs/heads/$BRANCH.tar.gz" | tar xz -C "$DEST" --strip-components=1
+  TARBALL="$(mktemp)"
+  curl -fL "$REPO_URL/archive/$REF.tar.gz" -o "$TARBALL" || die "Не удалось скачать код (ref=$REF)."
+  if [ -n "$EXPECT_SHA256" ]; then
+    GOT="$(sha256sum "$TARBALL" | awk '{print $1}')"
+    [ "$GOT" = "$EXPECT_SHA256" ] || { rm -f "$TARBALL"; die "SHA-256 не совпал: ждали $EXPECT_SHA256, получили $GOT"; }
+    ok "Контрольная сумма архива верна"
+  fi
+  tar xz -C "$DEST" --strip-components=1 -f "$TARBALL" || { rm -f "$TARBALL"; die "Распаковка не удалась."; }
+  rm -f "$TARBALL"
 fi
 cd "$DEST"
 ok "Код в $DEST"

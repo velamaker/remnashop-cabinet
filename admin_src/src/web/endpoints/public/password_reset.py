@@ -24,11 +24,15 @@ from dishka.integrations.fastapi import inject
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from src.application.common.dao import UserDao
+from src.application.common.dao.auth import AuthSessionDao
 from src.application.common.email_sender import EmailSender
 from src.application.common.password_hasher import PasswordHasher
 from src.application.common.uow import UnitOfWork
 from src.core.config import AppConfig
+from src.infrastructure.services.overlay_sessions import invalidate_all
 
 router = APIRouter(prefix="/auth/password/reset", tags=["Public - Auth"])
 
@@ -110,6 +114,8 @@ async def reset_confirm(
     config: FromDishka[AppConfig],
     password_hasher: FromDishka[PasswordHasher],
     uow: FromDishka[UnitOfWork],
+    session: FromDishka[AsyncSession],
+    auth_session: FromDishka[AuthSessionDao],
 ) -> ResetResponse:
     from src.application.use_cases.auth._codes import hash_email_verification_code
     from src.core.utils.time import datetime_now
@@ -148,5 +154,15 @@ async def reset_confirm(
                 detail="Не удалось сохранить новый пароль",
             )
         await uow.commit()
+
+    # Сброс пароля = компрометация → отзываем ВСЕ существующие сессии пользователя:
+    #   • access-токены (по времени, проверяет middleware overlay_app);
+    #   • серверные refresh-токены (Redis) — иначе старая сессия выпустит новый access.
+    # Иначе тот, кто держал сессию до сброса, сохранил бы доступ к аккаунту.
+    try:
+        await invalidate_all(session, user.id)
+        await auth_session.revoke_all_user_tokens(user.id)
+    except Exception:  # noqa: BLE001 — пароль уже сменён; отзыв не должен ронять ответ
+        pass
 
     return ResetResponse(success=True)

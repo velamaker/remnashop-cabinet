@@ -34,6 +34,7 @@ from src.core.exceptions import PermissionDeniedError
 from remnapy.enums.users import TrafficLimitStrategy
 
 from ._common import AdminUser
+from ._redact import is_readonly_admin
 
 router = APIRouter(prefix="/subscriptions", tags=["Admin - Subscriptions"])
 
@@ -441,11 +442,12 @@ async def user_device_delete(
 @inject
 async def user_transactions(
     user_id: int,
-    _admin: AdminUser,
+    admin: AdminUser,
     session: FromDishka[AsyncSession],
     limit: int = 50,
 ) -> dict[str, Any]:
     limit = max(1, min(limit, 200))
+    redact = is_readonly_admin(admin)
     rows = (
         await session.execute(
             text(
@@ -470,7 +472,7 @@ async def user_transactions(
     return {
         "items": [
             {
-                "payment_id": str(r.payment_id),
+                "payment_id": None if redact else str(r.payment_id),
                 "status": r.status,
                 "gateway_type": r.gateway_type,
                 "purchase_type": r.purchase_type,

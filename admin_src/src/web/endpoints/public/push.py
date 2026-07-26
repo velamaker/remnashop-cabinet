@@ -67,11 +67,16 @@ async def subscribe(
     """Сохранить (или обновить) push-подписку устройства пользователя."""
     await session.execute(
         text(
+            # endpoint — глобально UNIQUE. При конфликте обновляем ключи ТОЛЬКО если
+            # строка уже принадлежит тому же юзеру (WHERE user_id = EXCLUDED.user_id).
+            # Иначе (endpoint принадлежит другому юзеру) DO UPDATE отфильтровывается —
+            # 0 строк, без ошибки — чтобы нельзя было перепривязать чужую подписку на
+            # себя, зная её endpoint (push-угон/DoS). НЕ ставим user_id = EXCLUDED.*.
             "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) "
             "VALUES (:uid, :ep, :p256dh, :auth) "
             "ON CONFLICT (endpoint) DO UPDATE SET "
-            "user_id = EXCLUDED.user_id, p256dh = EXCLUDED.p256dh, "
-            "auth = EXCLUDED.auth, created_at = now()"
+            "p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, created_at = now() "
+            "WHERE push_subscriptions.user_id = EXCLUDED.user_id"
         ),
         {
             "uid": user.id,
@@ -79,6 +84,16 @@ async def subscribe(
             "p256dh": body.keys.p256dh,
             "auth": body.keys.auth,
         },
+    )
+    # Кап: держим не больше 20 новейших подписок на юзера (защита от накопления строк —
+    # каждый браузер/девайс = запись; без капа юзер мог бы забить таблицу).
+    await session.execute(
+        text(
+            "DELETE FROM push_subscriptions WHERE user_id = :uid AND id NOT IN ("
+            "  SELECT id FROM push_subscriptions WHERE user_id = :uid "
+            "  ORDER BY created_at DESC LIMIT 20)"
+        ),
+        {"uid": user.id},
     )
     await session.commit()
     return {"ok": True}

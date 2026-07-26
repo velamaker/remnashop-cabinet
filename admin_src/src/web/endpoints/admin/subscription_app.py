@@ -23,6 +23,7 @@ import json
 
 from src.application.common import Remnawave
 from src.web.endpoints.public.appearance import resolve_brand_name
+from src.web.net_guard import is_safe_public_url
 
 from ._common import AdminUser
 
@@ -128,8 +129,15 @@ async def _resolve_routing(value: str) -> str:
     if "github.com" in url and "/blob/" in url:
         url = url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/", 1)
 
+    # SSRF-гард: хост URL должен быть публичным (не внутренняя docker-сеть / метаданные
+    # облака / loopback). follow_redirects=False — иначе публичный 30x увёл бы во внутрь.
+    if not is_safe_public_url(url):
+        raise HTTPException(
+            status_code=400,
+            detail="Ссылка должна вести на публичный хост (внутренние адреса запрещены).",
+        )
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
             resp = await client.get(url)
             resp.raise_for_status()
             text = resp.text

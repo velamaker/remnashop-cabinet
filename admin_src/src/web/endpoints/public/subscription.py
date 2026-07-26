@@ -80,6 +80,7 @@ from src.web.schemas import (
 )
 
 from ._common import CurrentUser
+from .sub_alias import maybe_alias_url
 
 router = APIRouter(prefix="/subscription", tags=["Public - Subscription"])
 
@@ -199,7 +200,10 @@ async def get_current_subscription(
         device_limit=current_subscription.device_limit,
         traffic_limit_strategy=current_subscription.traffic_limit_strategy.value,
         expire_at=current_subscription.expire_at,
-        url=current_subscription.url,
+        # Крипто-ссылка: при включённом тумблере отдаём непрозрачный алиас вместо
+        # реального sub-URL. Кабинет строит из этого поля ВСЕ deep-link'и/QR/копирование,
+        # поэтому подмена в одном месте прячет реальную ссылку на всех поверхностях.
+        url=maybe_alias_url(current_subscription.url),
         plan_name=current_subscription.plan_snapshot.name,
         plan_duration_days=current_subscription.plan_snapshot.duration,
         used_traffic_bytes=remna_user.used_traffic_bytes if remna_user else None,
@@ -261,6 +265,9 @@ async def delete_all_subscription_devices(
 async def reissue_current_subscription(
     user: CurrentUser,
     reissue_subscription: FromDishka[ReissueSubscription],
+    subscription_dao: FromDishka[SubscriptionDao],
+    remnawave: FromDishka[Remnawave],
+    session: FromDishka[AsyncSession],
 ) -> ReissueResponse:
     try:
         await reissue_subscription(user)
@@ -268,6 +275,25 @@ async def reissue_current_subscription(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+
+    # Перевыпуск ОТЗЫВАЕТ старую ссылку в панели, но базовый код НЕ обновляет
+    # subscription.url в БД (пишет только link_reset_at) → до вебхука/sync кабинет и
+    # крипто-алиас указывали бы на ОТОЗВАННУЮ ссылку (клиент получал бы 404/502).
+    # Подтягиваем свежий url из панели и пишем сразу. Best-effort — при сбое подхватит sync.
+    try:
+        current = await subscription_dao.get_current(user.id)
+        if current:
+            remna_user = await remnawave.get_user_by_uuid(current.user_remna_id)
+            fresh = getattr(remna_user, "subscription_url", None) if remna_user else None
+            if fresh and fresh != current.url:
+                await session.execute(
+                    text("UPDATE subscriptions SET url = :url WHERE user_remna_id = :ruid"),
+                    {"url": fresh, "ruid": str(current.user_remna_id)},
+                )
+                await session.commit()
+    except Exception:  # noqa: BLE001
+        logger.warning(f"reissue: не удалось обновить url в БД для user_id={user.id} (подхватит sync)")
+
     return ReissueResponse(success=True)
 
 

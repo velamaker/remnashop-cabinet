@@ -89,6 +89,9 @@ async def menu_getter(i18n: FromDishka[TranslatorRunner], **kwargs):
     web_enabled = bool(data.get("web_enabled"))
     connectable = bool(data.get("connectable"))
     base_url = (data.get("web_cabinet_url") or "").rstrip("/")
+    # Кнопка «Подписка (резерв)» — намеренный fallback: отдаёт РЕАЛЬНУЮ ссылку подписки,
+    # чтобы юзер мог импортировать её вручную, когда мини-апп/крипто-ссылка не сработали.
+    # Поэтому здесь алиас НЕ применяем (крипто-ссылки — фича кабинета, не резерва).
     sub_url = data.get("subscription_url")
 
     texts_cfg = cfg.get("texts", {}) or {}
