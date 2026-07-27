@@ -31,8 +31,8 @@ from src.infrastructure.taskiq.broker import broker
 _PAGE = 1000  # устройств немного (сотни) — одной страницы обычно хватает.
 
 
-async def _fetch_all_devices(config: AppConfig) -> list[dict[str, Any]]:
-    """Все HWID-устройства панели (пагинация по ?start/?size). Клиент — как в node_health."""
+def _panel_client(config: AppConfig) -> AsyncClient:
+    """httpx-клиент к API панели (как в node_health): токен + служебные заголовки."""
     c = config.remnawave
     headers = {
         "Authorization": f"Bearer {c.token.get_secret_value()}",
@@ -43,31 +43,57 @@ async def _fetch_all_devices(config: AppConfig) -> list[dict[str, Any]]:
     if not c.is_external:
         headers["x-forwarded-proto"] = "https"
         headers["x-forwarded-for"] = "127.0.0.1"
-
-    devices: list[dict[str, Any]] = []
-    async with AsyncClient(
+    return AsyncClient(
         base_url=f"{c.url.get_secret_value()}/api",
         headers=headers,
         cookies=c.cookies,
         verify=True,
         timeout=Timeout(connect=15, read=30, write=10, pool=5),
-    ) as cl:
-        start = 0
-        while True:
-            r = await cl.get("/hwid/devices", params={"size": _PAGE, "start": start})
-            if r.status_code != 200:
-                logger.warning(f"abuse_hwid: /hwid/devices вернул {r.status_code}")
-                break
-            resp = r.json().get("response", {}) or {}
-            batch = resp.get("devices", []) or []
-            if not batch:
-                break
-            devices.extend(batch)
-            total = int(resp.get("total", 0) or 0)
-            start += len(batch)
-            if start >= total or len(batch) < _PAGE:
-                break
-    return devices
+    )
+
+
+async def _fetch_paginated(cl: AsyncClient, path: str, key: str) -> list[dict[str, Any]]:
+    """Все элементы `key` из paginated-эндпоинта панели (?start/?size)."""
+    items: list[dict[str, Any]] = []
+    start = 0
+    while True:
+        r = await cl.get(path, params={"size": _PAGE, "start": start})
+        if r.status_code != 200:
+            logger.warning(f"abuse_hwid: {path} вернул {r.status_code}")
+            break
+        resp = r.json().get("response", {}) or {}
+        batch = resp.get(key, []) or []
+        if not batch:
+            break
+        items.extend(batch)
+        total = int(resp.get("total", 0) or 0)
+        start += len(batch)
+        if start >= total or len(batch) < _PAGE:
+            break
+    return items
+
+
+async def _fetch_all_devices(config: AppConfig) -> list[dict[str, Any]]:
+    """Все HWID-устройства панели."""
+    async with _panel_client(config) as cl:
+        return await _fetch_paginated(cl, "/hwid/devices", "devices")
+
+
+async def _fetch_tid_to_uuid(config: AppConfig) -> dict[int, str]:
+    """Карта panel numeric id (t_id) → uuid.
+
+    С Remnawave 2.8 в /hwid/devices вместо `userUuid` приходит числовой `userId`
+    (это users.t_id — новый PK панели). Локально же подписки хранят uuid
+    (user_remna_id), поэтому строим мост t_id → uuid по списку /users.
+    """
+    async with _panel_client(config) as cl:
+        users = await _fetch_paginated(cl, "/users", "users")
+    mapping: dict[int, str] = {}
+    for u in users:
+        uid, uu = u.get("id"), u.get("uuid")
+        if uid is not None and uu:
+            mapping[int(uid)] = str(uu)
+    return mapping
 
 
 @broker.task(schedule=[{"cron": "17 */6 * * *"}], retry_on_error=False)
@@ -98,11 +124,32 @@ async def snapshot_hwid_devices(
     ).all()
     uuid_to_uid: dict[str, int] = {str(ru): uid for ru, uid in uuid_rows}
 
+    # Remnawave 2.8+: устройство несёт числовой userId (t_id), а не userUuid.
+    # Строим мост t_id → uuid только если он нужен (есть device без userUuid).
+    tid_to_uuid: dict[int, str] = {}
+    if any(d.get("userUuid") is None and d.get("userId") is not None for d in devices):
+        try:
+            tid_to_uuid = await _fetch_tid_to_uuid(config)
+        except Exception as e:
+            logger.warning(f"abuse_hwid: не удалось получить карту t_id→uuid: {e}")
+        if not tid_to_uuid:
+            # Без моста все устройства новой панели «безхозные» → НЕ затираем снимок.
+            logger.warning("abuse_hwid: карта t_id→uuid пуста — снимок не меняем")
+            return
+
+    def _device_uuid(dev: dict[str, Any]) -> str:
+        # Старый контракт (< 2.8) — uuid прямо в устройстве; новый — через t_id.
+        uu = dev.get("userUuid")
+        if uu:
+            return str(uu)
+        tid = dev.get("userId")
+        return tid_to_uuid.get(int(tid), "") if tid is not None else ""
+
     # Полный пере-снимок: подменяем таблицу текущим состоянием панели.
     rows: list[dict] = []
     unmapped = 0
     for d in devices:
-        uid = uuid_to_uid.get(str(d.get("userUuid") or ""))
+        uid = uuid_to_uid.get(_device_uuid(d))
         hwid = (d.get("hwid") or "").strip()
         if not hwid:
             continue

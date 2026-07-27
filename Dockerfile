@@ -43,6 +43,13 @@ RUN pip --python /opt/remnashop/.venv/bin/python install --no-cache-dir --no-dep
       "aiohttp==3.14.3" \
       "cryptography==49.0.0"
 
+# Совместимость с Remnawave 2.8+: панель сменила контракты (hwid userUuid→userId,
+# host tag→tags и регистр xHttpExtraParams) → remnapy 2.7.0 роняет ValidationError
+# на меню «Устройства» и «Статус сервиса». Патчим модели IN-PLACE в venv (fail-closed:
+# если блок не найден — билд падает). Отдельным слоем. Подробности: scripts/patch-remnapy-2.8.py.
+COPY scripts/patch-remnapy-2.8.py /opt/remnashop/scripts/patch-remnapy-2.8.py
+RUN /opt/remnashop/.venv/bin/python /opt/remnashop/scripts/patch-remnapy-2.8.py
+
 # Overlay admin API files on top of the base image
 COPY admin_src/src/ /opt/remnashop/src/
 

@@ -27,6 +27,9 @@ from src.core.config import AppConfig
 from src.infrastructure.services.overlay_new_device import load_config
 from src.infrastructure.services.overlay_push import notify_user_push
 from src.infrastructure.taskiq.broker import broker
+# Мост t_id → uuid: с Remnawave 2.8 /hwid/devices отдаёт числовой userId вместо
+# userUuid. Переиспользуем реализацию из abuse_hwid (та же логика).
+from src.infrastructure.taskiq.tasks.abuse_hwid import _fetch_tid_to_uuid
 
 ASSETS_DIR = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets"))
 STATE_PATH = ASSETS_DIR / "new_device_state.json"
@@ -126,11 +129,31 @@ async def run_new_device(
     ).all()
     mine = {str(ru): (uid, lang, tg) for ru, uid, lang, tg in rows}
 
+    # Remnawave 2.8+: устройство несёт числовой userId (t_id), не userUuid.
+    tid_to_uuid: dict[int, str] = {}
+    if any(d.get("userUuid") is None and d.get("userId") is not None for d in devices):
+        try:
+            tid_to_uuid = await _fetch_tid_to_uuid(config)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"new_device: не получил карту t_id→uuid: {e}")
+        if not tid_to_uuid:
+            # Без моста устройства новой панели «безхозные» — пропускаем проход,
+            # чтобы не занести пустой baseline и не пропустить реальные новые.
+            logger.warning("new_device: карта t_id→uuid пуста — проход пропущен")
+            return
+
+    def _device_uuid(dev: dict[str, Any]) -> str:
+        uu = dev.get("userUuid")
+        if uu:
+            return str(uu)
+        tid = dev.get("userId")
+        return tid_to_uuid.get(int(tid), "") if tid is not None else ""
+
     # Текущие (user_id, hwid[, model]) для наших юзеров.
     current: dict[tuple[int, str], str] = {}
     meta: dict[int, tuple[str, int | None]] = {}  # user_id → (lang, tg)
     for d in devices:
-        t = mine.get(str(d.get("userUuid") or ""))
+        t = mine.get(_device_uuid(d))
         hwid = (d.get("hwid") or "").strip()
         if t is None or not hwid:
             continue
