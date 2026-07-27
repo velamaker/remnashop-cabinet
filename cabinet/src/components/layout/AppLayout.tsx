@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   LifeBuoy,
   Wallet,
+  Sparkles,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useT } from "@/i18n/I18nContext";
@@ -75,15 +76,17 @@ export function AppLayout({ children }: { children: ReactNode }) {
       <div aria-hidden className="ambient-glow -left-32 -top-40 h-96 w-96" />
 
       {/* Sidebar — fixed to viewport height */}
-      <aside className="relative z-10 hidden w-52 flex-shrink-0 flex-col border-r border-[var(--border)] bg-bg/70 px-2 py-5 backdrop-blur-xl md:flex sticky top-0 h-screen overflow-hidden">
+      <aside className="relative z-10 hidden w-60 flex-shrink-0 flex-col border-r border-[var(--border)] bg-bg/70 px-3 py-5 backdrop-blur-xl md:flex sticky top-0 h-screen overflow-hidden">
         {/* Brand — клик возвращает на главную */}
-        <NavLink to="/" end className="mb-7 flex items-center gap-3 rounded-xl px-2 py-1 transition-opacity hover:opacity-80">
-          <BrandLogo size={42} />
+        <NavLink to="/" end className="mb-7 flex items-center gap-3 rounded-2xl px-2 py-2 transition-opacity hover:opacity-80">
+          <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-[color:var(--border)] bg-accent-subtle text-accent">
+            <Sparkles className="h-5 w-5" />
+          </div>
           <BrandWordmark className="text-[20px] leading-none" />
         </NavLink>
 
         {/* Nav */}
-        <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto min-h-0">
+        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto min-h-0">
           {navItems.map(({ to, icon: Icon, labelKey }) => (
             <NavLink
               key={to}
@@ -91,7 +94,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
               end={to === "/"}
               className={({ isActive }) =>
                 clsx(
-                  "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-all duration-150",
+                  "flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm transition-all duration-150",
                   isActive
                     ? "nav-active-glow font-medium text-fg"
                     : "font-normal text-fg-muted hover:bg-bg-subtle hover:text-fg",
@@ -130,7 +133,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
             to="/info"
             className={({ isActive }) =>
               clsx(
-                "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors duration-150",
+                "flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm transition-colors duration-150",
                 isActive
                   ? "bg-bg-raised font-medium text-fg"
                   : "font-normal text-fg-muted hover:bg-bg-subtle hover:text-fg",
@@ -147,7 +150,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
           <button
             onClick={handleLogout}
-            className="mt-1 flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-normal text-fg-muted transition-colors hover:bg-danger/8 hover:text-danger"
+            className="mt-1 flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-normal text-fg-muted transition-colors hover:bg-danger/8 hover:text-danger"
           >
             <LogOut className="h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
             {t("nav.logout")}
