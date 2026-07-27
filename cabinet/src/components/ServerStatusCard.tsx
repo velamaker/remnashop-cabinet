@@ -33,15 +33,18 @@ export function ServerStatusCard() {
   const allOk = data.all_operational;
 
   // Самая быстрая онлайн-нода (по клиентскому пингу) — помечаем «Рекомендуем».
-  let bestHost: string | null = null;
+  // Сравниваем по ИНДЕКСУ строки, а не по адресу: если у нескольких серверов один
+  // и тот же адрес (типовая настройка — общий домен-фронт на все страны), метка
+  // по адресу загоралась сразу на всех строках.
+  let bestIndex = -1;
   let bestMs = Infinity;
-  for (const n of data.nodes) {
-    const p = n.host ? pings[n.host] : null;
-    if (n.online && n.host && p != null && p < bestMs) {
+  data.nodes.forEach((n, i) => {
+    const p = n.host ? pings[n.host] ?? null : null;
+    if (n.online && p != null && p < bestMs) {
       bestMs = p;
-      bestHost = n.host;
+      bestIndex = i;
     }
-  }
+  });
 
   return (
     <div className="surface p-5">
@@ -68,7 +71,7 @@ export function ServerStatusCard() {
           <div key={i} className="flex items-center gap-3 rounded-xl bg-bg-subtle px-3.5 py-2.5">
             {n.country_code && <Flag code={n.country_code} className="h-4 w-6" />}
             <span className="min-w-0 truncate text-sm font-medium text-fg">{n.name}</span>
-            {n.host && n.host === bestHost && (
+            {i === bestIndex && (
               <span className="flex-shrink-0 rounded-md bg-accent px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
                 {t("status.recommended")}
               </span>
