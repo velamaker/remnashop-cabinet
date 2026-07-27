@@ -1069,7 +1069,9 @@ export const subscriptionsAdminApi = {
   sync: (userId: number, direction: "from_remnawave" | "from_remnashop" = "from_remnawave") =>
     adminApi.post<{ success: boolean }>(`/subscriptions/user/${userId}/sync`, { direction }),
   sendMessage: (userId: number, text: string) =>
-    adminApi.post<{ success: boolean; delivered: boolean }>(`/subscriptions/user/${userId}/message`, { text }),
+    adminApi.post<{ success: boolean; delivered: boolean; reason?: "no_telegram" | "send_failed" | null }>(
+      `/subscriptions/user/${userId}/message`, { text }
+    ),
   addPoints: (userId: number, points: number) =>
     adminApi.post<{ success: boolean; points: number }>(
       `/subscriptions/user/${userId}/points`, { points }
