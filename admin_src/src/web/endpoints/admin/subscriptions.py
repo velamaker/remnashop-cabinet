@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.application.common import Remnawave
+from src.application.common import Notifier, Remnawave
 from src.application.common.dao import PlanDao, SubscriptionDao, UserDao
 from src.application.dto import MessagePayloadDto, PlanSnapshotDto, SubscriptionDto
 from src.application.use_cases.remnawave import ReissueUserSubscription, ResetUserTraffic
@@ -601,6 +601,8 @@ async def send_message(
     body: MessageRequest,
     admin: AdminUser,
     send_message_to_user: FromDishka[SendMessageToUser],
+    user_dao: FromDishka[UserDao],
+    notifier: FromDishka[Notifier],
 ) -> dict[str, Any]:
     text_msg = (body.text or "").strip()
     if not text_msg:
@@ -610,6 +612,29 @@ async def send_message(
         i18n_kwargs={"content": text_msg},
         delete_after=None,  # не самоудалять (см. фикс рассылок delete_after)
     )
+
+    # Раньше любая неудача превращалась в «у пользователя нет Telegram» — хотя
+    # причины разные: профиль действительно без привязки (импортированные из
+    # панели подписчики, веб-регистрация по email) или отправка сорвалась
+    # (пользователь заблокировал бота). Отвечаем конкретно.
+    target = await user_dao.get_by_id(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    if target.telegram_id is None:
+        return {"success": True, "delivered": False, "reason": "no_telegram"}
+
+    # Сообщение самому себе: use-case требует СТРОГО старшую роль актора, поэтому
+    # владелец, отправляя в свой же профиль, получал 403. Себе — шлём напрямую.
+    if target.id == admin.id:
+        if is_readonly_admin(admin):
+            raise HTTPException(status_code=403, detail="Роль «только просмотр»: отправка недоступна")
+        sent = await notifier.notify_user(user=target, payload=payload)
+        return {
+            "success": True,
+            "delivered": bool(sent),
+            "reason": None if sent else "send_failed",
+        }
+
     delivered = False
     try:
         delivered = bool(
@@ -625,8 +650,11 @@ async def send_message(
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Ошибка отправки: {exc}")
-    # delivered=False обычно значит, что у пользователя нет привязанного Telegram.
-    return {"success": True, "delivered": delivered}
+    return {
+        "success": True,
+        "delivered": delivered,
+        "reason": None if delivered else "send_failed",
+    }
 
 
 # ─── Add points ──────────────────────────────────────────────────────────────

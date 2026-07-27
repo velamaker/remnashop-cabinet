@@ -49,8 +49,21 @@ def _build_user_where(
     where: list[str] = []
     params: dict[str, Any] = {}
     if search:
-        where.append("(u.name ILIKE :s OR u.email ILIKE :s OR u.username ILIKE :s)")
-        params["s"] = f"%{search.strip()}%"
+        # Ищем и по Telegram ID, и по внутреннему id: раньше поиск шёл только по
+        # имени/почте/юзернейму, поэтому по «Telegram ID» админка отдавала «0 всего»,
+        # хотя ID стоит отдельной колонкой в самой таблице.
+        # id сравниваем строкой: колонка int4, а Telegram ID в неё не влезает —
+        # прямое сравнение роняло запрос ошибкой «integer out of range».
+        s_val = search.strip()
+        clause = (
+            "(u.name ILIKE :s OR u.email ILIKE :s OR u.username ILIKE :s "
+            "OR CAST(u.telegram_id AS TEXT) ILIKE :s"
+        )
+        params["s"] = f"%{s_val}%"
+        if s_val.isdigit():
+            clause += " OR CAST(u.id AS TEXT) = :sid"
+            params["sid"] = s_val
+        where.append(clause + ")")
     if blocked is not None:
         where.append("u.is_blocked = :bl")
         params["bl"] = blocked

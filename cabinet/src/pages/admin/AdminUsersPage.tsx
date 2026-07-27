@@ -517,7 +517,15 @@ function SendMessageBlock({ userId }: { userId: number }) {
     setMsg(null);
     try {
       const r = await subscriptionsAdminApi.sendMessage(userId, t);
-      setMsg(r.delivered ? "Отправлено ✓" : "Не доставлено — у пользователя нет привязанного Telegram");
+      // Причина приходит с сервера: раньше любая неудача объявлялась «нет Telegram»,
+      // хотя профиль мог быть с привязкой, а отправку срывала блокировка бота.
+      setMsg(
+        r.delivered
+          ? "Отправлено ✓"
+          : r.reason === "no_telegram"
+            ? "Не доставлено — у профиля не привязан Telegram (регистрация по email или импорт из панели)"
+            : "Не доставлено — Telegram привязан, но сообщение не ушло: скорее всего, пользователь заблокировал бота",
+      );
       if (r.delivered) setText("");
     } catch (e) {
       setMsg(e instanceof ApiError ? e.detail : "Ошибка");
@@ -1334,7 +1342,16 @@ export default function AdminUsersPage() {
                           <span className="text-xs font-medium text-success">Активен</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-xs text-fg-muted font-mono">{u.id ?? "—"}</td>
+                      <td className="px-4 py-3 text-xs text-fg-muted font-mono">
+                        <span title="Внутренний ID">{u.id ?? "—"}</span>
+                        {u.telegram_id ? (
+                          <span className="block text-[11px] text-fg-subtle" title="Telegram ID">
+                            tg {u.telegram_id}
+                          </span>
+                        ) : (
+                          <span className="block text-[11px] text-fg-subtle">без Telegram</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-xs text-fg-muted">{u.created_at ? formatDate(u.created_at) : "—"}</td>
                       <td className="px-4 py-3 text-xs text-fg-muted">{u.last_login_at ? formatDate(u.last_login_at) : "—"}</td>
                     </tr>
@@ -1376,6 +1393,9 @@ export default function AdminUsersPage() {
                       <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-fg-subtle">
                         <span className={`font-medium ${rInfo.cls}`}>{rInfo.label}</span>
                         <span className="font-mono">ID {u.id ?? "—"}</span>
+                        <span className="font-mono">
+                          {u.telegram_id ? `tg ${u.telegram_id}` : "без Telegram"}
+                        </span>
                         {u.created_at && <span>рег. {formatDate(u.created_at)}</span>}
                         {u.last_login_at && <span>вход {formatDate(u.last_login_at)}</span>}
                       </div>
