@@ -99,7 +99,9 @@ async def _restart_node_via_sdk(remnawave: Remnawave, uuid: str) -> bool:
         sdk = getattr(remnawave, "sdk", None)
         if sdk is None:
             return False
-        await sdk.nodes.restart_node(node_uuid=uuid)
+        # ВАЖНО: параметр SDK называется `uuid` (path-параметр). С `node_uuid=`
+        # вызов падал TypeError ещё до запроса — авто-рестарт молча не работал.
+        await sdk.nodes.restart_node(uuid=uuid)
         return True
     except Exception as e:  # noqa: BLE001
         logger.warning(f"node_health: авто-рестарт {uuid} не удался: {e}")

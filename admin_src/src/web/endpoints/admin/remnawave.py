@@ -4,6 +4,7 @@ from typing import Any
 from dishka import FromDishka
 from dishka.integrations.fastapi import inject
 from fastapi import APIRouter, HTTPException
+from remnapy.models.nodes import RestartAllNodesRequestBodyDto
 
 from src.application.common import Remnawave
 from src.web.endpoints.public.appearance import ASSETS_DIR
@@ -118,7 +119,8 @@ async def restart_node(
 ) -> dict[str, Any]:
     try:
         sdk = _sdk(remnawave)
-        await sdk.nodes.restart_node(node_uuid=node_uuid)
+        # Параметр SDK — `uuid` (path). С `node_uuid=` был TypeError → 502.
+        await sdk.nodes.restart_node(uuid=node_uuid)
         return {"success": True}
     except HTTPException:
         raise
@@ -134,7 +136,8 @@ async def restart_all_nodes(
 ) -> dict[str, Any]:
     try:
         sdk = _sdk(remnawave)
-        await sdk.nodes.restart_all_nodes()
+        # SDK требует body (forceRestart, по умолчанию false) — без него TypeError → 502.
+        await sdk.nodes.restart_all_nodes(body=RestartAllNodesRequestBodyDto())
         return {"success": True}
     except HTTPException:
         raise
