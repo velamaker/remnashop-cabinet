@@ -82,38 +82,36 @@ function PlanCard({
   ];
 
   return (
-    <div
-      className={clsx(
-        "overflow-hidden rounded-2xl border transition-all duration-200",
-        expanded
-          ? "border-accent bg-accent-subtle/40 shadow-[0_18px_50px_-20px_var(--accent-glow)]"
-          : "border-[var(--border-subtle)] bg-bg-raised hover:border-[var(--accent)]/50",
-      )}
-    >
+    <div className={clsx("plan-card overflow-hidden transition-all duration-200", expanded && "plan-card--active")}>
       <button
         type="button"
         onClick={onToggle}
-        className="flex w-full items-center gap-3 px-4 py-3.5 text-left"
+        className="flex w-full items-center gap-3 px-4 py-4 text-left sm:px-5"
       >
-        {popular && (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-gradient-to-r from-[var(--accent)] to-[var(--accent-2)] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white">
-            <Sparkles className="h-3 w-3" /> {t("billing.hit")}
-          </span>
-        )}
-        <div className="min-w-0 flex-1">
-          <h3 className="truncate text-[15px] font-bold leading-tight text-fg">{plan.name}</h3>
-          {plan.description && (
-            <p className="mt-0.5 truncate text-xs text-fg-subtle">{plan.description}</p>
-          )}
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {popular && (
+              <span className="chip chip--accent">
+                <Sparkles className="h-3 w-3" /> {t("billing.hit")}
+              </span>
+            )}
+            {price && !price.is_free && price.discount_percent > 0 && (
+              <span className="chip">-{price.discount_percent}%</span>
+            )}
+          </div>
+          <div className="min-w-0">
+            <h3 className="truncate text-[15px] font-bold leading-tight text-fg">{plan.name}</h3>
+            {plan.description && (
+              <p className="mt-0.5 truncate text-xs text-fg-subtle">{plan.description}</p>
+            )}
+          </div>
         </div>
         <div className="shrink-0 text-right">
           {price ? (
             price.is_free ? (
-              <span className="text-base font-extrabold text-success">{t("billing.free")}</span>
+              <span className="plan-price text-success">{t("billing.free")}</span>
             ) : (
-              <span className="text-base font-extrabold text-fg">
-                {price.final_amount} {price.currency_symbol}
-              </span>
+              <span className="plan-price">{price.final_amount} {price.currency_symbol}</span>
             )
           ) : (
             <span className="text-sm text-fg-subtle">—</span>
@@ -128,23 +126,22 @@ function PlanCard({
       </button>
 
       {expanded && (
-        <div className="border-t border-[var(--border-subtle)] px-4 pb-4 pt-3.5">
-          <p className="text-xs text-fg-subtle">
-            {days ? t("billing.forDays", { days }) : t("billing.chooseTerm")}
-            {perMonth ? " · " + t("billing.perMonth", { amount: perMonth, sym: price?.currency_symbol ?? "" }) : ""}
+        <div className="border-t border-[var(--border-subtle)] px-4 pb-4 pt-4 sm:px-5">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-fg-subtle">
+            <span className="chip">{days ? t("billing.forDays", { days }) : t("billing.chooseTerm")}</span>
+            {perMonth ? <span className="chip">{t("billing.perMonth", { amount: perMonth, sym: price?.currency_symbol ?? "" })}</span> : null}
             {price && !price.is_free && price.discount_percent > 0 && (
-              <span className="ml-1.5 text-fg-subtle line-through">{price.original_amount}</span>
+              <span className="chip">{price.original_amount} → {price.final_amount}</span>
             )}
-          </p>
+          </div>
 
-          {/* Фичи */}
-          <ul className="mt-3 flex flex-col gap-2.5">
+          <ul className="mt-4 grid gap-2 sm:grid-cols-2">
             {features.map((f) => (
-              <li key={f} className="flex items-center gap-2 text-sm text-fg-muted">
-                <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full bg-accent-subtle text-accent">
+              <li key={f} className="flex items-start gap-2 text-sm text-fg-muted">
+                <span className="mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full bg-accent-subtle text-accent">
                   <Check className="h-3 w-3" strokeWidth={3} />
                 </span>
-                {f}
+                <span>{f}</span>
               </li>
             ))}
           </ul>
@@ -152,7 +149,7 @@ function PlanCard({
           <button
             onClick={onBuy}
             disabled={busy || !price}
-            className="btn-gradient mt-4 inline-flex h-11 w-full items-center justify-center rounded-xl px-5 text-sm font-semibold text-white transition-all active:scale-[0.98] disabled:opacity-60"
+            className="btn-gradient mt-4 inline-flex h-11 w-full items-center justify-center rounded-2xl px-5 text-sm font-semibold text-white transition-all active:scale-[0.98] disabled:opacity-60"
           >
             {busy ? t("billing.goingToPay") : t("billing.select")}
           </button>
@@ -161,7 +158,7 @@ function PlanCard({
             <button
               onClick={onBuyBalance}
               disabled={busy}
-              className="mt-2 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-accent/30 bg-gradient-to-r from-[var(--accent)]/15 to-[var(--accent-2)]/15 px-5 text-sm font-semibold text-accent transition-all hover:border-accent/50 hover:from-[var(--accent)]/25 hover:to-[var(--accent-2)]/25 hover:-translate-y-px active:translate-y-0 active:scale-[0.98] disabled:opacity-60"
+              className="mt-2 inline-flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-accent/30 bg-gradient-to-r from-[var(--accent)]/15 to-[var(--accent-2)]/15 px-5 text-sm font-semibold text-accent transition-all hover:border-accent/50 hover:from-[var(--accent)]/25 hover:to-[var(--accent-2)]/25 hover:-translate-y-px active:translate-y-0 active:scale-[0.98] disabled:opacity-60"
             >
               <Wallet className="h-4 w-4" />
               {t("billing.payBalance", { amount: price!.final_amount })}
@@ -335,46 +332,56 @@ export default function BillingPage() {
       {/* Промокод — можно активировать бонус, не покупая тариф */}
       <PromocodeCard />
 
-      {/* Срок — сегментированный переключатель (меняет цены на всех карточках) */}
-      {termDays.length > 1 && (
-        <div className="flex flex-wrap gap-2">
-          {termDays.map((d) => (
-            <button
-              key={d}
-              onClick={() => setSelectedDays(d)}
-              className={clsx(
-                "rounded-xl border px-4 py-2 text-sm font-medium transition-all",
-                selectedDays === d
-                  ? "border-accent bg-accent-subtle text-accent"
-                  : "border-border-subtle bg-bg-subtle text-fg-muted hover:border-border",
-              )}
-            >
-              {t("billing.termDays", { d })}
-            </button>
-          ))}
+      <div className="section-card p-4 sm:p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-fg-subtle">Вариант оплаты</p>
+            <p className="mt-1 text-sm text-fg-muted">Выберите срок и способ оплаты — цены пересчитаются сразу</p>
+          </div>
+          <span className="chip chip--accent">Новый дизайн</span>
         </div>
-      )}
 
-      {/* Способ оплаты */}
-      {offers.gateways.length > 1 && (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">{t("billing.paymentLabel")}</span>
-          {offers.gateways.map((gw) => (
-            <button
-              key={gw.gateway_type}
-              onClick={() => setSelectedGateway(gw.gateway_type)}
-              className={clsx(
-                "rounded-lg border px-3 py-1.5 text-xs font-medium transition-all",
-                selectedGateway === gw.gateway_type
-                  ? "border-accent bg-accent-subtle text-accent"
-                  : "border-border-subtle bg-bg-subtle text-fg-muted hover:border-border",
-              )}
-            >
-              {t(gatewayLabels[gw.gateway_type] ?? gw.gateway_type)}
-            </button>
-          ))}
-        </div>
-      )}
+        {/* Срок — сегментированный переключатель (меняет цены на всех карточках) */}
+        {termDays.length > 1 && (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {termDays.map((d) => (
+              <button
+                key={d}
+                onClick={() => setSelectedDays(d)}
+                className={clsx(
+                  "rounded-2xl border px-4 py-2 text-sm font-medium transition-all",
+                  selectedDays === d
+                    ? "border-accent bg-accent-subtle text-accent"
+                    : "border-border-subtle bg-bg-subtle text-fg-muted hover:border-border",
+                )}
+              >
+                {t("billing.termDays", { d })}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Способ оплаты */}
+        {offers.gateways.length > 1 && (
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">{t("billing.paymentLabel")}</span>
+            {offers.gateways.map((gw) => (
+              <button
+                key={gw.gateway_type}
+                onClick={() => setSelectedGateway(gw.gateway_type)}
+                className={clsx(
+                  "rounded-2xl border px-3 py-1.5 text-xs font-medium transition-all",
+                  selectedGateway === gw.gateway_type
+                    ? "border-accent bg-accent-subtle text-accent"
+                    : "border-border-subtle bg-bg-subtle text-fg-muted hover:border-border",
+                )}
+              >
+                {t(gatewayLabels[gw.gateway_type] ?? gw.gateway_type)}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
       {purchaseError && purchaseError !== "__email__" && (
         <div className="rounded-xl border border-danger/30 bg-danger/8 px-4 py-3">
@@ -395,7 +402,7 @@ export default function BillingPage() {
       )}
 
       {/* Карточки тарифов — аккордеон, раскрывается по клику */}
-      <div className="mx-auto flex w-full max-w-xl flex-col gap-2.5">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-3">
         {offers.plans.map((plan) => (
           <PlanCard
             key={plan.public_code}

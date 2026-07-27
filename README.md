@@ -50,6 +50,8 @@
 curl -fsSL https://raw.githubusercontent.com/ander1k/remnashop-cabinet/agent/uniq-style-redesign/bot-install.sh | sudo bash
 ```
 
+> Для этой ветки используйте именно эту ссылку. Если вы клонируете репозиторий вручную, сначала переключитесь на ветку `agent/uniq-style-redesign`.
+
 Спросит адрес кабинета (например `https://cabinet.example.com`) и способ входа. Сертификат и публикация — автоматически. От вас нужна только DNS-запись `cabinet.example.com` → IP сервера.
 
 ### 🅱️ Кабинет на отдельном сервере
@@ -67,6 +69,8 @@ curl -fsSL https://raw.githubusercontent.com/ander1k/remnashop-cabinet/agent/uni
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ander1k/remnashop-cabinet/agent/uniq-style-redesign/site-install.sh | sudo bash
 ```
+
+> Эта команда устанавливает версию из ветки `agent/uniq-style-redesign` текущего форка.
 
 Спросит домен API бота и адрес кабинета. HTTPS поднимется сам.
 
@@ -100,7 +104,7 @@ cd /opt/remnashop
 
 Скрипт сам сделает бэкап базы, скачает свежий код и пересоберёт контейнеры.
 
-**Отдельный сервер кабинета** (сценарий Б, шаг 2) — просто повторите команду установки, она подтянет свежую версию:
+**Отдельный сервер кабинета** (сценарий Б, шаг 2) — просто повторите команду установки, она подтянет свежую версию из той же ветки:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ander1k/remnashop-cabinet/agent/uniq-style-redesign/site-install.sh | sudo bash

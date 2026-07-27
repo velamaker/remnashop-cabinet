@@ -5,8 +5,6 @@ import {
   LayoutDashboard,
   Smartphone,
   CreditCard,
-  Gift,
-  Settings,
   LogOut,
   Info,
   ShieldCheck,
@@ -25,11 +23,9 @@ import { getTelegramWebApp } from "@/hooks/useTelegramWebApp";
 const navItems = [
   { to: "/", icon: LayoutDashboard, labelKey: "nav.home" },
   { to: "/subscription", icon: CreditCard, labelKey: "nav.subscription" },
-  { to: "/balance", icon: Wallet, labelKey: "nav.balance" },
+  { to: "/billing", icon: Wallet, labelKey: "nav.billing" },
   { to: "/devices", icon: Smartphone, labelKey: "nav.devices" },
-  { to: "/referral", icon: Gift, labelKey: "nav.referral" },
   { to: "/support", icon: LifeBuoy, labelKey: "nav.support" },
-  { to: "/settings", icon: Settings, labelKey: "nav.settings" },
 ];
 
 export function AppLayout({ children }: { children: ReactNode }) {
@@ -75,15 +71,15 @@ export function AppLayout({ children }: { children: ReactNode }) {
       <div aria-hidden className="ambient-glow -left-32 -top-40 h-96 w-96" />
 
       {/* Sidebar — fixed to viewport height */}
-      <aside className="relative z-10 hidden w-52 flex-shrink-0 flex-col border-r border-[var(--border)] bg-bg/70 px-2 py-5 backdrop-blur-xl md:flex sticky top-0 h-screen overflow-hidden">
+      <aside className="relative z-10 hidden w-56 flex-shrink-0 flex-col border-r border-[var(--border)] bg-bg/70 px-3 py-5 backdrop-blur-xl md:flex sticky top-0 h-screen overflow-hidden">
         {/* Brand — клик возвращает на главную */}
-        <NavLink to="/" end className="mb-7 flex items-center gap-3 rounded-xl px-2 py-1 transition-opacity hover:opacity-80">
+        <NavLink to="/" end className="mb-7 flex items-center gap-3 rounded-2xl px-2 py-2 transition-all hover:bg-bg-subtle/70">
           <BrandLogo size={42} />
           <BrandWordmark className="text-[20px] leading-none" />
         </NavLink>
 
         {/* Nav */}
-        <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto min-h-0">
+        <nav className="flex flex-1 flex-col gap-1.5 overflow-y-auto min-h-0">
           {navItems.map(({ to, icon: Icon, labelKey }) => (
             <NavLink
               key={to}
@@ -91,9 +87,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
               end={to === "/"}
               className={({ isActive }) =>
                 clsx(
-                  "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-all duration-150",
+                  "flex items-center gap-2.5 rounded-2xl px-3 py-2.5 text-sm transition-all duration-150",
                   isActive
-                    ? "nav-active-glow font-medium text-fg"
+                    ? "nav-active-glow font-semibold text-fg"
                     : "font-normal text-fg-muted hover:bg-bg-subtle hover:text-fg",
                 )
               }
@@ -108,14 +104,14 @@ export function AppLayout({ children }: { children: ReactNode }) {
         </nav>
 
         {/* Footer */}
-        <div className="mt-4 flex flex-col gap-0.5 border-t border-[var(--border)] pt-4">
+        <div className="mt-4 flex flex-col gap-1.5 rounded-2xl border border-[var(--border)] bg-bg-subtle/60 p-2.5">
           {/* Admin link — только для админов (ADMIN/DEV/OWNER), fail-closed */}
           {isAdmin && (
             <NavLink
               to="/admin"
               className={({ isActive }) =>
                 clsx(
-                  "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors duration-150",
+                  "flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors duration-150",
                   isActive
                     ? "bg-danger/8 font-medium text-danger"
                     : "font-normal text-fg-muted hover:bg-bg-subtle hover:text-fg",
@@ -130,7 +126,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
             to="/info"
             className={({ isActive }) =>
               clsx(
-                "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors duration-150",
+                "flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors duration-150",
                 isActive
                   ? "bg-bg-raised font-medium text-fg"
                   : "font-normal text-fg-muted hover:bg-bg-subtle hover:text-fg",
@@ -141,13 +137,14 @@ export function AppLayout({ children }: { children: ReactNode }) {
             {t("nav.info")}
           </NavLink>
 
-          <div className="mt-2 px-2.5">
-            <span className="block break-all text-xs leading-snug text-fg-subtle">{displayName}</span>
+          <div className="mt-1.5 rounded-xl border border-[var(--border)] bg-bg/70 px-2.5 py-2">
+            <span className="block break-all text-xs font-medium leading-snug text-fg">{displayName}</span>
+            <span className="mt-0.5 block text-[11px] uppercase tracking-[0.18em] text-fg-subtle">{t("nav.settings")}</span>
           </div>
 
           <button
             onClick={handleLogout}
-            className="mt-1 flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-normal text-fg-muted transition-colors hover:bg-danger/8 hover:text-danger"
+            className="mt-1 flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm font-normal text-fg-muted transition-colors hover:bg-danger/8 hover:text-danger"
           >
             <LogOut className="h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
             {t("nav.logout")}
@@ -187,25 +184,23 @@ export function AppLayout({ children }: { children: ReactNode }) {
       </div>
 
       {/* Main content — единственный скролл-контейнер страницы (app-scroll) */}
-      <main className="app-scroll relative z-10 flex-1 min-w-0 overflow-x-hidden px-5 pb-28 pt-[calc(5rem+env(safe-area-inset-top))] md:px-8 md:pb-8 md:pt-8">
+      <main className="app-scroll relative z-10 flex-1 min-w-0 overflow-x-hidden px-4 pb-28 pt-[calc(5rem+env(safe-area-inset-top))] md:px-8 md:pb-8 md:pt-8">
         {/* key={pathname} → обёртка перемонтируется на смене роута и заново
             проигрывает fade-in (плавное появление каждой страницы, не только первой) */}
-        <div key={location.pathname} className="mx-auto max-w-4xl animate-fade-in">{children}</div>
+        <div key={location.pathname} className="mx-auto max-w-5xl animate-fade-in">{children}</div>
       </main>
 
-      {/* Mobile bottom nav — без «Устройства» и «Рефералка» (доступны с Главной/Подписки) */}
-      <nav className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-around border-t border-[var(--border)] bg-bg px-2 pb-2 pt-2 shadow-[0_-4px_16px_-8px_rgba(0,0,0,0.3)] md:hidden">
-        {navItems
-          .filter(({ to }) => to !== "/devices" && to !== "/referral")
-          .map(({ to, icon: Icon, labelKey }) => (
+      {/* Mobile bottom nav — компактная нижняя навигация для важных разделов */}
+      <nav className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-around border-t border-[var(--border)] bg-bg/90 px-1.5 pb-2 pt-2 backdrop-blur-xl shadow-[0_-8px_24px_-14px_rgba(0,0,0,0.45)] md:hidden">
+        {navItems.map(({ to, icon: Icon, labelKey }) => (
           <NavLink
             key={to}
             to={to}
             end={to === "/"}
             className={({ isActive }) =>
               clsx(
-                "flex flex-1 flex-col items-center gap-1 rounded-lg py-1.5 text-[10px] font-medium transition-colors",
-                isActive ? "text-accent" : "text-fg-subtle",
+                "flex flex-1 flex-col items-center gap-1 rounded-xl py-1.5 text-[10px] font-semibold transition-all",
+                isActive ? "bg-accent-subtle text-accent" : "text-fg-subtle",
               )
             }
           >
