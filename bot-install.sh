@@ -2,7 +2,7 @@
 #
 # RemnaShop — установка кабинета+админки на сервере С БОТОМ (co-located) одной командой.
 #
-#   curl -fsSL https://raw.githubusercontent.com/velamaker/remnashop-cabinet/main/bot-install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/ander1k/remnashop-cabinet/agent/uniq-style-redesign/bot-install.sh | sudo bash
 #
 # Тонкая обёртка: бот уже установлен (значит Docker есть — НЕ ставим его заново).
 # Скрипт только тянет код в каталог бота и запускает install.sh (он допишет
@@ -14,8 +14,9 @@
 
 set -euo pipefail
 
-REPO_URL="https://github.com/velamaker/remnashop-cabinet"
-BRANCH="${BRANCH:-main}"
+REPO_SLUG="${REPO_SLUG:-ander1k/remnashop-cabinet}"
+REPO_URL="https://github.com/${REPO_SLUG}"
+BRANCH="${BRANCH:-agent/uniq-style-redesign}"
 # Пиннинг supply-chain: REF может быть веткой, тегом или commit-SHA (воспроизводимость).
 # Для проверки целостности задайте EXPECT_SHA256 (sha256 тарбола) — тогда установка
 # прервётся при несовпадении. По умолчанию — ветка (как раньше), но рекомендуется тег/SHA.

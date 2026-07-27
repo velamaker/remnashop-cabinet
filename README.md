@@ -13,7 +13,7 @@
 
 <br/>
 
-[![версия](https://img.shields.io/github/v/tag/velamaker/remnashop-cabinet?sort=semver&label=версия&color=7c5cff&style=flat-square)](https://github.com/velamaker/remnashop-cabinet/tags)
+[![версия](https://img.shields.io/github/v/tag/ander1k/remnashop-cabinet?sort=semver&label=версия&color=7c5cff&style=flat-square)](https://github.com/ander1k/remnashop-cabinet/tags)
 &nbsp;[![лицензия](https://img.shields.io/badge/лицензия-MIT-22c55e?style=flat-square)](LICENSE)
 
 </div>
@@ -47,7 +47,7 @@
 Самый простой вариант. Одна команда на сервере бота:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/velamaker/remnashop-cabinet/main/bot-install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ander1k/remnashop-cabinet/agent/uniq-style-redesign/bot-install.sh | sudo bash
 ```
 
 Спросит адрес кабинета (например `https://cabinet.example.com`) и способ входа. Сертификат и публикация — автоматически. От вас нужна только DNS-запись `cabinet.example.com` → IP сервера.
@@ -59,13 +59,13 @@ curl -fsSL https://raw.githubusercontent.com/velamaker/remnashop-cabinet/main/bo
 **1. На сервере бота** (открываем боту приём запросов от кабинета):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/velamaker/remnashop-cabinet/main/bot-install.sh | sudo bash -s -- api
+curl -fsSL https://raw.githubusercontent.com/ander1k/remnashop-cabinet/agent/uniq-style-redesign/bot-install.sh | sudo bash -s -- api
 ```
 
 **2. На чистом сервере кабинета** (хватит 2 ГБ RAM):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/velamaker/remnashop-cabinet/main/site-install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ander1k/remnashop-cabinet/agent/uniq-style-redesign/site-install.sh | sudo bash
 ```
 
 Спросит домен API бота и адрес кабинета. HTTPS поднимется сам.
@@ -103,7 +103,7 @@ cd /opt/remnashop
 **Отдельный сервер кабинета** (сценарий Б, шаг 2) — просто повторите команду установки, она подтянет свежую версию:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/velamaker/remnashop-cabinet/main/site-install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ander1k/remnashop-cabinet/agent/uniq-style-redesign/site-install.sh | sudo bash
 ```
 
 <details>
@@ -176,8 +176,9 @@ cabinet/                ← веб-кабинет (React + Vite, nginx)
 **Ручная установка (без curl):**
 
 ```bash
-git clone https://github.com/velamaker/remnashop-cabinet.git
+git clone https://github.com/ander1k/remnashop-cabinet.git
 cd remnashop-cabinet
+git checkout agent/uniq-style-redesign
 ./install.sh        # бот + кабинет на одной машине
 ./install.sh api    # на сервере бота: только API
 ./install.sh site   # кабинет на отдельной машине

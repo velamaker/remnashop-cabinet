@@ -22,7 +22,7 @@ from src.infrastructure.taskiq.broker import broker
 # Репо форка. Совпадает с admin/updates.py; override через env UPDATE_REPO.
 # ВАЖНО: при переименовании репо GitHub отдаёт 301 — поэтому клиент ниже идёт с
 # follow_redirects=True, иначе теги не подтянутся и уведомление не придёт.
-REPO = (os.environ.get("UPDATE_REPO") or "velamaker/remnashop-cabinet").strip()
+REPO = (os.environ.get("UPDATE_REPO") or "ander1k/remnashop-cabinet").strip()
 ASSETS_DIR = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets"))
 STATE_PATH = ASSETS_DIR / "update_state.json"
 VERSION_PATH = Path("/opt/remnashop/VERSION")
