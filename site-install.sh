@@ -2,7 +2,7 @@
 #
 # RemnaShop — установка кабинета на ОТДЕЛЬНОМ сервере ОДНОЙ командой.
 #
-#   curl -fsSL https://raw.githubusercontent.com/velamaker/remnashop-cabinet/main/site-install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/ander1k/remnashop-cabinet/main/site-install.sh | bash
 #
 # Делает на чистом сервере ВСЁ сам:
 #   1. Docker + Compose            (если нет)
@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-REPO_URL="https://github.com/velamaker/remnashop-cabinet"
+REPO_URL="https://github.com/ander1k/remnashop-cabinet"
 BRANCH="${BRANCH:-main}"
 # Пиннинг supply-chain: REF = ветка/тег/commit-SHA; EXPECT_SHA256 — проверка целостности.
 REF="${REF:-$BRANCH}"

@@ -13,7 +13,7 @@
 
 <br/>
 
-[![версия](https://img.shields.io/github/v/tag/velamaker/remnashop-cabinet?sort=semver&label=версия&color=7c5cff&style=flat-square)](https://github.com/velamaker/remnashop-cabinet/tags)
+[![версия](https://img.shields.io/github/v/tag/ander1k/remnashop-cabinet?sort=semver&label=версия&color=7c5cff&style=flat-square)](https://github.com/ander1k/remnashop-cabinet/tags)
 &nbsp;[![лицензия](https://img.shields.io/badge/лицензия-MIT-22c55e?style=flat-square)](LICENSE)
 
 </div>
@@ -24,10 +24,17 @@
 
 У вас уже есть бот RemnaShop, который продаёт VPN в Telegram. **Vela** добавляет к нему две вещи:
 
-- 🌐 **Кабинет** — сайт, где пользователь видит подписку, продлевает её, платит, подключает устройства и пишет в поддержку. Работает и в браузере, и как приложение на телефоне.
-- 🛠 **Админку** — панель, где вы управляете всем сервисом: пользователи, тарифы, оплаты, промокоды, рассылки, оформление.
+- 🌐 **Кабинет** — современный веб-интерфейс для подписки, оплаты, устройств, поддержки и личного аккаунта. Работает в браузере и как PWA на телефоне.
+- 🛠 **Админка** — панель управления сервисом: пользователи, тарифы, оплаты, промокоды, рассылки, оформление и настройки.
 
 Ставится **поверх** бота и ничего в нём не ломает: конфигурацию и данные бота не трогает.
+
+### Что сейчас в проекте
+
+- React + Vite + Tailwind для фронтенда кабинета
+- FastAPI-расширение для API и административных сценариев
+- Docker Compose для запуска всего стека
+- Поддержка локальной разработки, деплоя и обновления на сервере
 
 <div align="center">
 <img src="docs/screenshots/home.svg" alt="Кабинет — главная" width="49%"/>
@@ -40,6 +47,8 @@
 
 Нужен **уже работающий бот RemnaShop** (его `.env` заполнен) и **Docker**. Дальше всё скачается и настроится само — скрипт задаст пару вопросов.
 
+### Быстрая установка
+
 Выберите свой случай:
 
 ### 🅰️ Кабинет на том же сервере, что и бот
@@ -47,7 +56,7 @@
 Самый простой вариант. Одна команда на сервере бота:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/velamaker/remnashop-cabinet/main/bot-install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ander1k/remnashop-cabinet/main/bot-install.sh | sudo bash
 ```
 
 Спросит адрес кабинета (например `https://cabinet.example.com`) и способ входа. Сертификат и публикация — автоматически. От вас нужна только DNS-запись `cabinet.example.com` → IP сервера.
@@ -59,13 +68,13 @@ curl -fsSL https://raw.githubusercontent.com/velamaker/remnashop-cabinet/main/bo
 **1. На сервере бота** (открываем боту приём запросов от кабинета):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/velamaker/remnashop-cabinet/main/bot-install.sh | sudo bash -s -- api
+curl -fsSL https://raw.githubusercontent.com/ander1k/remnashop-cabinet/main/bot-install.sh | sudo bash -s -- api
 ```
 
 **2. На чистом сервере кабинета** (хватит 2 ГБ RAM):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/velamaker/remnashop-cabinet/main/site-install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ander1k/remnashop-cabinet/main/site-install.sh | sudo bash
 ```
 
 Спросит домен API бота и адрес кабинета. HTTPS поднимется сам.
@@ -103,7 +112,7 @@ cd /opt/remnashop
 **Отдельный сервер кабинета** (сценарий Б, шаг 2) — просто повторите команду установки, она подтянет свежую версию:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/velamaker/remnashop-cabinet/main/site-install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ander1k/remnashop-cabinet/main/site-install.sh | sudo bash
 ```
 
 <details>
@@ -135,6 +144,24 @@ cd /opt/remnashop
 Настройки хранятся в томе `assets/` и переживают перезапуск контейнеров.
 
 ---
+
+## Локальная разработка
+
+### Frontend (кабинет)
+
+```bash
+git clone https://github.com/ander1k/remnashop-cabinet.git
+cd remnashop-cabinet/cabinet
+npm install
+npm run dev
+```
+
+### Сборка
+
+```bash
+cd cabinet
+npm run build
+```
 
 ## Живой пример
 
@@ -176,7 +203,7 @@ cabinet/                ← веб-кабинет (React + Vite, nginx)
 **Ручная установка (без curl):**
 
 ```bash
-git clone https://github.com/velamaker/remnashop-cabinet.git
+git clone https://github.com/ander1k/remnashop-cabinet.git
 cd remnashop-cabinet
 ./install.sh        # бот + кабинет на одной машине
 ./install.sh api    # на сервере бота: только API
@@ -186,6 +213,28 @@ cd remnashop-cabinet
 **Безопасность:** `.env` в `.gitignore`, секреты генерируются `openssl rand`, сервисы только на `127.0.0.1`, админ-доступ fail-closed.
 
 </details>
+
+---
+
+## GitHub и публикация
+
+Если хотите сохранить свой вариант проекта в GitHub:
+
+```bash
+git init
+git add .
+git commit -m "Initial commit"
+git branch -M main
+git remote add origin https://github.com/ВАШ_ЛОГИН/ВАШ_РЕПОЗИТОРИЙ.git
+git push -u origin main
+```
+
+Для новой ветки:
+
+```bash
+git checkout -b my-new-branch
+git push -u origin my-new-branch
+```
 
 ---
 

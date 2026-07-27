@@ -19,7 +19,7 @@ from ._common import AdminUser
 
 router = APIRouter(prefix="/updates", tags=["Admin - Updates"])
 
-REPO = (os.environ.get("UPDATE_REPO") or "velamaker/remnashop-cabinet").strip()
+REPO = (os.environ.get("UPDATE_REPO") or "ander1k/remnashop-cabinet").strip()
 VERSION_PATH = Path("/opt/remnashop/VERSION")
 CHANGELOG_PATH = Path("/opt/remnashop/CHANGELOG.md")
 

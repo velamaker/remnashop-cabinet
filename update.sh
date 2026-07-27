@@ -200,7 +200,7 @@ else
     # Тарбол-установка (ставили по one-liner, без git): обновляем код свежим архивом
     # и перезапускаемся на нём. Архив GitHub содержит ТОЛЬКО отслеживаемые файлы —
     # .env и рантайм-конфиги (в .gitignore) в него не входят → остаются нетронутыми.
-    REPO_SLUG="${REPO_SLUG:-velamaker/remnashop-cabinet}"
+    REPO_SLUG="${REPO_SLUG:-ander1k/remnashop-cabinet}"
     UPD_BRANCH="${UPD_BRANCH:-main}"
     if [ "${_SELF_UPDATED:-0}" != 1 ]; then
       info "Тарбол-установка — тяну свежий код (архив ${REPO_SLUG}@${UPD_BRANCH})…"
