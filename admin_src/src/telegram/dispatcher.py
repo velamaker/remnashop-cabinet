@@ -27,6 +27,14 @@ def _include_overlay_routers(dispatcher: Dispatcher) -> None:
     except Exception as exc:  # noqa: BLE001 — не роняем старт из-за опциональной фичи
         logger.info(f"Overlay abuse router skipped: {exc}")
 
+    try:
+        from src.telegram.routers.overlay_gift import router as gift_router
+
+        dispatcher.include_router(gift_router)
+        logger.info("Overlay gift router attached")
+    except Exception as exc:  # noqa: BLE001 — подарки опциональны, старт не роняем
+        logger.info(f"Overlay gift router skipped: {exc}")
+
 
 def get_dispatcher(config: AppConfig) -> Dispatcher:
     storage = RedisStorage.from_url(

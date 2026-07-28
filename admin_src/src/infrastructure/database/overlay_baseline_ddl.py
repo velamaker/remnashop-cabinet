@@ -207,6 +207,22 @@ BASELINE_DDL = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS ix_balance_topups_user ON balance_topups (user_id)",
+    # Подарочная подписка, оплаченная через шлюз (overlay_gift). Строка пишется до
+    # отдачи URL шлюза; на вебхуке по ней выпускается код и ставится issued.
+    """
+    CREATE TABLE IF NOT EXISTS gift_payments (
+        payment_id    UUID PRIMARY KEY,
+        user_id       INTEGER       NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        plan_snapshot JSONB         NOT NULL,
+        duration_days INTEGER       NOT NULL,
+        amount        NUMERIC(12,2) NOT NULL,
+        code          VARCHAR(64),
+        issued        BOOLEAN       NOT NULL DEFAULT false,
+        created_at    TIMESTAMPTZ   NOT NULL DEFAULT now(),
+        issued_at     TIMESTAMPTZ
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_gift_payments_user ON gift_payments (user_id)",
     # История уведомлений админам (web-push «новый тикет» и т.п.). Пишется в
     # services/overlay_push.py::push_admins_standalone при каждой отправке админам,
     # даже если ни одного устройства не подписано — чтобы владелец видел ленту.

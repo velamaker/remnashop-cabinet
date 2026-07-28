@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 # OVERLAY: ветка пополнения ₽-баланса (зачисление на вебхуке). Ленивого импорта
 # не требуется — overlay_topup не тянет application-слой на верхнем уровне.
+from src.infrastructure.services.overlay_gift import try_issue_gift
 from src.infrastructure.services.overlay_topup import try_credit_topup
 
 from src.application.common import (
@@ -454,6 +455,30 @@ class ProcessPayment(Interactor[ProcessPaymentDto, None]):
             )
             logger.info(
                 f"Balance topup credited '{credited['total']}' for user {user.log}, "
+                f"transaction '{transaction.payment_id}'"
+            )
+            return
+
+        # OVERLAY: подарок, оплаченный через шлюз. Если платёж помечен в
+        # gift_payments — выпускаем код и ВЫХОДИМ: подписку покупателю не выдаём,
+        # событие покупки/рефералку/кэшбэк не трогаем. Идемпотентно (флаг issued).
+        gift = await try_issue_gift(self.session, transaction.payment_id)
+        if gift is not None:
+            await self.notifier.notify_user(
+                user,
+                payload=MessagePayloadDto(
+                    i18n_key="raw-message",
+                    i18n_kwargs={
+                        "content": (
+                            f"🎁 Подарок оплачен: {gift['plan_name']} на {gift['duration_days']} дн.\n"
+                            f"Код для получателя:\n<code>{gift['code']}</code>\n\n"
+                            "Он вводит его в разделе «Промокод»."
+                        )
+                    },
+                ),
+            )
+            logger.info(
+                f"Gift issued '{gift['code']}' for user {user.log}, "
                 f"transaction '{transaction.payment_id}'"
             )
             return

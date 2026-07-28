@@ -264,23 +264,33 @@ async def my_servers(
 
     if active:
         # Свои хосты по подписке (сквады), заглушки скрыты, адреса отдаём (это его сеть).
-        allowed_inbounds: set[str] | None = None
+        # inbound -> сквады ЮЗЕРА, которые этот inbound дают. Нужна именно карта, а не
+        # плоское множество: панель прячет хост от конкретных сквадов
+        # (host.excludedInternalSquads), и хост виден, только если хотя бы один сквад,
+        # через который юзер получил inbound, НЕ в списке исключений. Иначе кабинет
+        # показывал сервер, которого нет в подписке (кейс: Reserve-1GB и «Finland V»).
+        inbound_squads: dict[str, set[str]] | None = None
         if cfg["bind_to_subscription"]:
             subscription = await subscription_dao.get_current(user.id)
-            squad_ids = {str(s) for s in (getattr(subscription, "internal_squads", None) or [])} if subscription else set()
-            allowed_inbounds = set()
+            squad_ids = (
+                {str(s).lower() for s in (getattr(subscription, "internal_squads", None) or [])}
+                if subscription
+                else set()
+            )
+            inbound_squads = {}
             if squad_ids:
                 try:
                     sres = await sdk.internal_squads.get_internal_squads()
                     for sq in getattr(sres, "internal_squads", None) or []:
-                        if str(getattr(sq, "uuid", "") or "") in squad_ids:
+                        squad_uuid = str(getattr(sq, "uuid", "") or "").lower()
+                        if squad_uuid in squad_ids:
                             for inb in getattr(sq, "inbounds", None) or []:
                                 iu = str(getattr(inb, "uuid", inb) or "")
                                 if iu:
-                                    allowed_inbounds.add(iu)
+                                    inbound_squads.setdefault(iu, set()).add(squad_uuid)
                 except Exception:
-                    allowed_inbounds = set()  # не смогли — безопасный фолбэк: ноды ниже
-        if allowed_inbounds is not None and not allowed_inbounds:
+                    inbound_squads = {}  # не смогли — безопасный фолбэк: ноды ниже
+        if inbound_squads is not None and not inbound_squads:
             # Привязка включена, но сквады/инбаунды не вычислили — безопасный фолбэк: ноды.
             return _finalize(node_items)
         items = []
@@ -288,8 +298,15 @@ async def my_servers(
             b = build_host(h, reveal=True)
             if not b or b["_service"]:
                 continue
-            if allowed_inbounds is not None and b["_inbound"] not in allowed_inbounds:
-                continue
+            if inbound_squads is not None:
+                granting = inbound_squads.get(b["_inbound"])
+                if not granting:
+                    continue
+                excluded = {
+                    str(x).lower() for x in (getattr(h, "excluded_internal_squads", None) or [])
+                }
+                if excluded and granting <= excluded:
+                    continue  # хост спрятан от всех сквадов юзера, дающих этот inbound
             items.append({k: v for k, v in b.items() if not k.startswith("_")})
         return _finalize(items or node_items)
 
