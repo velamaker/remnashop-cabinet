@@ -464,6 +464,15 @@ class ProcessPayment(Interactor[ProcessPaymentDto, None]):
         # событие покупки/рефералку/кэшбэк не трогаем. Идемпотентно (флаг issued).
         gift = await try_issue_gift(self.session, transaction.payment_id)
         if gift is not None:
+            # Убираем сообщение бота с кнопкой «Перейти к оплате»: счёт уже оплачен,
+            # а кнопка на нём остаётся рабочей на вид и путает покупателя.
+            if gift.get("chat_id") and gift.get("message_id"):
+                try:
+                    await self.notifier.delete_notification(
+                        chat_id=int(gift["chat_id"]), message_id=int(gift["message_id"])
+                    )
+                except Exception as exc:  # noqa: BLE001 — не мешаем выдаче кода
+                    logger.warning(f"Gift: не удалил сообщение с оплатой: {exc}")
             await self.notifier.notify_user(
                 user,
                 payload=MessagePayloadDto(
@@ -475,6 +484,9 @@ class ProcessPayment(Interactor[ProcessPaymentDto, None]):
                             "Он вводит его в разделе «Промокод»."
                         )
                     },
+                    # ОБЯЗАТЕЛЬНО: по умолчанию у payload delete_after=5 — сообщение с
+                    # кодом самоуничтожалось через 5 секунд, и код терялся навсегда.
+                    delete_after=None,
                 ),
             )
             logger.info(

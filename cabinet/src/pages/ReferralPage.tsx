@@ -1,3 +1,4 @@
+import { GiftCard } from "@/components/GiftCard";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Copy, Check, Users, Gift, Mail, CreditCard, ArrowRight, QrCode, X, Coins } from "lucide-react";
@@ -274,6 +275,10 @@ export default function ReferralPage() {
           {program.reward_levels.length > 0 && <RewardLevelsCard program={program} />}
         </>
       )}
+
+      {/* Подарить подписку — рядом с приглашением друзей: сценарий тот же, «дать
+          доступ другому человеку». На странице подписки блок больше не дублируем. */}
+      <GiftCard />
     </div>
   );
 }

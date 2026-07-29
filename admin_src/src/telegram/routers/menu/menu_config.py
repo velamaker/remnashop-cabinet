@@ -25,6 +25,10 @@ MENU_DEFAULTS: dict[str, bool] = {
     "connect_miniapp": False,
     "connect_url": False,
     "remna_sub": True,
+    # OVERLAY: кнопка «Подарить подписку» (открывает выбор тарифа, см. overlay_gift).
+    # Не кнопка доступа — в DEFAULT_ORDER намеренно НЕ добавлена: её место в меню
+    # фиксировано, настраиваются только тумблер, текст и цвет.
+    "gift": True,
 }
 
 # Порядок кнопок в меню по умолчанию (как было зашито в dialog.py).
@@ -66,6 +70,7 @@ DEFAULT_TEXTS: dict[str, str] = {
     "nav_invite": "🎁 Пригласить",
     "nav_support": "💬 Поддержка",
     "nav_dashboard": "⚙️ Панель управления",
+    "gift": "🎁 Подарить подписку",
 }
 
 # Цвета кнопок (Telegram/aiogram ButtonStyle). Пусто/None = дефолт кнопки.

@@ -413,6 +413,49 @@ export default function AdminMenuPage() {
         </div>
 
         <p className="mb-1 mt-4 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">
+          Подарки
+        </p>
+        <div className="space-y-1.5">
+          {(() => {
+            const on = cfg.gift !== false;
+            const isOpen = expanded === "gift";
+            const summary = summaryLabel(cfg.texts?.gift ?? "", cfg.colors?.gift ?? "");
+            return (
+              <div className={clsx("overflow-hidden rounded-xl border border-[var(--border)] bg-bg", !on && "opacity-60")}>
+                <div className="flex items-center gap-3 px-3 py-2.5">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={() => setCfg({ ...cfg, gift: !on })}
+                    className="h-4 w-4 shrink-0 cursor-pointer accent-[var(--accent)]"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <span className="text-sm font-semibold text-fg">Подарить подписку</span>
+                    <p className="mt-0.5 truncate text-xs text-fg-muted">
+                      Открывает выбор тарифа прямо в боте. То же самое доступно командой /gift.
+                    </p>
+                  </div>
+                  {on && (
+                    <button
+                      type="button"
+                      onClick={() => toggleExpanded("gift")}
+                      aria-label="Текст и цвет"
+                      className="flex shrink-0 items-center gap-1.5 rounded-lg border border-border-subtle px-2 py-1.5 text-fg-muted transition-colors hover:bg-bg-overlay hover:text-fg"
+                    >
+                      {summary && <span className="text-[11px] text-fg-subtle">{summary}</span>}
+                      <ChevronDown className={clsx("h-4 w-4 transition-transform", isOpen && "rotate-180")} />
+                    </button>
+                  )}
+                </div>
+                {on && isOpen && (
+                  <div className="border-t border-border-subtle px-3 pb-3 pt-3">{renderStyleEditor("gift")}</div>
+                )}
+              </div>
+            );
+          })()}
+        </div>
+
+        <p className="mb-1 mt-4 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">
           Навигация
         </p>
         <div className="space-y-1.5">

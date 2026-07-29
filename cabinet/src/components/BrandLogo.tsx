@@ -13,8 +13,8 @@ export function BrandLogo({
   size?: number;
   className?: string;
 }) {
-  const { appearance } = useBranding();
-  const logo = appearance?.logo_url;
+  const { logoSrc } = useBranding();
+  const logo = logoSrc;
 
   if (logo) {
     return (

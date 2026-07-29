@@ -67,8 +67,13 @@ def get_bg_manager_factory(dispatcher: Dispatcher) -> BgManagerFactory:
 def setup_dispatcher(dispatcher: Dispatcher) -> None:
     setup_middlewares(dispatcher)
     setup_global_filters(dispatcher)
-    setup_routers(dispatcher)
+    # ВАЖНО: overlay-роутеры подключаем ДО базовых. Порядок регистрации = порядок
+    # обхода: окно главного меню (aiogram-dialog) ловит и сообщения (MessageInput →
+    # «умный поиск», отвечал «пользователь не найден» на /gift), и колбэки без
+    # intent-id (перерисовывал меню вместо нашего шага). Роутеры фильтруют строго
+    # свои апдейты (команда + префикс колбэка), поэтому базовые сценарии не задеты.
     _include_overlay_routers(dispatcher)
+    setup_routers(dispatcher)
     logger.info("Dispatcher layers have been configured")
 
 

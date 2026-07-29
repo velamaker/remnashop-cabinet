@@ -37,7 +37,7 @@ from .getters import (
     invite_getter,
     menu_getter as _base_menu_getter,
 )
-from .menu_config import NAV_KEYS, load_menu_config
+from .menu_config import DEFAULT_TEXTS, NAV_KEYS, load_menu_config
 from .handlers import (
     on_device_delete_all_confirm,
     on_device_delete_confirm,
@@ -51,6 +51,19 @@ from .handlers import (
     on_withdraw_points,
     show_reason,
 )
+
+# OVERLAY: открытие подарков из главного меню. Импорт защищённый — если фичу
+# вырезали, меню обязано работать как раньше (кнопка просто не появится).
+try:
+    from src.telegram.routers.overlay_gift import open_gift_from_menu
+
+    _GIFT_AVAILABLE = True
+except Exception:  # noqa: BLE001
+    _GIFT_AVAILABLE = False
+
+    async def open_gift_from_menu(callback, widget, dialog_manager) -> None:  # type: ignore[misc]
+        await callback.answer()
+
 
 custom_buttons = (
     build_buttons_row(1, text_on_click=on_text_button_click),
@@ -102,6 +115,12 @@ async def menu_getter(i18n: FromDishka[TranslatorRunner], **kwargs):
     for navkey, i18nkey in NAV_KEYS.items():
         data[f"{navkey}_text"] = texts_cfg.get(navkey) or i18n.get(i18nkey)
         data[f"{navkey}_color"] = colors_cfg.get(navkey)
+
+    # OVERLAY: кнопка «Подарить подписку». i18n-ключа в ftl нет намеренно — текст
+    # берём из админки, иначе из дефолта (Fluent на неизвестный ключ вернул бы сам ключ).
+    data["menu_gift"] = bool(data.get("menu_gift")) and _GIFT_AVAILABLE
+    data["gift_text"] = texts_cfg.get("gift") or DEFAULT_TEXTS["gift"]
+    data["gift_color"] = colors_cfg.get("gift")
 
     items: list[dict] = []
     if web_enabled:
@@ -267,6 +286,16 @@ menu = Window(
             id="support",
             url=Format("{support_url}"),
             style=_NavColorStyle("nav_support"),
+        ),
+    ),
+    # OVERLAY: «Подарить подписку» — тумблер/текст/цвет в админке (ключ gift).
+    Row(
+        Button(
+            text=Format("{gift_text}"),
+            id="gift_open",
+            on_click=open_gift_from_menu,
+            when=F["menu_gift"],
+            style=_NavColorStyle("gift"),
         ),
     ),
     *custom_buttons,

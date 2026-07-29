@@ -7,6 +7,7 @@ export interface MenuConfig {
   connect_miniapp: boolean; // «Подключиться» → /devices в Mini App
   connect_url: boolean; // «Подключиться» → /devices ссылкой
   remna_sub: boolean; // «Подписка (резерв)» — стандартная сабка Remnawave
+  gift: boolean; // «Подарить подписку» — открывает выбор тарифа прямо в боте
   order: string[]; // порядок кнопок (список ключей сверху вниз)
   texts?: Record<string, string>; // кастомные подписи по ключу (эмодзи ок)
   colors?: Record<string, string>; // цвет по ключу: primary|success|danger

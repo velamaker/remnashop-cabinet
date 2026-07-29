@@ -303,6 +303,7 @@ export default function DashboardPage() {
       <ServerStatusCard />
 
       <PromocodeCard onActivated={reload} />
+
     </div>
   );
 }

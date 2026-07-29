@@ -30,6 +30,8 @@ class MenuConfigUpdate(BaseModel):
     connect_miniapp: Optional[bool] = None
     connect_url: Optional[bool] = None
     remna_sub: Optional[bool] = None
+    # OVERLAY: кнопка «Подарить подписку» (не кнопка доступа — вне порядка).
+    gift: Optional[bool] = None
     # Порядок кнопок (список ключей). Нормализуется в menu_config (чужие ключи и
     # дубли отсекаются, недостающие добиваются в дефолтном порядке).
     order: Optional[list[str]] = None

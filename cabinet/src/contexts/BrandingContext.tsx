@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -23,6 +24,10 @@ interface BrandingValue {
   /** Вход через Telegram по OIDC включён на боте (иначе — классический виджет). */
   telegramOidcEnabled: boolean;
   appearance: Appearance | null;
+  /** Бэкенд бота не отвечает: показываем заглушку, бренд берём из кэша. */
+  offline: boolean;
+  /** Логотип: из кэша, если сервер лежит. */
+  logoSrc: string | null;
   /** Перечитать оформление с сервера и применить (после сохранения в админке). */
   refresh: () => Promise<void>;
 }
@@ -78,25 +83,97 @@ export function applyBackground(background: string | null) {
   root.setProperty("--border-subtle", `rgba(${fg}, 0.09)`);
 }
 
+// Кэш оформления. Когда бэкенд бота отвалился, кабинет всё равно должен выглядеть
+// своим: название сервиса и логотип берём из последнего успешного ответа. Логотип
+// храним data-URL'ом — ссылка на картинку ведёт на тот же упавший сервер.
+const CACHE_KEY = "cabinet-appearance";
+const LOGO_KEY = "cabinet-appearance-logo";
+
+function readCache(): Appearance | null {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    return raw ? (JSON.parse(raw) as Appearance) : null;
+  } catch {
+    return null;
+  }
+}
+
+function readLogo(): string | null {
+  try {
+    return localStorage.getItem(LOGO_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Складывает логотип в кэш как data-URL (один раз на новый адрес картинки). */
+async function cacheLogo(url: string | null | undefined): Promise<void> {
+  if (!url) return;
+  try {
+    if (localStorage.getItem(LOGO_KEY + ":src") === url && readLogo()) return;
+    const res = await fetch(url, { cache: "force-cache" });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    if (blob.size > 400_000) return; // в localStorage большой картинке не место
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+    localStorage.setItem(LOGO_KEY, dataUrl);
+    localStorage.setItem(LOGO_KEY + ":src", url);
+  } catch {
+    /* кэш логотипа — не критично */
+  }
+}
+
 export function BrandingProvider({ children }: { children: ReactNode }) {
-  const [appearance, setAppearance] = useState<Appearance | null>(null);
+  // Стартуем сразу с кэша: пока идёт запрос (или если он упадёт) бренд уже на месте.
+  const [appearance, setAppearance] = useState<Appearance | null>(() => readCache());
+  const [offline, setOffline] = useState(false);
+  const failures = useRef(0);
   const { resolved } = useTheme();  // "dark" | "light"
   const { lang, setLang } = useI18n();
 
   const refresh = useCallback(async () => {
     try {
       const a = await appearanceApi.get();
+      failures.current = 0;
+      setOffline(false);
       setAppearance(a);
       applyAccent(a.accent);
       if (a.brand_name) document.title = `${a.brand_name} — ${translate("common.personalCabinet")}`;
+      try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify(a));
+      } catch {
+        /* приватный режим браузера — переживём */
+      }
+      void cacheLogo(a.logo_url);
     } catch {
-      // Оформление не критично — при ошибке остаются цвета темы.
+      // Бэкенд бота не ответил. Оформление берём из кэша, а после второй неудачи
+      // подряд показываем заглушку «идут технические работы» (одиночный сбой сети
+      // не должен выкидывать пользователя из кабинета).
+      const cached = readCache();
+      if (cached) {
+        setAppearance((prev) => prev ?? cached);
+        applyAccent(cached.accent);
+      }
+      failures.current += 1;
+      if (failures.current >= 2) setOffline(true);
     }
   }, []);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Пока бэкенд молчит — тихо пробуем снова; как ответит, заглушка уйдёт сама.
+  useEffect(() => {
+    if (!offline) return;
+    const id = setInterval(refresh, 15000);
+    return () => clearInterval(id);
+  }, [offline, refresh]);
 
   // Если активный язык отключён в оформлении — возвращаемся к русскому.
   useEffect(() => {
@@ -116,8 +193,17 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
   }, [appearance, resolved]);
 
   const value = useMemo(
-    () => ({ brandName: appearance?.brand_name || DEFAULT_BRAND, supportUsername: appearance?.support_username ?? null, telegramOidcEnabled: appearance?.telegram_oidc_enabled ?? false, appearance, refresh }),
-    [appearance, refresh],
+    () => ({
+      brandName: appearance?.brand_name || DEFAULT_BRAND,
+      supportUsername: appearance?.support_username ?? null,
+      telegramOidcEnabled: appearance?.telegram_oidc_enabled ?? false,
+      appearance,
+      refresh,
+      offline,
+      // Когда сервер недоступен, ссылка на логотип не загрузится — отдаём копию.
+      logoSrc: (offline ? readLogo() : null) ?? appearance?.logo_url ?? null,
+    }),
+    [appearance, refresh, offline],
   );
 
   return <BrandingContext.Provider value={value}>{children}</BrandingContext.Provider>;

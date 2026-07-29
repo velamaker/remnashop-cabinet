@@ -1,6 +1,6 @@
 import { type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Wrench } from "lucide-react";
+import { Wrench, Loader2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useBranding } from "@/contexts/BrandingContext";
 import { BrandLogo } from "@/components/BrandLogo";
@@ -14,7 +14,7 @@ import { BrandLogo } from "@/components/BrandLogo";
  * кабинет открыт, а регистрация/оплата ограничиваются точечно на своих страницах.
  */
 export function MaintenanceGate({ children }: { children: ReactNode }) {
-  const { appearance } = useBranding();
+  const { appearance, offline, brandName } = useBranding();
   const { isAdmin, isLoading } = useAuth();
   const { pathname, search } = useLocation();
 
@@ -23,6 +23,31 @@ export function MaintenanceGate({ children }: { children: ReactNode }) {
     appearance?.maintenance === true && appearance?.maintenance_block_login !== false;
   const staffLogin =
     pathname === "/login" && new URLSearchParams(search).get("staff") === "1";
+
+  // Бэкенд бота не отвечает: показываем ту же заглушку, но с пометкой, что
+  // страница обновится сама. Название и логотип берём из кэша оформления —
+  // сервис остаётся узнаваемым, даже когда сервер молчит.
+  if (offline) {
+    return (
+      <div className="app-scroll flex min-h-[100dvh] flex-col items-center justify-center gap-5 bg-bg px-6 text-center">
+        <BrandLogo size={56} />
+        <p className="text-sm font-semibold text-fg">{brandName}</p>
+        <div className="grid h-12 w-12 place-items-center rounded-2xl bg-warning/15 text-warning">
+          <Wrench className="h-6 w-6" />
+        </div>
+        <div>
+          <h1 className="text-xl font-bold text-fg">Идут технические работы</h1>
+          <p className="mx-auto mt-2 max-w-sm text-sm text-fg-muted">
+            Сервис временно недоступен. Мы уже занимаемся этим — страница обновится сама,
+            закрывать её не нужно.
+          </p>
+        </div>
+        <span className="flex items-center gap-2 text-xs text-fg-subtle">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> проверяем связь
+        </span>
+      </div>
+    );
+  }
 
   if (!maintenance || isAdmin || isLoading || staffLogin) {
     return <>{children}</>;

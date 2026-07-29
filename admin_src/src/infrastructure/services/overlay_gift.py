@@ -49,16 +49,23 @@ async def record_gift_payment(
     plan_snapshot: dict[str, Any],
     duration_days: int,
     amount: Decimal,
+    chat_id: Optional[int] = None,
+    message_id: Optional[int] = None,
 ) -> None:
     """Фиксирует ожидаемый подарок ДО отдачи URL шлюза (код выпустим на вебхуке).
 
     Если эта запись не появится, платёж уйдёт как обычная покупка синтетического
     тарифа — поэтому вызывающий обязан не отдавать URL при ошибке.
+
+    chat_id/message_id — сообщение бота с кнопкой «Перейти к оплате». После оплаты
+    его надо убрать, иначе у покупателя навсегда висит кнопка на просроченный счёт.
+    Из кабинета их нет (там своя страница) — тогда просто NULL.
     """
     await session.execute(
         text(
-            "INSERT INTO gift_payments (payment_id, user_id, plan_snapshot, duration_days, amount) "
-            "VALUES (:pid, :uid, CAST(:snap AS JSONB), :days, :amt) "
+            "INSERT INTO gift_payments "
+            "(payment_id, user_id, plan_snapshot, duration_days, amount, chat_id, message_id) "
+            "VALUES (:pid, :uid, CAST(:snap AS JSONB), :days, :amt, :chat, :msg) "
             "ON CONFLICT (payment_id) DO NOTHING"
         ),
         {
@@ -67,6 +74,8 @@ async def record_gift_payment(
             "snap": json.dumps(plan_snapshot, ensure_ascii=False),
             "days": duration_days,
             "amt": amount,
+            "chat": chat_id,
+            "msg": message_id,
         },
     )
     await session.commit()
@@ -198,7 +207,7 @@ async def try_issue_gift(session: "AsyncSession", payment_id: UUID) -> Optional[
             text(
                 "UPDATE gift_payments SET issued = true, issued_at = now() "
                 "WHERE payment_id = :pid AND issued = false "
-                "RETURNING user_id, plan_snapshot, duration_days, amount"
+                "RETURNING user_id, plan_snapshot, duration_days, amount, chat_id, message_id"
             ),
             {"pid": str(payment_id)},
         )
@@ -217,6 +226,7 @@ async def try_issue_gift(session: "AsyncSession", payment_id: UUID) -> Optional[
         return None
 
     user_id, snapshot, duration_days, amount = row[0], row[1], row[2], row[3]
+    chat_id, message_id = row[4], row[5]
     if isinstance(snapshot, str):
         snapshot = json.loads(snapshot)
 
@@ -253,4 +263,7 @@ async def try_issue_gift(session: "AsyncSession", payment_id: UUID) -> Optional[
         "plan_name": (snapshot or {}).get("name", ""),
         "duration_days": duration_days,
         "amount": Decimal(str(amount)),
+        # Сообщение бота с кнопкой оплаты — вызывающий его удалит (может быть None).
+        "chat_id": chat_id,
+        "message_id": message_id,
     }

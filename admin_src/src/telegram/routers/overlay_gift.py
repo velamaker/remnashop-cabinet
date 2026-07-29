@@ -21,6 +21,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from dishka import FromDishka
 from dishka.integrations.aiogram import inject
+from dishka.integrations.aiogram_dialog import inject as dialog_inject
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,6 +50,29 @@ def _esc(value: Any) -> str:
     )
 
 
+# Человеческие названия шлюзов: display_name админ заполняет не всегда, а сырой
+# «YOOMONEY» на кнопке выглядит как техническая ошибка.
+_GATEWAY_LABELS: dict[str, str] = {
+    "YOOKASSA": "ЮKassa",
+    "YOOMONEY": "ЮMoney",
+    "CRYPTOMUS": "Cryptomus",
+    "HELEKET": "Heleket",
+    "CRYPTOPAY": "CryptoPay",
+    "FREEKASSA": "FreeKassa",
+    "PAYMASTER": "PayMaster",
+}
+
+
+def _gateway_name(gateway: Any) -> str:
+    """Подпись шлюза: имя из настроек → известное название → тип как есть."""
+    settings = getattr(gateway, "settings", None)
+    custom = getattr(settings, "display_name", None)
+    if custom:
+        return custom
+    raw = gateway.type.value
+    return _GATEWAY_LABELS.get(raw.upper(), raw)
+
+
 def _rub_price(duration: Any) -> Optional[Decimal]:
     price = next((p.price for p in duration.prices if p.currency == Currency.RUB), None)
     return Decimal(str(price)) if price is not None else None
@@ -57,6 +81,21 @@ def _rub_price(duration: Any) -> Optional[Decimal]:
 async def _find_plan(get_available_plans: GetAvailablePlans, user: Any, code: str) -> Optional[Any]:
     plans = await get_available_plans.system(user)
     return next((p for p in plans if p.public_code == code), None)
+
+
+GIFT_INTRO = (
+    "🎁 <b>Подарить подписку</b>\n\nВыберите тариф — получите код, который "
+    "получатель введёт в разделе «Промокод»."
+)
+
+
+def _plans_keyboard(plans: list[Any]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=p.name[:60], callback_data=f"{_PREFIX}:p:{p.public_code}")]
+            for p in plans[:12]
+        ]
+    )
 
 
 @router.message(Command("gift"))
@@ -73,15 +112,29 @@ async def cmd_gift(
     if not plans:
         await message.answer("Тарифы сейчас недоступны.")
         return
-    rows = [
-        [InlineKeyboardButton(text=p.name[:60], callback_data=f"{_PREFIX}:p:{p.public_code}")]
-        for p in plans[:12]
-    ]
-    await message.answer(
-        "🎁 <b>Подарить подписку</b>\n\nВыберите тариф — получите код, который "
-        "получатель введёт в разделе «Промокод».",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-    )
+    await message.answer(GIFT_INTRO, reply_markup=_plans_keyboard(plans))
+
+
+# Точка входа из ГЛАВНОГО МЕНЮ бота (кнопка «Подарить подписку», см. menu/dialog.py).
+# Шлём отдельным сообщением, а не окном диалога: дальше работают обычные callback'и
+# этого роутера, и окно меню остаётся на месте.
+@dialog_inject
+async def open_gift_from_menu(
+    callback: CallbackQuery,
+    widget: Any,
+    dialog_manager: Any,
+    get_available_plans: FromDishka[GetAvailablePlans],
+) -> None:
+    user = dialog_manager.middleware_data.get(USER_KEY)
+    if user is None or callback.message is None:
+        await callback.answer()
+        return
+    plans = await get_available_plans.system(user)
+    if not plans:
+        await callback.answer("Тарифы сейчас недоступны", show_alert=True)
+        return
+    await callback.message.answer(GIFT_INTRO, reply_markup=_plans_keyboard(plans))
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith(f"{_PREFIX}:p:"))
@@ -145,7 +198,9 @@ async def on_duration(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"💳 Оплатить · {gw.display_name or gw.type.value}"[:60],
+                    # Имя шлюза настраивается админом и лежит в settings, у самого
+                    # PaymentGatewayDto поля display_name нет.
+                    text=f"💳 Оплатить · {_gateway_name(gw)}"[:60],
                     callback_data=f"{_PREFIX}:g:{code}:{days}:{gw.type.value}",
                 )
             ]
@@ -251,6 +306,10 @@ async def on_pay_gateway(
             plan_snapshot=retort.dump(PlanSnapshotDto.from_plan(plan, days)),
             duration_days=days,
             amount=price,
+            # Это сообщение станет «Перейти к оплате» — после оплаты вебхук его удалит,
+            # иначе у покупателя висит кнопка на уже оплаченный счёт.
+            chat_id=callback.message.chat.id,
+            message_id=callback.message.message_id,
         )
     except Exception as exc:  # noqa: BLE001
         logger.critical(f"gift(bot): не смог пометить платёж '{payment.id}' подарком: {exc}")

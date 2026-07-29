@@ -219,10 +219,16 @@ BASELINE_DDL = (
         code          VARCHAR(64),
         issued        BOOLEAN       NOT NULL DEFAULT false,
         created_at    TIMESTAMPTZ   NOT NULL DEFAULT now(),
-        issued_at     TIMESTAMPTZ
+        issued_at     TIMESTAMPTZ,
+        chat_id       BIGINT,
+        message_id    BIGINT
     )
     """,
     "CREATE INDEX IF NOT EXISTS ix_gift_payments_user ON gift_payments (user_id)",
+    # Сообщение бота с кнопкой оплаты (удаляем после успешной оплаты). ALTER — для
+    # установок, где таблица создалась до появления колонок (миграция 0003).
+    "ALTER TABLE gift_payments ADD COLUMN IF NOT EXISTS chat_id BIGINT",
+    "ALTER TABLE gift_payments ADD COLUMN IF NOT EXISTS message_id BIGINT",
     # История уведомлений админам (web-push «новый тикет» и т.п.). Пишется в
     # services/overlay_push.py::push_admins_standalone при каждой отправке админам,
     # даже если ни одного устройства не подписано — чтобы владелец видел ленту.
