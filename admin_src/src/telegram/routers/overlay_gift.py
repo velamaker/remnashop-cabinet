@@ -12,13 +12,16 @@
 бот стартует без него).
 """
 
+from contextlib import suppress
 from decimal import Decimal
 from typing import Any, Optional
 
 from adaptix import Retort
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram_dialog import ShowMode, StartMode
 from dishka import FromDishka
 from dishka.integrations.aiogram import inject
 from dishka.integrations.aiogram_dialog import inject as dialog_inject
@@ -32,6 +35,17 @@ from src.application.use_cases.user.queries.plans import GetAvailablePlans
 from src.core.constants import USER_KEY
 from src.core.enums import Currency, PaymentGatewayType, PlanType, PurchaseType
 from src.infrastructure.services import overlay_gift
+
+# Единственное место, где подарки цепляются за базовый образ: состояние главного
+# меню. Берём его мягко — если в новой версии бота его переименуют или перенесут,
+# кнопка «Главное меню» просто не появится, а сами подарки продолжат работать.
+# Иначе падение импорта увело бы в defensive-include весь роутер (см. dispatcher.py)
+# и фича молча исчезла бы целиком после обновления.
+try:
+    from src.telegram.states import MainMenu as _MainMenu
+except Exception:  # noqa: BLE001 — обновление базы не должно ломать подарки
+    _MainMenu = None
+    logger.info("gift: состояние главного меню не найдено — кнопка «Главное меню» скрыта")
 
 router = Router(name="overlay_gift")
 
@@ -89,13 +103,78 @@ GIFT_INTRO = (
 )
 
 
+def _menu_row() -> list[list[InlineKeyboardButton]]:
+    """Прыжок в главное меню. «Назад» ходит по одному шагу, а из оплаты это долго.
+
+    Пустой список, если меню недоступно — кнопку, которая ничего не откроет,
+    показывать нельзя.
+    """
+    if _MainMenu is None:
+        return []
+    return [[InlineKeyboardButton(text="🏠 Главное меню", callback_data=f"{_PREFIX}:menu")]]
+
+
+def _nav_rows(back_callback: str) -> list[list[InlineKeyboardButton]]:
+    """Нижние кнопки любого шага подарка: шаг назад и выход в меню."""
+    return [[InlineKeyboardButton(text="◀️ Назад", callback_data=back_callback)]] + _menu_row()
+
+
 def _plans_keyboard(plans: list[Any]) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=p.name[:60], callback_data=f"{_PREFIX}:p:{p.public_code}")]
-            for p in plans[:12]
-        ]
-    )
+    rows = [
+        [InlineKeyboardButton(text=p.name[:60], callback_data=f"{_PREFIX}:p:{p.public_code}")]
+        for p in plans[:12]
+    ]
+    # На остальных экранах подарка «Назад» ведёт на шаг раньше, а этот шаг —
+    # первый: отсюда возвращаться некуда, кроме как выйти. Сообщение с тарифами
+    # висит поверх окна меню (оно никуда не девалось), поэтому «Назад» его
+    # убирает — и меню снова оказывается последним в чате.
+    rows += _nav_rows(f"{_PREFIX}:close")
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data == f"{_PREFIX}:menu")
+async def on_menu(callback: CallbackQuery, **data: Any) -> None:
+    """Открыть главное меню с любого шага подарка.
+
+    Открываем ровно так же, как это делает штатный /start базового бота
+    (routers/menu/handlers.py: start + RESET_STACK + DELETE_AND_SEND), чтобы после
+    обновления образа поведение осталось прежним.
+    """
+    manager = data.get("dialog_manager")
+    try:
+        if manager is None or _MainMenu is None:
+            raise RuntimeError("менеджер диалогов или состояние меню недоступны")
+        # Сообщение подарка НЕ трогаем: на шаге оплаты в нём живая ссылка на счёт,
+        # а после оплаты его удалит вебхук по сохранённому message_id.
+        # DELETE_AND_SEND убирает прежнее окно меню, чтобы в чате не осталось двух.
+        await manager.start(
+            state=_MainMenu.MAIN,
+            mode=StartMode.RESET_STACK,
+            show_mode=ShowMode.DELETE_AND_SEND,
+        )
+    except Exception as exc:  # noqa: BLE001 — кнопка не должна ронять подарки
+        logger.warning(f"gift: не смог открыть главное меню: {exc}")
+        with suppress(Exception):
+            await callback.answer("Не удалось открыть меню — нажмите /start", show_alert=True)
+        return
+    with suppress(Exception):
+        await callback.answer()
+
+
+@router.callback_query(F.data == f"{_PREFIX}:close")
+async def on_close(callback: CallbackQuery, **_data: Any) -> None:
+    """Выход из подарка на первом шаге: убираем сообщение со списком тарифов."""
+    if callback.message is not None:
+        try:
+            await callback.message.delete()
+        except TelegramBadRequest:
+            # Сообщение старше 48 часов Telegram удалить не даёт — тогда просто
+            # гасим кнопки, чтобы мёртвый экран не выглядел рабочим.
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except TelegramBadRequest:
+                pass
+    await callback.answer()
 
 
 @router.message(Command("gift"))
@@ -183,7 +262,7 @@ async def on_plan(
     if not rows:
         await callback.answer("У тарифа нет рублёвых цен", show_alert=True)
         return
-    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"{_PREFIX}:back")])
+    rows += _nav_rows(f"{_PREFIX}:back")
     await callback.message.edit_text(
         f"🎁 <b>{_esc(plan.name)}</b>\n\nВыберите срок подарка:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
@@ -223,7 +302,7 @@ async def on_duration(
                 )
             ]
         )
-    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"{_PREFIX}:p:{code}")])
+    rows += _nav_rows(f"{_PREFIX}:p:{code}")
     await callback.message.edit_text(
         f"🎁 <b>{_esc(plan.name)}</b> · {days} дн. — <b>{price:.0f} ₽</b>\n\nКак оплатить?",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
@@ -267,6 +346,7 @@ async def on_pay_balance(
         f"🎁 Подарок готов: <b>{_esc(plan.name)}</b> на {days} дн.\n\n"
         f"Код для получателя:\n<code>{gift_code}</code>\n\n"
         "Он вводит его в разделе «Промокод».",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=menu) if (menu := _menu_row()) else None,
     )
     await callback.answer("Куплено")
 
@@ -339,7 +419,11 @@ async def on_pay_gateway(
         f"🎁 <b>{_esc(plan.name)}</b> · {days} дн. — <b>{price:.0f} ₽</b>\n\n"
         "Оплатите по ссылке — код подарка придёт сюда же сразу после оплаты.",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="💳 Перейти к оплате", url=payment.url)]]
+            # Раньше с этого экрана вообще не было выхода: только ссылка на счёт.
+            inline_keyboard=[
+                [InlineKeyboardButton(text="💳 Перейти к оплате", url=payment.url)],
+                *_menu_row(),
+            ]
         ),
     )
     await callback.answer()
