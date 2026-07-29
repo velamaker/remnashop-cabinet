@@ -26,6 +26,9 @@ export interface Appearance {
   maintenance_block_payments?: boolean;
   // Доступные языки кабинета: null/пусто = все; иначе список кодов (ru всегда есть).
   enabled_languages?: string[] | null;
+  // Что умеет бэкенд под кабинетом. Отдаёт только адаптер чужого бота; наш
+  // бэкенд поля не шлёт, и его отсутствие означает «умеет всё» (см. lib/features).
+  features?: Partial<Record<string, boolean>>;
 }
 
 // Админское: brand_name может быть null (= авто-подхват),

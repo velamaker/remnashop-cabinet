@@ -10,6 +10,7 @@ import {
 } from "react";
 import { appearanceApi, type Appearance } from "@/api/appearance";
 import { lighten, darken, rgba, luminance, normalizeHex } from "@/lib/color";
+import { canFeature, type FeatureKey } from "@/lib/features";
 import { useTheme } from "@/contexts/ThemeContext";
 import { translate } from "@/i18n/translate";
 import { useI18n } from "@/i18n/I18nContext";
@@ -30,6 +31,8 @@ interface BrandingValue {
   logoSrc: string | null;
   /** Перечитать оформление с сервера и применить (после сохранения в админке). */
   refresh: () => Promise<void>;
+  /** Умеет ли бэкенд эту возможность. Неизвестное считается доступным. */
+  can: (key: FeatureKey) => boolean;
 }
 
 const BrandingContext = createContext<BrandingValue | null>(null);
@@ -92,7 +95,12 @@ const LOGO_KEY = "cabinet-appearance-logo";
 function readCache(): Appearance | null {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
-    return raw ? (JSON.parse(raw) as Appearance) : null;
+    if (!raw) return null;
+    // Список возможностей из кэша НЕ берём: браузер мог сохранить его от другого
+    // бэкенда (превью, переезд, вторая установка на том же адресе), и кабинет
+    // спрятал бы рабочие разделы. Без него действует дефолт «умеет всё».
+    const { features: _ignored, ...rest } = JSON.parse(raw) as Appearance;
+    return rest as Appearance;
   } catch {
     return null;
   }
@@ -202,6 +210,7 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
       offline,
       // Когда сервер недоступен, ссылка на логотип не загрузится — отдаём копию.
       logoSrc: (offline ? readLogo() : null) ?? appearance?.logo_url ?? null,
+      can: (key: FeatureKey) => canFeature(appearance, key),
     }),
     [appearance, refresh, offline],
   );

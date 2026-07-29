@@ -14,6 +14,8 @@ import {
   Wallet,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useBranding } from "@/contexts/BrandingContext";
+import type { FeatureKey } from "@/lib/features";
 import { useT } from "@/i18n/I18nContext";
 import { BrandWordmark } from "@/components/BrandWordmark";
 import { BrandLogo } from "@/components/BrandLogo";
@@ -22,18 +24,29 @@ import { NotificationBell } from "@/components/NotificationBell";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { getTelegramWebApp } from "@/hooks/useTelegramWebApp";
 
-const navItems = [
+// `feature` — раздел живёт только если бэкенд это умеет. Поля нет = показываем
+// всегда (так работает наш бот, см. lib/features).
+const navItems: {
+  to: string;
+  icon: typeof LayoutDashboard;
+  labelKey: string;
+  feature?: FeatureKey;
+}[] = [
   { to: "/", icon: LayoutDashboard, labelKey: "nav.home" },
   { to: "/subscription", icon: CreditCard, labelKey: "nav.subscription" },
-  { to: "/balance", icon: Wallet, labelKey: "nav.balance" },
+  { to: "/balance", icon: Wallet, labelKey: "nav.balance", feature: "topup" },
+  // «Устройства» без feature: HWID приходят из панели Remnawave, а не от бота —
+  // от смены бота раздел не исчезает.
   { to: "/devices", icon: Smartphone, labelKey: "nav.devices" },
-  { to: "/referral", icon: Gift, labelKey: "nav.referral" },
-  { to: "/support", icon: LifeBuoy, labelKey: "nav.support" },
+  { to: "/referral", icon: Gift, labelKey: "nav.referral", feature: "referral" },
+  { to: "/support", icon: LifeBuoy, labelKey: "nav.support", feature: "tickets" },
   { to: "/settings", icon: Settings, labelKey: "nav.settings" },
 ];
 
 export function AppLayout({ children }: { children: ReactNode }) {
   const { user, isAdmin, logout } = useAuth();
+  // Что умеет бэкенд под кабинетом: разделы, которых у него нет, не показываем.
+  const { can } = useBranding();
   const t = useT();
   const navigate = useNavigate();
   const location = useLocation();
@@ -84,7 +97,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
         {/* Nav */}
         <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto min-h-0">
-          {navItems.map(({ to, icon: Icon, labelKey }) => (
+          {navItems.filter(({ feature }) => !feature || can(feature)).map(({ to, icon: Icon, labelKey }) => (
             <NavLink
               key={to}
               to={to}
@@ -109,8 +122,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
         {/* Footer */}
         <div className="mt-4 flex flex-col gap-0.5 border-t border-[var(--border)] pt-4">
-          {/* Admin link — только для админов (ADMIN/DEV/OWNER), fail-closed */}
-          {isAdmin && (
+          {/* Admin link — только для админов (ADMIN/DEV/OWNER), fail-closed.
+              can("admin") — админка бессмысленна на бэкенде, который её ручек не
+              отдаёт: иначе админ проваливается в десятки экранов с ошибками. */}
+          {isAdmin && can("admin") && (
             <NavLink
               to="/admin"
               className={({ isActive }) =>
@@ -164,7 +179,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
         </NavLink>
         <div className="flex shrink-0 items-center gap-1 pl-1">
           {/* Вход в админку — только для админов (на мобиле другого входа нет) */}
-          {isAdmin && (
+          {isAdmin && can("admin") && (
             <NavLink
               to="/admin"
               aria-label={t("common.adminPanel")}
@@ -173,7 +188,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
               <ShieldCheck className="h-5 w-5" strokeWidth={2} />
             </NavLink>
           )}
-          <NotificationBell />
+          {can("notifications") && <NotificationBell />}
           <LanguageSwitcher />
           <ThemeSwitcher />
         </div>
@@ -181,7 +196,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
       {/* Тема + язык — вверху справа (десктоп) */}
       <div className="fixed right-6 top-5 z-30 hidden items-center gap-2 md:flex">
-        <NotificationBell />
+        {can("notifications") && <NotificationBell />}
         <LanguageSwitcher />
         <ThemeSwitcher />
       </div>
@@ -196,7 +211,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
       {/* Mobile bottom nav — без «Устройства» и «Рефералка» (доступны с Главной/Подписки) */}
       <nav className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-around border-t border-[var(--border)] bg-bg px-2 pb-2 pt-2 shadow-[0_-4px_16px_-8px_rgba(0,0,0,0.3)] md:hidden">
         {navItems
-          .filter(({ to }) => to !== "/devices" && to !== "/referral")
+          .filter(({ to, feature }) => to !== "/devices" && to !== "/referral" && (!feature || can(feature)))
           .map(({ to, icon: Icon, labelKey }) => (
           <NavLink
             key={to}

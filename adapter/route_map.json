@@ -1,0 +1,157 @@
+{
+  "backend": "bedolaga",
+  "prefix": "/cabinet",
+  "routes": {
+    "/api/auth/refresh": {
+      "target": "/cabinet/auth/refresh",
+      "kind": "direct",
+      "methods": [
+        "POST"
+      ]
+    },
+    "/api/auth/login": {
+      "target": "/cabinet/auth/email/login",
+      "kind": "renamed",
+      "methods": [
+        "POST"
+      ]
+    },
+    "/api/auth/register": {
+      "target": "/cabinet/auth/email/register/standalone",
+      "kind": "renamed",
+      "methods": [
+        "POST"
+      ]
+    },
+    "/api/auth/logout": {
+      "target": "/cabinet/auth/logout",
+      "kind": "direct",
+      "methods": [
+        "POST"
+      ]
+    },
+    "/api/auth/telegram": {
+      "target": "/cabinet/auth/telegram",
+      "kind": "direct",
+      "methods": [
+        "POST"
+      ]
+    },
+    "/api/auth/password/reset/request": {
+      "target": "/cabinet/auth/deeplink/request",
+      "kind": "renamed",
+      "methods": [
+        "POST"
+      ]
+    },
+    "/api/auth/email/change": {
+      "target": "/cabinet/auth/email/change",
+      "kind": "direct",
+      "methods": [
+        "POST"
+      ]
+    },
+    "/api/subscription/trial": {
+      "target": "/cabinet/subscription/trial",
+      "kind": "direct",
+      "methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    "/api/subscription/devices": {
+      "target": "/cabinet/subscription/devices",
+      "kind": "direct",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ]
+    },
+    "/api/subscription/devices/{hwid}": {
+      "target": "/cabinet/subscription/devices/{hwid}",
+      "kind": "direct",
+      "methods": [
+        "DELETE"
+      ]
+    },
+    "/api/notifications": {
+      "target": "/cabinet/notifications",
+      "kind": "direct",
+      "methods": [
+        "GET",
+        "PATCH"
+      ]
+    },
+    "/api/support/tickets/{id}/messages": {
+      "target": "/cabinet/tickets/{ticket_id}/messages",
+      "kind": "renamed",
+      "methods": [
+        "POST"
+      ]
+    }
+  },
+  "todo": [
+    "/api/auth/telegram/webapp",
+    "/api/auth/telegram/link",
+    "/api/auth/change-password",
+    "/api/auth/password/set",
+    "/api/auth/password/reset/confirm",
+    "/api/auth/email/request-verification",
+    "/api/auth/email/confirm",
+    "/api/auth/email",
+    "/api/subscription/extend",
+    "/api/subscription/pay-with-balance",
+    "/api/subscription/reissue",
+    "/api/subscription/server-stats",
+    "/api/subscription/traffic-history",
+    "/api/subscription/service-status",
+    "/api/subscription/freeze-status",
+    "/api/subscription/freeze",
+    "/api/subscription/unfreeze",
+    "/api/plans/public",
+    "/api/apps",
+    "/api/balance/topup/config",
+    "/api/balance/spend-on-renewal",
+    "/api/balance/convert-points",
+    "/api/referral/program",
+    "/api/gift/my",
+    "/api/promo-banner",
+    "/api/trial-discount",
+    "/api/notifications?limit=",
+    "/api/notifications/unread-count",
+    "/api/notifications/read",
+    "/api/push/vapid-key",
+    "/api/push/status",
+    "/api/push/subscribe",
+    "/api/push/unsubscribe",
+    "/api/push/test",
+    "/api/sessions",
+    "/api/sessions/logout-all",
+    "/api/support/tickets",
+    "/api/support/tickets",
+    "/api/support/tickets/{id}",
+    "/api/support/tickets/{id}/close",
+    "/api/account/delete",
+    "/api/gift/create",
+    "/api/account/export",
+    "/api/info",
+    "/api/subscription/offers",
+    "/api/subscription/purchase",
+    "/api/balance/topup",
+    "/api/balance/autopay",
+    "/api/referral/earnings",
+    "/api/promocode/activate"
+  ],
+  "mismatched": {
+    "/api/gift/create": "их /referral/withdrawal/create — это заявка на ВЫВОД денег, а не подарок (у них подарки: /cabinet/gift/purchase, другая форма тела)",
+    "/api/account/export": "их /admin/rbac/audit-log/export — админский аудит-лог, а не выгрузка своих данных",
+    "/api/info": "их /subscription/info — про подписку, а наша «Информация» это FAQ/правила (у них /cabinet/info-pages)",
+    "/api/subscription/offers": "их /promo/offers — персональные промо-скидки, а нам нужны тарифы с ценами (/cabinet/subscription/purchase-options, нужна трансляция формы)",
+    "/api/subscription/purchase": "у них покупка списывает с баланса и тело другое (tariff_id/period_days); прямой проброс ломается — собирать связкой (см. docs/BEDOLAGA-MONEY.md)",
+    "/api/balance/topup": "тело другое: у нас рубли+gateway_type, у них amount_kopeks+payment_method(+payment_option); нужен переводчик",
+    "/api/balance/autopay": "у нас POST, у них PATCH — прямой проброс даёт 405; нужен свой обработчик",
+    "/api/referral/earnings": "форма ответа другая (рубли/копейки, свои поля) — нужен переводчик",
+    "/api/promocode/activate": "форма ответа другая — нужен переводчик"
+  }
+}

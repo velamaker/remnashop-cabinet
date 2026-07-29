@@ -40,6 +40,11 @@ ENV NGINX_ENVSUBST_FILTER=^API_
 ENV API_UPSTREAM=remnashop:5000
 ENV API_SCHEME=http
 ENV API_HOST_HEADER=\$host
+# Префикс путей бэкенда. Дефолт обязателен: envsubst подставляет только те
+# переменные, что есть в окружении, а без подстановки в конфиг попадает литерал
+# ${API_PATH_PREFIX} — nginx падает с «unknown api_path_prefix variable» и
+# кабинет не стартует вовсе. Значение по умолчанию = наш бот.
+ENV API_PATH_PREFIX=/api/v1/public/
 
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]

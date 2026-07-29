@@ -37,6 +37,10 @@ services:
       API_UPSTREAM: "${API_UPSTREAM:?set API_UPSTREAM, e.g. bot.example.com:443}"
       API_SCHEME: "${API_SCHEME:-https}"
       API_HOST_HEADER: "${API_HOST_HEADER:?set API_HOST_HEADER to bot API domain, e.g. bot.example.com}"
+      # Префикс путей бэкенда: наш бот — /api/v1/public/, «Бедолага» — /cabinet/.
+      # Установщик пишет его в .env (см. prompt_cabinet_backend в install.sh);
+      # дефолт нужен для .env, собранных до появления выбора бэкенда.
+      API_PATH_PREFIX: "${API_PATH_PREFIX:-/api/v1/public/}"
     ports:
       - "127.0.0.1:5002:80"
     volumes:
