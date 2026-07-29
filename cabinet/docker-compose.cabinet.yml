@@ -16,6 +16,10 @@ services:
       # Адрес бэкенда бота host:port. На одном сервере с ботом — имя контейнера
       # remnashop в общей сети remnawave-network. Подставляется в nginx (envsubst).
       API_UPSTREAM: "${API_UPSTREAM:-remnashop:5000}"
+      # Какой бот обслуживает кабинет: remnashop (наш) или bedolaga.
+      # Путь на бэкенде отличается, поэтому префикс подставляется в nginx.
+      # Значения задаёт install.sh; вручную — CABINET_BACKEND в .env.
+      API_PATH_PREFIX: "${API_PATH_PREFIX:-/api/v1/public/}"
     ports:
       - "127.0.0.1:5002:80"
     volumes:

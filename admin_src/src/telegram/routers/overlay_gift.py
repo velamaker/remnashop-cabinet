@@ -137,6 +137,23 @@ async def open_gift_from_menu(
     await callback.answer()
 
 
+@router.callback_query(F.data == f"{_PREFIX}:back")
+@inject
+async def on_back_to_plans(
+    callback: CallbackQuery,
+    get_available_plans: FromDishka[GetAvailablePlans],
+    **data: Any,
+) -> None:
+    """Возврат к списку тарифов: правим то же сообщение, лишних не плодим."""
+    user = _user(data)
+    plans = await get_available_plans.system(user) if user else []
+    if not plans:
+        await callback.answer("Тарифы сейчас недоступны", show_alert=True)
+        return
+    await callback.message.edit_text(GIFT_INTRO, reply_markup=_plans_keyboard(plans))
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith(f"{_PREFIX}:p:"))
 @inject
 async def on_plan(
@@ -166,6 +183,7 @@ async def on_plan(
     if not rows:
         await callback.answer("У тарифа нет рублёвых цен", show_alert=True)
         return
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"{_PREFIX}:back")])
     await callback.message.edit_text(
         f"🎁 <b>{_esc(plan.name)}</b>\n\nВыберите срок подарка:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
@@ -205,6 +223,7 @@ async def on_duration(
                 )
             ]
         )
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"{_PREFIX}:p:{code}")])
     await callback.message.edit_text(
         f"🎁 <b>{_esc(plan.name)}</b> · {days} дн. — <b>{price:.0f} ₽</b>\n\nКак оплатить?",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),

@@ -272,6 +272,40 @@ EOF
 }
 
 # HTTPS=caddy|nginx|none переопределяет вопрос (для неинтерактива).
+
+# ── Какой бот обслуживает кабинет ────────────────────────────────────────────
+# Кабинет всегда ходит в /api/*, но бэкенды называют свои пути по-разному:
+#   remnashop → /api/v1/public/   bedolaga → /cabinet/
+# Префикс уезжает в nginx кабинета переменной API_PATH_PREFIX (см. nginx.conf).
+prompt_cabinet_backend() {
+  if ! need_value CABINET_BACKEND; then
+    ok "  Бэкенд кабинета уже выбран ($(getval CABINET_BACKEND)) — пропускаю"
+    return
+  fi
+  say ""
+  say "${BOLD}Какой бот обслуживает кабинет?${RST}"
+  say "  1) RemnaShop ${DIM}(наш бот, по умолчанию)${RST}"
+  say "  2) Bedolaga  ${DIM}(bedolaga-бот; экспериментально)${RST}"
+  local choice
+  read -r -p "$(printf '%sВыбор [1]: %s' "$BOLD" "$RST")" choice </dev/tty || true
+  if [[ "${choice:-1}" == "2" ]]; then
+    ensure CABINET_BACKEND bedolaga
+    ensure API_PATH_PREFIX "/cabinet/"
+    warn "Режим Bedolaga: кабинет ждёт их API по пути /cabinet/*."
+    warn "Полная совместимость (вход по кукам, оплата картой) требует адаптера —"
+    warn "он в работе, см. docs/CABINET-API-CONTRACT.md. Сейчас режим для проверки связи."
+    if need_value API_UPSTREAM; then
+      ask API_BEDOLAGA_UPSTREAM "  Адрес бота Bedolaga (host:port)" "bedolaga:8080"
+      ensure API_UPSTREAM "${ASKED:-bedolaga:8080}"; ASKED=""
+      ensure API_SCHEME http
+      ensure API_HOST_HEADER '$host'
+    fi
+  else
+    ensure CABINET_BACKEND remnashop
+    ensure API_PATH_PREFIX "/api/v1/public/"
+  fi
+}
+
 publish_cabinet_auto() {
   local dom="$1" choice="${HTTPS:-}"
 
@@ -347,6 +381,7 @@ if [ "$MODE" = "site" ]; then
   [ -n "${ASKED:-}" ] && ensure WEB_CABINET_URL "$ASKED"; ASKED=""
 
   # способ входа: OIDC (на боте) → классический виджет → только email
+  prompt_cabinet_backend
   prompt_login_method "$(getval WEB_CABINET_URL)" site
 
   flush_env "Добавлено RemnaShop (кабинет, отдельный сервер)"
@@ -433,6 +468,7 @@ fi
 CAB_URL="$(getval WEB_CABINET_URL)"; CAB_URL="${CAB_URL:-${ASKED:-}}"; ASKED=""
 
 # способ входа в кабинет: OIDC → классический виджет → только email
+prompt_cabinet_backend
 prompt_login_method "$CAB_URL"
 # Ключ должен присутствовать даже при выборе OIDC/email — иначе сборка кабинета
 # ругается на незаданную переменную build-arg (VITE_TELEGRAM_BOT_USERNAME).
