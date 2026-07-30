@@ -38,15 +38,8 @@
       ]
     },
     "/api/auth/password/reset/request": {
-      "target": "/cabinet/auth/deeplink/request",
+      "target": "/cabinet/auth/password/forgot",
       "kind": "renamed",
-      "methods": [
-        "POST"
-      ]
-    },
-    "/api/auth/email/change": {
-      "target": "/cabinet/auth/email/change",
-      "kind": "direct",
       "methods": [
         "POST"
       ]
@@ -74,21 +67,6 @@
       "methods": [
         "DELETE"
       ]
-    },
-    "/api/notifications": {
-      "target": "/cabinet/notifications",
-      "kind": "direct",
-      "methods": [
-        "GET",
-        "PATCH"
-      ]
-    },
-    "/api/support/tickets/{id}/messages": {
-      "target": "/cabinet/tickets/{ticket_id}/messages",
-      "kind": "renamed",
-      "methods": [
-        "POST"
-      ]
     }
   },
   "todo": [
@@ -109,17 +87,10 @@
     "/api/subscription/freeze-status",
     "/api/subscription/freeze",
     "/api/subscription/unfreeze",
-    "/api/plans/public",
     "/api/apps",
-    "/api/balance/topup/config",
     "/api/balance/spend-on-renewal",
     "/api/balance/convert-points",
-    "/api/referral/program",
     "/api/gift/my",
-    "/api/promo-banner",
-    "/api/trial-discount",
-    "/api/notifications?limit=",
-    "/api/notifications/unread-count",
     "/api/notifications/read",
     "/api/push/vapid-key",
     "/api/push/status",
@@ -128,20 +99,17 @@
     "/api/push/test",
     "/api/sessions",
     "/api/sessions/logout-all",
-    "/api/support/tickets",
-    "/api/support/tickets",
     "/api/support/tickets/{id}",
     "/api/support/tickets/{id}/close",
     "/api/account/delete",
     "/api/gift/create",
     "/api/account/export",
-    "/api/info",
-    "/api/subscription/offers",
     "/api/subscription/purchase",
     "/api/balance/topup",
     "/api/balance/autopay",
-    "/api/referral/earnings",
-    "/api/promocode/activate"
+    "/api/promocode/activate",
+    "/api/support/tickets/{id}/messages",
+    "/api/auth/email/change"
   ],
   "mismatched": {
     "/api/gift/create": "их /referral/withdrawal/create — это заявка на ВЫВОД денег, а не подарок (у них подарки: /cabinet/gift/purchase, другая форма тела)",
@@ -152,6 +120,9 @@
     "/api/balance/topup": "тело другое: у нас рубли+gateway_type, у них amount_kopeks+payment_method(+payment_option); нужен переводчик",
     "/api/balance/autopay": "у нас POST, у них PATCH — прямой проброс даёт 405; нужен свой обработчик",
     "/api/referral/earnings": "форма ответа другая (рубли/копейки, свои поля) — нужен переводчик",
-    "/api/promocode/activate": "форма ответа другая — нужен переводчик"
+    "/api/promocode/activate": "форма ответа другая — нужен переводчик",
+    "/api/notifications": "их /cabinet/notifications — это НАСТРОЙКИ рассылок, а не лента; кабинет от такого ответа роняет колокольчик. Лента собирается обработчиком из тикетных уведомлений",
+    "/api/support/tickets/{id}/messages": "нужен свой обработчик: у них другое тело и осмысленные 400/403, которые нельзя глотать",
+    "/api/auth/email/change": "нужен свой обработчик: смена почты у них подтверждается отдельным шагом"
   }
 }

@@ -28,7 +28,7 @@ services:
       context: .
       args:
         VITE_TELEGRAM_BOT_USERNAME: "${TELEGRAM_BOT_USERNAME}"
-    container_name: remnashop-cabinet
+    container_name: "${CABINET_CONTAINER:-remnashop-cabinet}"
     restart: unless-stopped
     environment:
       # ОБЯЗАТЕЛЬНО: домен API бота : порт (напр. bot.example.com:443).
@@ -42,7 +42,7 @@ services:
       # дефолт нужен для .env, собранных до появления выбора бэкенда.
       API_PATH_PREFIX: "${API_PATH_PREFIX:-/api/v1/public/}"
     ports:
-      - "127.0.0.1:5002:80"
+      - "127.0.0.1:${CABINET_PORT:-5002}:80"
     volumes:
       # Тот же envsubst-шаблон, что и в одно-серверной установке. Правки конфига
       # без пересборки образа; после правки — up -d --force-recreate cabinet.

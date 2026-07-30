@@ -109,3 +109,7 @@ scripts/patch-sub-index.sh
 # в публичный GitHub НЕ выкладываем (кабинетный детект открыт, ботовый — приватный).
 admin_src/src/telegram/routers/overlay_abuse.py
 assets/sub_index.html.bak
+
+# Состояние адаптера (паузы подписок) — рантайм конкретной установки.
+adapter-state/
+*.db

@@ -1,0 +1,44 @@
+# Адаптер «кабинет ↔ бот Бедолага». Подключается ТОЛЬКО когда кабинет обслуживает
+# чужой бот (CABINET_BACKEND=bedolaga) — установщик добавляет этот файл в
+# COMPOSE_FILE сам. На установке с нашим ботом сервис не поднимается вовсе.
+#
+#   docker compose -f docker-compose.yml -f cabinet/docker-compose.cabinet.yml \
+#                  -f cabinet/docker-compose.adapter.yml up -d --build
+#
+# Кабинет в этом режиме ходит НЕ в бот напрямую, а сюда: адаптер отдаёт наш
+# контракт (/api/v1/public/*) поверх их API. См. docs/BEDOLAGA-MAPPING.md.
+
+services:
+  cabinet-adapter:
+    build:
+      # Путь от КОРНЯ проекта (каталога первого compose-файла), а не от этого
+      # файла: compose разрешает относительные пути именно так.
+      context: ./adapter
+    container_name: "${ADAPTER_CONTAINER:-remnashop-cabinet-adapter}"
+    restart: unless-stopped
+    environment:
+      # Адрес их бота (host:port со схемой). Пишется установщиком.
+      BEDOLAGA_UPSTREAM: "${BEDOLAGA_UPSTREAM:-http://bedolaga:8080}"
+      # Админский токен их же API (их таблица web_api_tokens). Нужен там, где
+      # кабинет умеет больше их бота: заморозка подписки. Пусто — такие разделы
+      # честно выключены, остальной кабинет работает.
+      BEDOLAGA_ADMIN_TOKEN: "${BEDOLAGA_ADMIN_TOKEN:-}"
+      # Панель Remnawave: серверы, трафик и устройства боту не принадлежат и
+      # берутся отсюда. Необязательно — без неё разделы деградируют мягко.
+      # Имена переменных у ботов разные (у нас REMNAWAVE_HOST/TOKEN, у «Бедолаги»
+      # REMNAWAVE_API_URL/API_KEY), поэтому подхватываем оба варианта.
+      REMNAWAVE_URL: "${REMNAWAVE_URL:-${REMNAWAVE_API_URL:-${REMNAWAVE_HOST:-}}}"
+      REMNAWAVE_TOKEN: "${REMNAWAVE_TOKEN:-${REMNAWAVE_API_KEY:-}}"
+    volumes:
+      # Своя память адаптера (паузы подписок) — переживает пересборку образа.
+      - adapter-state:/data
+    networks:
+      - default
+
+volumes:
+  adapter-state:
+
+networks:
+  default:
+    name: remnawave-network
+    external: true

@@ -516,7 +516,9 @@ const TG_LINK_RESULTS: Record<string, { type: "success" | "error"; text: string 
 function TelegramLinkBlock() {
   const t = useT();
   const { user, refreshMe } = useAuth();
-  const { telegramOidcEnabled } = useBranding();
+  // Часть разделов зависит от бэкенда под кабинетом: то, чего он не умеет,
+  // не показываем вовсе — кнопка, отвечающая ошибкой, хуже её отсутствия.
+  const { telegramOidcEnabled, can } = useBranding();
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -605,6 +607,8 @@ function TelegramLinkBlock() {
 
 export default function SettingsPage() {
   const t = useT();
+  // Разделы, которых бэкенд под кабинетом не умеет, не показываем вовсе.
+  const { can } = useBranding();
   const { user, hasPassword, logout } = useAuth();
   const navigate = useNavigate();
 
@@ -652,25 +656,27 @@ export default function SettingsPage() {
         </div>
       </Card>
 
-      <EmailVerificationBlock />
+      {can("email_verify") && <EmailVerificationBlock />}
       <BackupAccessBlock />
-      <ManageEmailBlock />
+      {can("email_verify") && <ManageEmailBlock />}
 
-      <SessionsCard />
+      {can("sessions") && <SessionsCard />}
 
       <Card variant="bordered">
         <CardHeader title={t("set.themeTitle")} subtitle={t("set.themeSub")} />
         <ThemeSwitcher />
       </Card>
 
-      <Card variant="bordered">
-        <CardHeader title={t("push.cardTitle")} subtitle={t("push.cardSub")} />
-        <PushToggle />
-      </Card>
+      {can("push") && (
+        <Card variant="bordered">
+          <CardHeader title={t("push.cardTitle")} subtitle={t("push.cardSub")} />
+          <PushToggle />
+        </Card>
+      )}
 
       {/* Смена пароля — всем, у кого пароль уже есть (в т.ч. Telegram-юзерам с
           резервным доступом), а не только email-аккаунтам. */}
-      {hasPassword && <ChangePasswordBlock />}
+      {hasPassword && can("password_change") && <ChangePasswordBlock />}
       {user?.auth_type?.toUpperCase() === "EMAIL" && <TelegramLinkBlock />}
 
       {/* Выход — для смены аккаунта (особенно на мобильном, где нет сайдбара) */}
@@ -686,7 +692,7 @@ export default function SettingsPage() {
         </Button>
       </Card>
 
-      <AccountDangerZone />
+      {can("account_delete") && <AccountDangerZone />}
     </div>
   );
 }

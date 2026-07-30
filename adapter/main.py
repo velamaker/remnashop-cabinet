@@ -43,8 +43,37 @@ from fastapi import FastAPI, Request, Response
 
 import compose
 from compose import HANDLERS, Ctx, NotAvailable, UpstreamError
+from state import State
 
 UPSTREAM = os.environ.get("BEDOLAGA_UPSTREAM", "http://127.0.0.1:8080").rstrip("/")
+# Панель Remnawave — источник того, что боту не принадлежит (серверы, трафик,
+# устройства). Не задана — соответствующие разделы отдают, что смогли получить от
+# бота, но не выключаются: см. правило в compose.Ctx.
+def _panel_url(raw: str) -> str:
+    """Адрес панели у разных ботов записан по-разному: полный URL, `host:port`
+    или просто имя контейнера. Приводим к рабочему виду, а не требуем от
+    оператора угадывать формат."""
+    value = raw.strip().rstrip("/")
+    if not value:
+        return ""
+    if "://" not in value:
+        value = "http://" + value
+    tail = value.split("://", 1)[1]
+    host = tail.split("/", 1)[0]
+    # Имя контейнера без порта — у Remnawave в docker это 3000.
+    if ":" not in host and "." not in host:
+        value = value.replace(host, host + ":3000", 1)
+    return value
+
+
+PANEL_URL = _panel_url(os.environ.get("REMNAWAVE_URL", ""))
+PANEL_TOKEN = os.environ.get("REMNAWAVE_TOKEN", "")
+# Админский токен «Бедолаги» (их таблица web_api_tokens). Нужен там, где кабинет
+# умеет больше их бота — например заморозка подписки. Не задан — такие разделы
+# честно выключены, но всё остальное работает.
+ADMIN_TOKEN = os.environ.get("BEDOLAGA_ADMIN_TOKEN", "")
+# Куда адаптеру писать своё состояние: папка с кодом монтируется только на чтение.
+STATE_PATH = os.environ.get("ADAPTER_STATE", "/data/state.db")
 ROUTE_MAP_PATH = Path(__file__).with_name("route_map.json")
 TIMEOUT = httpx.Timeout(connect=5.0, read=25.0, write=10.0, pool=5.0)
 
@@ -52,7 +81,31 @@ TIMEOUT = httpx.Timeout(connect=5.0, read=25.0, write=10.0, pool=5.0)
 _HOP_BY_HOP = {
     "host", "connection", "keep-alive", "transfer-encoding", "upgrade",
     "content-length", "proxy-authorization", "te", "trailer",
+    # Адрес клиента подставляем сами (см. _client_ip): пришедший от браузера
+    # заголовок доверять нельзя — он подделывается одной строкой.
+    "x-forwarded-for", "x-real-ip", "x-forwarded-proto",
 }
+
+
+def _client_ip(request: Request) -> str:
+    """Настоящий адрес посетителя: первый в цепочке от нашего же nginx."""
+    chain = request.headers.get("x-forwarded-for", "")
+    first = chain.split(",")[0].strip() if chain else ""
+    return first or (request.client.host if request.client else "")
+
+
+def _forwarded(request: Request) -> dict[str, str]:
+    """Заголовки адреса для бота: без них его лимиты на вход и регистрацию
+    считаются на один адрес адаптера — то есть на всех пользователей сразу,
+    и один человек может заблокировать вход всему кабинету."""
+    ip = _client_ip(request)
+    if not ip:
+        return {}
+    return {
+        "x-forwarded-for": ip,
+        "x-real-ip": ip,
+        "x-forwarded-proto": request.headers.get("x-forwarded-proto", "https"),
+    }
 
 # Имена кук — те же, что ставит наш бэкенд: кабинет их не читает (HttpOnly), но
 # совпадение имён избавляет от расхождений в logout и в отладке.
@@ -129,15 +182,35 @@ _MATCHERS: list[tuple[re.Pattern[str], str, dict[str, Any]]] = sorted(
 )
 
 client: httpx.AsyncClient | None = None
+panel: httpx.AsyncClient | None = None
+admin: httpx.AsyncClient | None = None
+state = State(STATE_PATH)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     """Один клиент на весь процесс: соединения к боту переиспользуются."""
-    global client
+    global client, panel, admin
     async with httpx.AsyncClient(base_url=UPSTREAM, timeout=TIMEOUT) as c:
         client = c
-        yield
+        if ADMIN_TOKEN:
+            admin = httpx.AsyncClient(
+                base_url=UPSTREAM, timeout=TIMEOUT,
+                headers={"x-api-key": ADMIN_TOKEN},
+            )
+        if PANEL_URL and PANEL_TOKEN:
+            async with httpx.AsyncClient(
+                base_url=PANEL_URL,
+                timeout=TIMEOUT,
+                headers={"authorization": f"Bearer {PANEL_TOKEN}"},
+            ) as p:
+                panel = p
+                yield
+            panel = None
+        else:
+            yield
+    if admin is not None:
+        await admin.aclose()
     client = None
 
 
@@ -176,6 +249,29 @@ def _resolve(ours: str) -> str | None:
     return None
 
 
+# Свои обработчики тоже бывают с параметром в пути (`/api/support/tickets/{id}`),
+# и точным сравнением строки их не найти. Шаблоны компилируем один раз при старте.
+_OWN_MATCHERS: list[tuple[str, re.Pattern[str], Any]] = [
+    (method, _compile(path), fn)
+    for (method, path), fn in HANDLERS.items()
+    if "{" in path
+]
+
+
+def _own_handler(method: str, ours: str):
+    """Наш обработчик для пути и значения его параметров."""
+    exact = HANDLERS.get((method.upper(), ours))
+    if exact is not None:
+        return exact, {}
+    for m, rx, fn in _OWN_MATCHERS:
+        if m != method.upper():
+            continue
+        hit = rx.match(ours)
+        if hit:
+            return fn, hit.groupdict()
+    return None, {}
+
+
 def _serves(method: str, path: str) -> bool:
     """Отдаём ли мы такой путь этим методом — по карте маршрутов (свои
     обработчики compose.py проверяет сам)."""
@@ -208,20 +304,44 @@ async def health() -> dict[str, Any]:
     """Самопроверка: сколько путей закрыто картой, сколько собираем сами и сколько ещё нет."""
     return {
         "upstream": UPSTREAM,
+        # Панель Remnawave: источник данных, которые боту не принадлежат.
+        "panel": bool(panel),
+        # Админский токен бота и своя память — от них зависит заморозка.
+        "admin_token": bool(admin),
+        "state": state.available,
         "mapped": len(ROUTES.get("routes", {})),
         "composed": len(HANDLERS),
         "todo": len(ROUTES.get("todo", [])),
     }
 
 
+class Unreachable(Exception):
+    """Бот не ответил вовсе. Пользователю — понятная строка, а не «500»."""
+
+
 async def _call(method: str, path: str, **kw: Any) -> httpx.Response:
     assert client is not None  # клиент живёт весь процесс, см. lifespan
-    return await client.request(method, path, **kw)
+    try:
+        return await client.request(method, path, **kw)
+    except httpx.HTTPError as exc:
+        raise Unreachable(str(exc)) from exc
 
 
 @app.post("/api/v1/public/auth/{kind:path}")
 async def auth_bridge(kind: str, request: Request) -> Response:
     """Вход, регистрация, обновление и выход: единственное место, где живут токены."""
+    try:
+        return await _auth_bridge(kind, request)
+    except Unreachable as exc:
+        # Форма входа — единственная страница, куда доходит новый человек:
+        # техническая английская строка тут недопустима.
+        return Response(
+            json.dumps({"detail": f"Сервис временно недоступен: {exc}"}, ensure_ascii=False),
+            502, media_type="application/json",
+        )
+
+
+async def _auth_bridge(kind: str, request: Request) -> Response:
     ours = "/api/auth/" + kind
     body = await request.body()
 
@@ -257,7 +377,8 @@ async def auth_bridge(kind: str, request: Request) -> Response:
         # Не вход и не выход (смена почты, сброс пароля) — обычный путь через карту.
         return await proxy("api/v1/public/auth/" + kind, request)
     up = await _call("POST", target, content=body or None,
-                     headers={"content-type": request.headers.get("content-type", "application/json")})
+                     headers={"content-type": request.headers.get("content-type", "application/json"),
+                              **_forwarded(request)})
     if up.status_code >= 400:
         return Response(up.content, up.status_code, media_type="application/json")
     data = up.json() if up.content else {}
@@ -277,10 +398,13 @@ async def proxy(full_path: str, request: Request) -> Response:
     access = request.cookies.get(ACCESS_COOKIE)
 
     # 1. Ручки, которые адаптер собирает сам (оформление, права, форма /auth/me).
-    own = HANDLERS.get((request.method.upper(), ours))
+    own, path_params = _own_handler(request.method, ours)
     if own is not None:
         assert client is not None
-        ctx = Ctx(client, access, dict(request.query_params))
+        ctx = Ctx(
+            client, access, dict(request.query_params), panel, admin, state,
+            params=path_params, body=await request.body(),
+        )
         try:
             result = await own(ctx)
         except UpstreamError as exc:
@@ -307,6 +431,7 @@ async def proxy(full_path: str, request: Request) -> Response:
         return _not_implemented(ours)
 
     headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
+    headers.update(_forwarded(request))
     # Мост: их API ждёт Bearer, а у нас сессия живёт в HttpOnly-куке.
     if access:
         headers["authorization"] = f"Bearer {access}"
@@ -319,7 +444,7 @@ async def proxy(full_path: str, request: Request) -> Response:
             content=body or None,
             headers=headers,
         )
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, Unreachable) as exc:
         return Response(
             content=json.dumps({"detail": f"Бэкенд недоступен: {exc}"}, ensure_ascii=False),
             status_code=502,

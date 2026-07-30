@@ -466,6 +466,9 @@ function RenewFromBalance({ balance, onSpent }: { balance: number; onSpent: (b: 
 
 export default function BalancePage() {
   const tr = useT();
+  // Блоки, которых бэкенд под кабинетом не умеет, не показываем: кнопка,
+  // отвечающая ошибкой, для человека выглядит как сломанный сайт.
+  const { can } = useBranding();
   const [balance, setBalance] = useState<BalanceResponse | null>(null);
   const [transactions, setTransactions] = useState<BalanceTransaction[]>([]);
   const [total, setTotal] = useState(0);
@@ -555,26 +558,28 @@ export default function BalancePage() {
       </div>
 
       {/* Пополнить баланс через шлюз (скроется, если выключено/нет шлюзов) */}
-      <TopupCard />
+      {can("topup") && <TopupCard />}
 
       {/* Подарить подписку с баланса */}
-      <GiftCard />
+      {can("gift") && <GiftCard />}
 
       {/* Перевести баллы рефералки в рубли (скроется, если баллов нет) */}
-      <ConvertPoints
+      {can("points") && <ConvertPoints
         points={balance?.points ?? 0}
         rate={balance?.point_value_rub ?? POINT_VALUE_RUB}
         onConverted={(bal, pts) => setBalance((prev) => (prev ? { ...prev, balance: bal, points: pts } : prev))}
-      />
+      />}
 
       {/* Продлить с баланса (компонент сам скроется, если нет подписки для продления) */}
-      <RenewFromBalance
-        balance={balance?.balance ?? 0}
-        onSpent={(b) => setBalance((prev) => (prev ? { ...prev, balance: b } : prev))}
-      />
+      {can("renew_from_balance") && (
+        <RenewFromBalance
+          balance={balance?.balance ?? 0}
+          onSpent={(b) => setBalance((prev) => (prev ? { ...prev, balance: b } : prev))}
+        />
+      )}
 
       {/* Автопродление с баланса */}
-      {balance && (
+      {balance && can("autopay") && (
         <AutopayToggle
           enabled={balance.autopay_enabled}
           onChange={(v) => setBalance((prev) => (prev ? { ...prev, autopay_enabled: v } : prev))}

@@ -1,5 +1,5 @@
 import { ApiError } from "@/types/api";
-import { translate } from "@/i18n/translate";
+import { getActiveLang, translate } from "@/i18n/translate";
 
 // В проде nginx/Caddy проксирует /api на бэкенд бота (см. nginx.conf).
 // В деве vite.config.ts делает то же самое на localhost.
@@ -36,6 +36,15 @@ interface RequestOptions extends Omit<RequestInit, "body"> {
 }
 
 async function parseErrorDetail(res: Response): Promise<string> {
+  // 501 приходит от адаптера, когда бэкенд под кабинетом не умеет этот раздел.
+  // Его текст служебный («Адаптер пока не умеет /api/...») — пользователю он
+  // ничего не объясняет и выглядит как поломка сайта. Строки держим прямо здесь,
+  // а не в словарях: это сообщение обязано быть даже на бэкенде без переводов.
+  if (res.status === 501) {
+    return getActiveLang() === "en"
+      ? "This section is not available on this service"
+      : "Этот раздел недоступен на этом сервисе";
+  }
   try {
     const text = await res.text();
     if (!text) return res.statusText || translate("fmt.errStatus", { n: res.status });

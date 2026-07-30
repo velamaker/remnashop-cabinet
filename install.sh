@@ -276,6 +276,36 @@ EOF
 # ── Какой бот обслуживает кабинет ────────────────────────────────────────────
 # Кабинет всегда ходит в /api/*, но бэкенды называют свои пути по-разному:
 #   remnashop → /api/v1/public/   bedolaga → /cabinet/
+# Токен админского API «Бедолаги» — им адаптер делает то, чего их бот не умеет
+# (сейчас: заморозка подписки). Кода их бота это не касается: токены выпускаются
+# их же ручкой /tokens. Без токена кабинет работает, просто без таких разделов.
+prompt_bedolaga_token() {
+  local api="$1" boot named
+  need_value BEDOLAGA_ADMIN_TOKEN || { ok "  Токен Bedolaga уже задан — пропускаю"; return; }
+  say ""
+  say "${BOLD}Доступ к админскому API Bedolaga${RST} ${DIM}(для заморозки подписки)${RST}"
+  say "  Нужен любой их токен: строка ${DIM}WEB_API_DEFAULT_TOKEN${RST} из .env бота Bedolaga."
+  say "  ${DIM}Пусто — пропустить: кабинет будет работать без заморозки.${RST}"
+  read -r -p "$(printf '%sТокен Bedolaga: %s' "$BOLD" "$RST")" boot </dev/tty || true
+  [ -z "${boot:-}" ] && { warn "Токен не задан — заморозка подписки будет выключена."; return; }
+
+  # Просим у них ОТДЕЛЬНЫЙ именной токен, чтобы кабинет не жил на их стартовом:
+  # стартовый оживает при каждом рестарте бота, пока он прописан в .env.
+  named="$(curl -fsS --max-time 10 -X POST "${api}/tokens" \
+      -H "X-API-Key: ${boot}" -H 'content-type: application/json' \
+      -d '{"name":"cabinet-adapter","description":"Кабинет: заморозка подписки"}' 2>/dev/null \
+    | grep -oE '"token"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | cut -d'"' -f4)"
+
+  if [ -n "$named" ]; then
+    ensure BEDOLAGA_ADMIN_TOKEN "$named"
+    ok "  Выпущен отдельный токен cabinet-adapter (стартовый можно отозвать)"
+  else
+    ensure BEDOLAGA_ADMIN_TOKEN "$boot"
+    warn "Не удалось выпустить отдельный токен — использую введённый."
+    warn "Проверьте, что API Bedolaga доступен по ${api} и токен верный."
+  fi
+}
+
 # Префикс уезжает в nginx кабинета переменной API_PATH_PREFIX (см. nginx.conf).
 prompt_cabinet_backend() {
   if ! need_value CABINET_BACKEND; then
@@ -290,16 +320,18 @@ prompt_cabinet_backend() {
   read -r -p "$(printf '%sВыбор [1]: %s' "$BOLD" "$RST")" choice </dev/tty || true
   if [[ "${choice:-1}" == "2" ]]; then
     ensure CABINET_BACKEND bedolaga
-    ensure API_PATH_PREFIX "/cabinet/"
-    warn "Режим Bedolaga: кабинет ждёт их API по пути /cabinet/*."
-    warn "Полная совместимость (вход по кукам, оплата картой) требует адаптера —"
-    warn "он в работе, см. docs/CABINET-API-CONTRACT.md. Сейчас режим для проверки связи."
-    if need_value API_UPSTREAM; then
-      ask API_BEDOLAGA_UPSTREAM "  Адрес бота Bedolaga (host:port)" "bedolaga:8080"
-      ensure API_UPSTREAM "${ASKED:-bedolaga:8080}"; ASKED=""
-      ensure API_SCHEME http
-      ensure API_HOST_HEADER '$host'
-    fi
+    # Кабинет ходит НЕ в их бот напрямую, а в адаптер: тот отдаёт наш контракт
+    # (/api/v1/public/*) поверх их API — переводит формы, держит сессию в куках
+    # и закрывает то, чего у них нет. Поэтому префикс здесь наш, а не /cabinet/.
+    ensure API_PATH_PREFIX "/api/v1/public/"
+    ensure API_UPSTREAM "remnashop-cabinet-adapter:8090"
+    ensure API_SCHEME http
+    ensure API_HOST_HEADER '$host'
+    local bed_host
+    ask BEDOLAGA_HOST "  Адрес бота Bedolaga (host:port)" "bedolaga:8080"
+    bed_host="${ASKED:-bedolaga:8080}"; ASKED=""
+    ensure BEDOLAGA_UPSTREAM "http://${bed_host#http://}"
+    prompt_bedolaga_token "http://${bed_host#http://}"
   else
     ensure CABINET_BACKEND remnashop
     ensure API_PATH_PREFIX "/api/v1/public/"
@@ -398,15 +430,45 @@ if [ "$MODE" = "site" ]; then
   export API_UPSTREAM="$UP"
   export API_SCHEME="$(getval API_SCHEME)"
   export API_HOST_HEADER="$API_DOM"
+  export API_PATH_PREFIX="$(getval API_PATH_PREFIX)"
 
-  # Пред-проверка: отвечает ли публичный API бота (частая ошибка — неверный домен).
-  PRE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "https://${API_DOM}/api/v1/public/auth/me" 2>/dev/null || echo 000)"
-  if [ "$PRE" = "401" ] || [ "$PRE" = "200" ]; then
-    ok "  API бота https://${API_DOM} отвечает (${PRE})"
+  # Кабинет поверх чужого бота ходит не в бота, а в адаптер рядом с собой.
+  SITE_COMPOSE=(-f cabinet/docker-compose.site.yml)
+  if [ "$(getval CABINET_BACKEND)" = bedolaga ]; then
+    SITE_COMPOSE+=(-f cabinet/docker-compose.site-adapter.yml)
+    export BEDOLAGA_UPSTREAM="$(getval BEDOLAGA_UPSTREAM)"
+    export BEDOLAGA_ADMIN_TOKEN="$(getval BEDOLAGA_ADMIN_TOKEN)"
+    export REMNAWAVE_URL="$(getval REMNAWAVE_URL)"
+    export REMNAWAVE_TOKEN="$(getval REMNAWAVE_TOKEN)"
+    # Кабинет и адаптер поднимаются одним compose — значит видят друг друга по
+    # имени сервиса; API_UPSTREAM смотрит на адаптер, а не на домен бота.
+    export API_UPSTREAM="cabinet-adapter:8090"
+    export API_SCHEME=http
+    # Литерал, а не '$host': compose принял бы доллар за свою переменную и
+    # подставил пустую строку — nginx ушёл бы к адаптеру без Host-заголовка.
+    export API_HOST_HEADER="cabinet-adapter"
+    ensure API_UPSTREAM "cabinet-adapter:8090"
+  fi
+
+  # Пред-проверка: отвечает ли API бота (частая ошибка — неверный домен).
+  if [ "$(getval CABINET_BACKEND)" = bedolaga ]; then
+    BED="$(getval BEDOLAGA_UPSTREAM)"
+    PRE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "${BED}/cabinet/branding" 2>/dev/null || echo 000)"
+    if [ "$PRE" = "200" ]; then
+      ok "  API бота Bedolaga ${BED} отвечает"
+    else
+      warn "  ${BED}/cabinet/branding вернул '${PRE}' (ожидался 200)."
+      warn "  Проверьте адрес бота Bedolaga и что его web-API включён."
+    fi
   else
-    warn "  https://${API_DOM}/api/v1/public/auth/me вернул '${PRE}' (ожидался 401)."
-    warn "  Проверьте, что это верный домен API бота и он доступен по https."
-    warn "  Кабинет соберу, но /api/ может не работать, пока домен не отвечает."
+    PRE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "https://${API_DOM}/api/v1/public/auth/me" 2>/dev/null || echo 000)"
+    if [ "$PRE" = "401" ] || [ "$PRE" = "200" ]; then
+      ok "  API бота https://${API_DOM} отвечает (${PRE})"
+    else
+      warn "  https://${API_DOM}/api/v1/public/auth/me вернул '${PRE}' (ожидался 401)."
+      warn "  Проверьте, что это верный домен API бота и он доступен по https."
+      warn "  Кабинет соберу, но /api/ может не работать, пока домен не отвечает."
+    fi
   fi
 
   say ""
@@ -415,18 +477,23 @@ if [ "$MODE" = "site" ]; then
   # частая причина «встаёт только после переустановки ОС» (занятый порт 5002 /
   # старый контейнер с тем же именем / протухший build-кэш). down чистит их, а
   # --force-recreate гарантирует пересоздание с новой конфигурацией/образом.
-  if ss -ltn 2>/dev/null | grep -q '127.0.0.1:5002 '; then
-    warn "  Порт 127.0.0.1:5002 занят — освобождаю прежний контейнер кабинета."
+  CAB_PORT="$(getval CABINET_PORT)"; CAB_PORT="${CAB_PORT:-5002}"
+  if ss -ltn 2>/dev/null | grep -q "127.0.0.1:${CAB_PORT} "; then
+    warn "  Порт 127.0.0.1:${CAB_PORT} занят — освобождаю прежний контейнер кабинета."
   fi
-  $DC --env-file .env -f cabinet/docker-compose.site.yml down --remove-orphans 2>/dev/null || true
-  info "Собираю и поднимаю кабинет (проксирует /api/ → https://${API_DOM})…"
-  $DC --env-file .env -f cabinet/docker-compose.site.yml up -d --build --force-recreate
+  $DC --env-file .env "${SITE_COMPOSE[@]}" down --remove-orphans 2>/dev/null || true
+  if [ "$(getval CABINET_BACKEND)" = bedolaga ]; then
+    info "Собираю и поднимаю кабинет с адаптером (Bedolaga: $(getval BEDOLAGA_UPSTREAM))…"
+  else
+    info "Собираю и поднимаю кабинет (проксирует /api/ → https://${API_DOM})…"
+  fi
+  $DC --env-file .env "${SITE_COMPOSE[@]}" up -d --build --force-recreate
 
   say ""
   ok "${BOLD}Готово!${RST}"
-  say "  Кабинет: ${DIM}127.0.0.1:5002${RST}  → проксируйте на ${BOLD}${CAB_URL:-ваш домен кабинета}${RST}"
+  say "  Кабинет: ${DIM}127.0.0.1:${CAB_PORT}${RST}  → проксируйте на ${BOLD}${CAB_URL:-ваш домен кабинета}${RST}"
   say ""
-  say "  Логи:   ${DIM}$DC -f cabinet/docker-compose.site.yml logs -f${RST}"
+  say "  Логи:   ${DIM}$DC ${SITE_COMPOSE[*]} logs -f${RST}"
   say "  ${YLW}Дальше:${RST} reverse-proxy с TLS (свободный 443) на домен кабинета → 127.0.0.1:5002."
   exit 0
 fi
@@ -487,8 +554,16 @@ ensure BOT_MINI_APP_RESERVE true
 # Чтобы обычный `docker compose ...` (без -f) охватывал нужные сервисы
 # (logs/ps/restart, down/up) — задаём список compose-файлов через COMPOSE_FILE.
 # В режиме api кабинет не поднимаем — только бот/воркеры.
+# Кабинет поверх чужого бота работает через адаптер — добавляем его файл, чтобы
+# обычный `docker compose ...` без -f видел и поднимал этот сервис тоже.
+CABINET_COMPOSE=(-f docker-compose.yml -f cabinet/docker-compose.cabinet.yml)
+COMPOSE_LIST="docker-compose.yml:cabinet/docker-compose.cabinet.yml"
+if [ "$(getval CABINET_BACKEND)" = bedolaga ]; then
+  CABINET_COMPOSE+=(-f cabinet/docker-compose.adapter.yml)
+  COMPOSE_LIST="${COMPOSE_LIST}:cabinet/docker-compose.adapter.yml"
+fi
 if [ "$WITH_CABINET" = yes ]; then
-  ensure COMPOSE_FILE "docker-compose.yml:cabinet/docker-compose.cabinet.yml"
+  ensure COMPOSE_FILE "$COMPOSE_LIST"
 else
   ensure COMPOSE_FILE "docker-compose.yml"
 fi
@@ -551,8 +626,12 @@ docker network inspect remnawave-network >/dev/null 2>&1 || {
 # ── сборка и запуск ──────────────────────────────────────────────────────────
 say ""
 if [ "$WITH_CABINET" = yes ]; then
-  info "Собираю и поднимаю бота (overlay), воркеры и кабинет…"
-  $DC -f docker-compose.yml -f cabinet/docker-compose.cabinet.yml up -d --build
+  if [ "$(getval CABINET_BACKEND)" = bedolaga ]; then
+    info "Собираю и поднимаю бота (overlay), воркеры, кабинет и адаптер Bedolaga…"
+  else
+    info "Собираю и поднимаю бота (overlay), воркеры и кабинет…"
+  fi
+  $DC "${CABINET_COMPOSE[@]}" up -d --build
   say ""
   ok "${BOLD}Готово!${RST}"
   say "  Бот и API:  ${DIM}127.0.0.1:5000${RST}"
@@ -581,7 +660,7 @@ if [ "$WITH_CABINET" = yes ]; then
     say "  ${DIM}Вход через Telegram не настроен — в кабинет входят по email.${RST}"
   fi
   say ""
-  say "  Логи:   ${DIM}$DC -f docker-compose.yml -f cabinet/docker-compose.cabinet.yml logs -f${RST}"
+  say "  Логи:   ${DIM}$DC ${CABINET_COMPOSE[*]} logs -f${RST}"
 else
   info "Собираю и поднимаю бота (overlay) и воркеры — БЕЗ локального кабинета…"
   $DC -f docker-compose.yml up -d --build

@@ -64,9 +64,13 @@ function PlanCard({
   onBuyBalance: () => void;
 }) {
   const t = useT();
+  const { can } = useBranding();
   const price = priceFor(plan, days, gateway);
-  // Оплата с баланса — только в рублях и если хватает средств.
+  // Покупка картой и списание с баланса — разные возможности бэкенда: под чужим
+  // ботом может не быть ни той, ни другой, и тогда кнопку показывать нельзя.
+  const canBuy = can("purchase");
   const canPayBalance =
+    can("pay_with_balance") &&
     !!price && !price.is_free && price.currency === "RUB" && balance >= Number(price.final_amount);
   const popular = isPopular(plan);
   const perMonth =
@@ -149,13 +153,13 @@ function PlanCard({
             ))}
           </ul>
 
-          <button
+          {canBuy && <button
             onClick={onBuy}
             disabled={busy || !price}
             className="btn-gradient mt-4 inline-flex h-11 w-full items-center justify-center rounded-xl px-5 text-sm font-semibold text-white transition-all active:scale-[0.98] disabled:opacity-60"
           >
             {busy ? t("billing.goingToPay") : t("billing.select")}
-          </button>
+          </button>}
 
           {canPayBalance && (
             <button
