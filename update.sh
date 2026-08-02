@@ -48,6 +48,13 @@ if docker compose version >/dev/null 2>&1; then DC="docker compose"
 elif command -v docker-compose >/dev/null 2>&1; then DC="docker-compose"
 else die "Не найден 'docker compose'."; fi
 COMPOSE=(-f docker-compose.yml -f cabinet/docker-compose.cabinet.yml)
+# Кабинет поверх чужого бота работает через адаптер — он тоже собирается из кода
+# репозитория. Без этого файла обновление оставляло адаптер на СТАРОМ образе
+# (старые compose.py/route_map.json), а compose ругался «orphan containers»
+# и по этой подсказке предлагал снести живой контейнер.
+if grep -qE '^CABINET_BACKEND=bedolaga' .env 2>/dev/null; then
+  COMPOSE+=(-f cabinet/docker-compose.adapter.yml)
+fi
 
 # ── определение версии базового образа (snoups/remnashop) ─────────────────────
 BASE_REPO="snoups/remnashop"
@@ -100,6 +107,29 @@ if [ "$BACKUP" = 1 ]; then
     fi
   else
     warn "Контейнер remnashop-db не запущен — пропускаю бэкап"
+  fi
+  # Память адаптера (паузы подписок) живёт в docker-томе, а не в БД бота: сам
+  # бот «Бедолага» о заморозке не знает. Потеря тома = человек остался на паузе,
+  # а вернуть накопленные дни нечем — поэтому кладём рядом с дампом.
+  if grep -qE '^CABINET_BACKEND=bedolaga' .env 2>/dev/null; then
+    ADP="$(grep -E '^ADAPTER_CONTAINER=' .env 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+    ADP="${ADP:-remnashop-cabinet-adapter}"
+    # ps -a, а не ps: у остановленного адаптера состояние ровно так же ценно,
+    # а --volumes-from работает и с незапущенным контейнером.
+    if docker ps -a --format '{{.Names}}' | grep -qx "$ADP"; then
+      A="$BACKUP_DIR/adapter-state-$(date +%F-%H%M%S).tar.gz"
+      # Копируем ЧУЖИМ контейнером (alpine) с --volumes-from: путь тома на хосте
+      # знать не нужно, а имя тома у разных установок разное (префикс проекта).
+      if docker run --rm --volumes-from "$ADP" -v "$BACKUP_DIR":/backup alpine \
+           tar czf "/backup/$(basename "$A")" -C /data . >/dev/null 2>&1 && [ -s "$A" ]; then
+        ok "Бэкап состояния адаптера (паузы) готов (${A}, $(du -h "$A" | cut -f1))"
+        ls -1t "$BACKUP_DIR"/adapter-state-*.tar.gz 2>/dev/null | tail -n +"$((BACKUP_KEEP+1))" | xargs -r rm -f
+      else
+        rm -f "$A"
+        warn "Не удалось сохранить состояние адаптера (${ADP}) — продолжаю без него."
+        warn "Восстановить вручную: docker run --rm --volumes-from ${ADP} -v ${BACKUP_DIR}:/backup alpine tar czf /backup/adapter-state.tar.gz -C /data ."
+      fi
+    fi
   fi
 else
   info "Бэкап пропущен (--no-backup)"

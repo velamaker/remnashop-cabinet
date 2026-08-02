@@ -6,6 +6,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { referralApi } from "@/api/referral";
 import type { ReferralEarningsResponse } from "@/api/referral";
 import { useAuth } from "@/contexts/AuthContext";
+import { useBranding } from "@/contexts/BrandingContext";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -204,6 +205,8 @@ function RewardLevelsCard({ program }: { program: ReferralProgramResponse }) {
 export default function ReferralPage() {
   const t = useT();
   const { user } = useAuth();
+  // Что умеет бэкенд под кабинетом: подарков может не быть вовсе.
+  const { can } = useBranding();
   const [program, setProgram] = useState<ReferralProgramResponse | null>(null);
   const [earnings, setEarnings] = useState<ReferralEarningsResponse | null>(null);
   const [unavailableReason, setUnavailableReason] = useState<
@@ -277,8 +280,9 @@ export default function ReferralPage() {
       )}
 
       {/* Подарить подписку — рядом с приглашением друзей: сценарий тот же, «дать
-          доступ другому человеку». На странице подписки блок больше не дублируем. */}
-      <GiftCard />
+          доступ другому человеку». На странице подписки блок больше не дублируем.
+          Под бэкендом без подарков блока нет вовсе (как и на /balance). */}
+      {can("gift") && <GiftCard />}
     </div>
   );
 }

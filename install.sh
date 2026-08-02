@@ -76,6 +76,38 @@ ensure() {
     ADD_LINES+=("$var=$val")
   fi
 }
+# set_env VAR VALUE — записать ПРИНУДИТЕЛЬНО, сразу в файл.
+# ensure тут не годится дважды: он не трогает непустое (сменить бэкенд кабинета
+# повторным запуском было нельзя) и откладывает новые ключи до flush_env — из-за
+# чего две ветки, писавшие один ключ, давали в .env ДВЕ строки.
+set_env() {
+  local var="$1" val="$2" line keep=()
+  if grep -qE "^$var=" .env; then
+    awk -v k="$var" -v v="$val" 'BEGIN{FS="="} $1==k && !d {print k"="v; d=1; next} {print}' .env > .env.__tmp__ \
+      && mv .env.__tmp__ .env
+  else
+    printf '%s=%s\n' "$var" "$val" >> .env
+  fi
+  # Тот же ключ мог ждать очереди в отложенном блоке — снимаем, иначе продублируется.
+  if [ "${#ADD_LINES[@]}" -gt 0 ]; then
+    for line in "${ADD_LINES[@]}"; do
+      [[ "$line" == "$var="* ]] || keep+=("$line")
+    done
+    ADD_LINES=("${keep[@]+"${keep[@]}"}")
+  fi
+}
+# compose_list_drop "a.yml:b.yml" "b.yml" → "a.yml": убрать один файл из списка
+# COMPOSE_FILE, сохранив порядок и все остальные (в т.ч. добавленные оператором).
+compose_list_drop() {
+  local out="" f
+  local IFS=:
+  for f in $1; do
+    [ -n "$f" ] || continue
+    [ "$f" = "$2" ] && continue
+    out="${out:+$out:}$f"
+  done
+  printf '%s' "$out"
+}
 # flush_env "заголовок блока" — дописать накопленные ADD_LINES одним блоком
 flush_env() {
   if [ "${#ADD_LINES[@]}" -gt 0 ]; then
@@ -88,6 +120,9 @@ flush_env() {
   else
     ok ".env уже содержит все нужные ключи — добавлять нечего"
   fi
+  # В .env лежат токены бота, секреты JWT и пароль почты — читать их всем в
+  # системе незачем (по умолчанию файл создаётся с правами 644).
+  chmod 600 .env 2>/dev/null || true
 }
 
 # ── ввод (только если значение ещё не задано) ─────────────────────────────────
@@ -109,6 +144,92 @@ ask() { # ask VAR "Подсказка" ["default"]
 ask_yn() { local input; read -r -p "$(printf '%s%s%s [y/N]: ' "$BOLD" "$1" "$RST")" input </dev/tty || true; [[ "${input:-n}" =~ ^[YyДд] ]]; }
 
 gen_hex() { openssl rand -hex "${1:-32}" | tr -d '\n'; }
+
+# Достаёт ли адаптер до бота. Спрашиваем ИЗНУТРИ контейнера: адрес часто задан
+# именем docker-сервиса, которое с хоста не резолвится в принципе, — проверка с
+# хоста там ничего не доказывает.
+#   $1 — имя контейнера адаптера; печатает «OK <код>» либо «FAIL <ошибка>»
+adapter_probe_upstream() {
+  docker exec "$1" python -c \
+    'import os,urllib.request
+u=os.environ.get("BEDOLAGA_UPSTREAM","").rstrip("/")
+try:
+    r=urllib.request.urlopen(u+"/cabinet/branding",timeout=6)
+    print("OK",r.status)
+except Exception as e:
+    print("FAIL",type(e).__name__,e)' 2>/dev/null || true
+}
+
+# Адрес бота — имя контейнера на этой же машине? Тогда адаптеру не хватает лишь
+# общей с ним docker-сети: в site-режиме у кабинета с адаптером она своя, и имя
+# бота внутри неё не резолвится. Подключаем адаптер второй сетью — руками это
+# делать оператор не догадается, а симптом будет «весь кабинет отдаёт 502».
+#   $1 — контейнер адаптера, $2 — BEDOLAGA_UPSTREAM
+adapter_join_bot_network() {
+  local name="$1" host="$2" net
+  host="${host#*://}"; host="${host%%[:/]*}"
+  # Домен или IP сетью не лечится — там дело в маршруте/файрволе, не в резолве.
+  case "$host" in *.*|"") return 1 ;; esac
+  docker ps --format '{{.Names}}' | grep -qx "$host" || return 1
+  net="$(docker inspect "$host" \
+    --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null | awk '{print $1}')"
+  [ -n "$net" ] || return 1
+  docker network connect "$net" "$name" >/dev/null 2>&1 || return 1
+  docker restart "$name" >/dev/null 2>&1 || true
+  ok "  Адаптер подключён к сети бота (${net}) — без неё имя ${host} ему не резолвится"
+  return 0
+}
+
+# Дождаться адаптера и показать его самопроверку. Без этого ошибка в адресе бота
+# всплывала у пользователя 502-ми: контейнер поднят, а достучаться ему некуда.
+#   $1 — имя контейнера адаптера
+adapter_healthcheck() {
+  local name="$1" i out
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    out="$(docker exec "$name" python -c \
+      'import urllib.request;print(urllib.request.urlopen("http://127.0.0.1:8090/adapter/health",timeout=3).read().decode())' \
+      2>/dev/null || true)"
+    [ -n "$out" ] && break
+    sleep 2
+  done
+  if [ -z "$out" ]; then
+    warn "  Адаптер не ответил на самопроверку — смотрите логи: docker logs $name"
+    return 1
+  fi
+  ok "  Адаптер отвечает: ${DIM}${out}${RST}"
+  case "$out" in
+    *'"panel": true'*|*'"panel":true'*) : ;;
+    *) warn "  Панель Remnawave адаптеру не задана — серверы и устройства будут пустыми." ;;
+  esac
+  case "$out" in
+    *'"admin_token": true'*|*'"admin_token":true'*) : ;;
+    *) warn "  Админский токен Bedolaga не задан — заморозка подписки выключена." ;;
+  esac
+  # Главное — достаёт ли адаптер до бота. Иначе первым, кто узнает об ошибке в
+  # адресе, будет пользователь — по 502 на весь кабинет.
+  local up
+  up="$(adapter_probe_upstream "$name")"
+  # Не резолвится имя — почти всегда просто нет общей сети с ботом. Чиним и
+  # проверяем ещё раз, чтобы не оставлять оператора с рабочей, но мёртвой связкой.
+  case "$up" in
+    FAIL*name*resolution*|FAIL*Name*not*known*|FAIL*getaddrinfo*)
+      if adapter_join_bot_network "$name" "$(getval BEDOLAGA_UPSTREAM)"; then
+        for i in 1 2 3 4 5; do
+          sleep 2
+          up="$(adapter_probe_upstream "$name")"
+          [ -n "$up" ] && [ "${up#FAIL}" = "$up" ] && break
+        done
+      fi ;;
+  esac
+  case "$up" in
+    "OK 200"*) ok "  Адаптер достучался до бота Bedolaga (branding: 200)" ;;
+    OK*)       warn "  Бот Bedolaga ответил не 200: ${up#OK }. Проверьте, что это адрес их web-API." ;;
+    FAIL*)     warn "  Адаптер НЕ достучался до бота Bedolaga: ${DIM}${up#FAIL }${RST}"
+               warn "  Кабинет будет отдавать 502, пока адрес неверен: BEDOLAGA_UPSTREAM в .env."
+               warn "  Их бот должен быть в одной docker-сети с адаптером ЛИБО публиковать порт наружу." ;;
+    *)         : ;;  # старый образ адаптера без python в PATH — молчим, не пугаем
+  esac
+}
 
 # ── выбор способа входа в кабинет ─────────────────────────────────────────────
 # Сначала предлагаем современный Telegram OIDC. Если согласились — классический
@@ -161,9 +282,12 @@ prompt_login_method() {
 # не подходит — на нём Caddy не выпустит сертификат и сломается вход Telegram).
 # Возвращает 0, если кабинет опубликован через Caddy панели; иначе 1.
 PANEL_CADDYFILE="/opt/remnawave/caddy/Caddyfile"
-CABINET_CONTAINER="remnashop-cabinet"
 wire_cabinet_into_panel_caddy() {
-  local dom="$1" esc
+  local dom="$1" esc CABINET_CONTAINER
+  # Имя контейнера берём из .env: у второй установки на том же хосте оно своё
+  # (CABINET_CONTAINER), и прошитое `remnashop-cabinet` увело бы Caddy панели
+  # на чужой кабинет.
+  CABINET_CONTAINER="$(getval CABINET_CONTAINER)"; CABINET_CONTAINER="${CABINET_CONTAINER:-remnashop-cabinet}"
   [ -n "$dom" ] || return 1
   [ -f "$PANEL_CADDYFILE" ] || return 1
   docker ps --format '{{.Names}}' | grep -qx caddy || return 1
@@ -203,7 +327,8 @@ EOF
 # Принцип: если Caddy или nginx УЖЕ установлен — только ДОПИСЫВАЕМ в него vhost
 # кабинета (не ставим второй прокси, не перезаписываем чужой конфиг). Если ни
 # одного нет и 443 свободен — ставим выбранный и выпускаем сертификат сами.
-# Цель — контейнер кабинета на 127.0.0.1:5002.
+# Цель — контейнер кабинета на 127.0.0.1:$CAB_PORT (порт задаётся CABINET_PORT:
+# прошитый 5002 отправлял прокси мимо кабинета на нестандартном порту).
 _install_caddy_pkg() {
   command -v caddy >/dev/null 2>&1 && return 0
   info "  Устанавливаю Caddy…"
@@ -218,7 +343,7 @@ _install_caddy_pkg() {
 
 # Дописать vhost кабинета в СУЩЕСТВУЮЩИЙ Caddyfile (не перезаписывая его). Идемпотентно.
 _caddy_add_vhost() {
-  local dom="$1" cfg="/etc/caddy/Caddyfile" esc
+  local dom="$1" port="${2:-5002}" cfg="/etc/caddy/Caddyfile" esc
   [ -f "$cfg" ] || { mkdir -p /etc/caddy; : > "$cfg"; }
   esc="${dom//./\\.}"
   if grep -qE "(^|[[:space:]/])${esc}[[:space:]]*\{" "$cfg"; then
@@ -229,12 +354,12 @@ _caddy_add_vhost() {
 
 # RemnaShop cabinet — добавлено install.sh
 ${dom} {
-    reverse_proxy 127.0.0.1:5002
+    reverse_proxy 127.0.0.1:${port}
 }
 EOF
   fi
   systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null || true
-  ok "  Кабинет вписан в Caddy: ${dom} → 127.0.0.1:5002 (TLS авто)"
+  ok "  Кабинет вписан в Caddy: ${dom} → 127.0.0.1:${port} (TLS авто)"
 }
 
 _install_nginx_pkg() {
@@ -247,13 +372,13 @@ _install_nginx_pkg() {
 
 # Дописать vhost кабинета в nginx ОТДЕЛЬНЫМ файлом (чужие конфиги не трогаем).
 _nginx_add_vhost() {
-  local dom="$1"
+  local dom="$1" port="${2:-5002}"
   cat > /etc/nginx/sites-available/remnashop-cabinet.conf <<EOF
 server {
     listen 80;
     server_name ${dom};
     location / {
-        proxy_pass http://127.0.0.1:5002;
+        proxy_pass http://127.0.0.1:${port};
         proxy_set_header Host \$host;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
@@ -264,7 +389,7 @@ EOF
   nginx -t >/dev/null 2>&1 && systemctl reload nginx
   if certbot --nginx -d "${dom}" --non-interactive --agree-tos \
        --register-unsafely-without-email --redirect >/dev/null 2>&1; then
-    ok "  nginx + TLS: ${dom} → 127.0.0.1:5002"
+    ok "  nginx + TLS: ${dom} → 127.0.0.1:${port}"
   else
     warn "  nginx поднят на http, сертификат пока не выпустился (проверьте A-запись)."
     say  "    После настройки DNS: ${DIM}certbot --nginx -d ${dom} --redirect${RST}"
@@ -279,6 +404,64 @@ EOF
 # Токен админского API «Бедолаги» — им адаптер делает то, чего их бот не умеет
 # (сейчас: заморозка подписки). Кода их бота это не касается: токены выпускаются
 # их же ручкой /tokens. Без токена кабинет работает, просто без таких разделов.
+# Достроить адрес бота до URL. Схему угадываем осознанно: голый домен на сайт-
+# сервере — это публичный API за TLS, и прошитый http гнал бы админский токен и
+# данные пользователей открытым текстом через интернет. А имя контейнера,
+# localhost, IP или явный не-443 порт — это «внутри машины», там TLS нет.
+#   $1 — то, что ввёл оператор (host[:port] или URL); печатает URL без хвостового /
+bedolaga_url() {
+  local raw="$1" host port url
+  case "$raw" in
+    http://*|https://*) printf '%s' "${raw%/}"; return ;;
+  esac
+  host="${raw%%[:/]*}"
+  port=""; case "${raw%%/*}" in *:*) port="${raw%%/*}"; port="${port#*:}" ;; esac
+  url="http://$raw"
+  # Домен (есть точка и хоть один не-цифровой символ, т.е. не IPv4) без порта
+  # либо с 443 — единственный случай, где по умолчанию https.
+  case "$host" in
+    *[!0-9.]*)
+      case "$host" in
+        *.*) [ -z "$port" ] || [ "$port" = 443 ] && url="https://$raw" ;;
+      esac ;;
+  esac
+  printf '%s' "${url%/}"
+}
+
+# Отвечает ли API «Бедолаги» по указанному адресу. Ставит BED_CHECKED=1, чтобы
+# ниже не дёргать ту же ручку второй раз за запуск.
+#   $1 — базовый URL их API (со схемой)
+BED_CHECKED=0
+check_bedolaga_api() {
+  local url="$1" code
+  BED_CHECKED=1
+  # curl при обрыве связи сам печатает 000, поэтому запасной echo давал бы «000000».
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "${url}/cabinet/branding" 2>/dev/null || true)"
+  code="${code:-000}"
+  if [ "$code" = "200" ]; then
+    ok "  API бота Bedolaga ${url} отвечает"
+    return 0
+  fi
+  # Адрес вида `remnawave_bot:8080` — имя docker-сервиса: с хоста оно не
+  # резолвится в принципе, поэтому ругаться тут не на что. Настоящую проверку
+  # сделает adapter_healthcheck изнутри контейнера, после запуска.
+  local hostpart="${url#*://}"; hostpart="${hostpart%%[:/]*}"
+  case "$hostpart" in
+    *.*) : ;;
+    *) say "  ${DIM}Адрес похож на имя docker-сервиса — проверю его изнутри адаптера после запуска.${RST}"
+       return 1 ;;
+  esac
+  warn "  ${url}/cabinet/branding вернул '${code}' (ожидался 200)."
+  warn "  Проверьте адрес бота Bedolaga и что его web-API включён (WEB_API_ENABLED)."
+  # 000 в одно-серверной установке почти всегда значит одно: их бот слушает
+  # только внутри своей сети/на localhost, а адаптеру нужен доступный адрес.
+  case "$url" in
+    *172.17.0.1*|*localhost*|*127.0.0.1*)
+      warn "  Их compose должен публиковать порт наружу ('8080:8080'), иначе адаптер не достучится." ;;
+  esac
+  return 1
+}
+
 prompt_bedolaga_token() {
   local api="$1" boot named
   need_value BEDOLAGA_ADMIN_TOKEN || { ok "  Токен Bedolaga уже задан — пропускаю"; return; }
@@ -286,15 +469,22 @@ prompt_bedolaga_token() {
   say "${BOLD}Доступ к админскому API Bedolaga${RST} ${DIM}(для заморозки подписки)${RST}"
   say "  Нужен любой их токен: строка ${DIM}WEB_API_DEFAULT_TOKEN${RST} из .env бота Bedolaga."
   say "  ${DIM}Пусто — пропустить: кабинет будет работать без заморозки.${RST}"
-  read -r -p "$(printf '%sТокен Bedolaga: %s' "$BOLD" "$RST")" boot </dev/tty || true
+  # -s: токен не печатается в терминал и не остаётся в истории прокрутки.
+  read -r -s -p "$(printf '%sТокен Bedolaga: %s' "$BOLD" "$RST")" boot </dev/tty || true
+  say ""
   [ -z "${boot:-}" ] && { warn "Токен не задан — заморозка подписки будет выключена."; return; }
 
   # Просим у них ОТДЕЛЬНЫЙ именной токен, чтобы кабинет не жил на их стартовом:
   # стартовый оживает при каждом рестарте бота, пока он прописан в .env.
+  # Заголовок с токеном отдаём файлом, а не аргументом: аргументы видны в списке
+  # процессов любому пользователю сервера, пока команда выполняется.
+  local hdr; hdr="$(mktemp)"; chmod 600 "$hdr"
+  printf 'X-API-Key: %s\n' "$boot" > "$hdr"
   named="$(curl -fsS --max-time 10 -X POST "${api}/tokens" \
-      -H "X-API-Key: ${boot}" -H 'content-type: application/json' \
+      -H @"$hdr" -H 'content-type: application/json' \
       -d '{"name":"cabinet-adapter","description":"Кабинет: заморозка подписки"}' 2>/dev/null \
     | grep -oE '"token"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | cut -d'"' -f4)"
+  rm -f "$hdr"
 
   if [ -n "$named" ]; then
     ensure BEDOLAGA_ADMIN_TOKEN "$named"
@@ -307,57 +497,116 @@ prompt_bedolaga_token() {
 }
 
 # Префикс уезжает в nginx кабинета переменной API_PATH_PREFIX (см. nginx.conf).
+#
+# BACKEND_CHOICE — выбор ЭТОГО запуска. Читать его, а не .env: ensure кладёт новые
+# ключи в отложенный блок, и до flush_env `getval CABINET_BACKEND` возвращает пусто
+# — из-за этого адаптер не попадал в compose и кабинет вставал только со второго
+# запуска установщика.
+#   $1 — "site", если кабинет ставится отдельно от бота (адреса API_* там свои).
+BACKEND_CHOICE=""
 prompt_cabinet_backend() {
-  if ! need_value CABINET_BACKEND; then
-    ok "  Бэкенд кабинета уже выбран ($(getval CABINET_BACKEND)) — пропускаю"
+  local site="${1:-}" choice bed_host bed_url
+  # Заданный в окружении бэкенд выигрывает у записанного: это единственный способ
+  # передумать (`CABINET_BACKEND=remnashop ./install.sh`), не правя .env руками.
+  if [ -n "${CABINET_BACKEND:-}" ]; then
+    BACKEND_CHOICE="$CABINET_BACKEND"
+    ok "  Бэкенд кабинета задан переменной окружения: $BACKEND_CHOICE"
+  elif ! need_value CABINET_BACKEND; then
+    BACKEND_CHOICE="$(getval CABINET_BACKEND)"
+    ok "  Бэкенд кабинета уже выбран ($BACKEND_CHOICE) — пропускаю"
+    say "  ${DIM}Сменить: CABINET_BACKEND=remnashop ./install.sh${RST}"
     return
-  fi
-  say ""
-  say "${BOLD}Какой бот обслуживает кабинет?${RST}"
-  say "  1) RemnaShop ${DIM}(наш бот, по умолчанию)${RST}"
-  say "  2) Bedolaga  ${DIM}(bedolaga-бот; экспериментально)${RST}"
-  local choice
-  read -r -p "$(printf '%sВыбор [1]: %s' "$BOLD" "$RST")" choice </dev/tty || true
-  if [[ "${choice:-1}" == "2" ]]; then
-    ensure CABINET_BACKEND bedolaga
-    # Кабинет ходит НЕ в их бот напрямую, а в адаптер: тот отдаёт наш контракт
-    # (/api/v1/public/*) поверх их API — переводит формы, держит сессию в куках
-    # и закрывает то, чего у них нет. Поэтому префикс здесь наш, а не /cabinet/.
-    ensure API_PATH_PREFIX "/api/v1/public/"
-    ensure API_UPSTREAM "remnashop-cabinet-adapter:8090"
-    ensure API_SCHEME http
-    ensure API_HOST_HEADER '$host'
-    local bed_host
-    ask BEDOLAGA_HOST "  Адрес бота Bedolaga (host:port)" "bedolaga:8080"
-    bed_host="${ASKED:-bedolaga:8080}"; ASKED=""
-    ensure BEDOLAGA_UPSTREAM "http://${bed_host#http://}"
-    prompt_bedolaga_token "http://${bed_host#http://}"
   else
-    ensure CABINET_BACKEND remnashop
-    ensure API_PATH_PREFIX "/api/v1/public/"
+    say ""
+    say "${BOLD}Какой бот обслуживает кабинет?${RST}"
+    say "  1) RemnaShop ${DIM}(наш бот, по умолчанию)${RST}"
+    say "  2) Bedolaga  ${DIM}(bedolaga-бот; экспериментально)${RST}"
+    read -r -p "$(printf '%sВыбор [1]: %s' "$BOLD" "$RST")" choice </dev/tty || true
+    if [[ "${choice:-1}" == "2" ]]; then
+      # Выбор дорогой: он переписывает адреса API_* и поднимает лишний сервис.
+      # Случайная «2» раньше ломала кабинет, и вернуться было нечем.
+      if ask_yn "  Кабинет будет работать поверх бота Bedolaga. Подтвердить?"; then
+        BACKEND_CHOICE=bedolaga
+      else
+        BACKEND_CHOICE=remnashop
+      fi
+    else
+      BACKEND_CHOICE=remnashop
+    fi
   fi
+
+  set_env CABINET_BACKEND "$BACKEND_CHOICE"
+  # Префикс наш в обоих случаях: кабинет ходит либо в наш бот, либо в адаптер,
+  # а тот отдаёт наш же контракт (/api/v1/public/*) поверх чужого API.
+  set_env API_PATH_PREFIX "/api/v1/public/"
+  [ "$BACKEND_CHOICE" = bedolaga ] || return 0
+
+  # Адрес их бота. Спрашиваем ВСЕГДА, дефолт ответа — уже сохранённый адрес:
+  # Enter оставляет как есть, ввод нового — меняет. Через `ask` было нельзя:
+  # он молча пропускает заполненную переменную, и сохранённый адрес затирался
+  # дефолтом установщика (адрес бота нельзя было сменить повторным запуском).
+  local def saved
+  saved="$(getval BEDOLAGA_HOST)"
+  def="$saved"
+  # Дефолт для одного сервера — шлюз docker-моста: их compose публикует порт
+  # наружу, а имени `bedolaga` в сети нет (у них своя сеть bot_network).
+  [ -z "$def" ] && [ "$site" != site ] && def="http://172.17.0.1:8080"
+  if [ -n "${BEDOLAGA_HOST:-}" ]; then
+    # Переменной окружения можно поставить адрес без диалога (неинтерактив/CI).
+    bed_host="$BEDOLAGA_HOST"
+    ok "  Адрес бота Bedolaga задан переменной окружения: $bed_host"
+  elif [ ! -e /dev/tty ]; then
+    bed_host="$def"
+    [ -n "$bed_host" ] || die "Нет терминала для вопроса. Задайте адрес: BEDOLAGA_HOST=https://bot.example.com ./install.sh site"
+  else
+    while :; do
+      if [ -n "$def" ]; then
+        read -r -p "$(printf '%s  Адрес API бота Bedolaga (host:port или URL)%s [%s]: ' "$BOLD" "$RST" "$def")" bed_host </dev/tty || true
+        bed_host="${bed_host:-$def}"
+      else
+        read -r -p "$(printf '%s  Адрес API бота Bedolaga (напр. https://bot.example.com)%s: ' "$BOLD" "$RST")" bed_host </dev/tty || true
+      fi
+      [ -n "$bed_host" ] && break
+      warn "  Поле обязательно."
+    done
+  fi
+  # Схему принимаем из ответа, а не приклеиваем http:// поверх введённого —
+  # иначе на «https://bot.example.com» выходило «http://https://…».
+  bed_url="$(bedolaga_url "$bed_host")"
+  case "$bed_url" in
+    "https://$bed_host") info "  Схема не указана — беру https (домен). Нужен http — укажите его явно." ;;
+  esac
+  # Сохраняем ОБА: спрашивать адрес при каждом запуске и молча терять ответ —
+  # ровно то, на что жаловались («сменить адрес бота повторным запуском нельзя»).
+  set_env BEDOLAGA_HOST "$bed_host"
+  set_env BEDOLAGA_UPSTREAM "$bed_url"
+  # Проверяем адрес ДО вопроса про токен: иначе оператор вводит токен вслепую,
+  # а ошибку в адресе видит только 502-ми в кабинете. `|| true` обязателен:
+  # под `set -e` неудачная проверка иначе роняет всю установку.
+  check_bedolaga_api "$bed_url" || true
+  prompt_bedolaga_token "$bed_url"
 }
 
 publish_cabinet_auto() {
-  local dom="$1" choice="${HTTPS:-}"
+  local dom="$1" port="${2:-5002}" choice="${HTTPS:-}"
 
   # 1) Caddy УЖЕ установлен — только дописываем в него (второй прокси не ставим).
   if command -v caddy >/dev/null 2>&1; then
     ok "  Обнаружен установленный Caddy — вписываю кабинет в него."
-    _caddy_add_vhost "$dom"
+    _caddy_add_vhost "$dom" "$port"
     return 0
   fi
   # 2) nginx УЖЕ установлен — добавляем vhost кабинета + сертификат.
   if command -v nginx >/dev/null 2>&1; then
     ok "  Обнаружен установленный nginx — добавляю vhost кабинета."
     _install_nginx_pkg
-    _nginx_add_vhost "$dom"
+    _nginx_add_vhost "$dom" "$port"
     return 0
   fi
   # 3) Прокси нет, но 443 занят чем-то сторонним — не трогаем.
   if ss -ltn 2>/dev/null | grep -q ':443 '; then
     warn "  Порт 443 занят сторонним reverse-proxy — не трогаю его."
-    say  "  Направьте его на ${BOLD}127.0.0.1:5002${RST} (домен ${dom})."
+    say  "  Направьте его на ${BOLD}127.0.0.1:${port}${RST} (домен ${dom})."
     return 0
   fi
   # 4) Чистый сервер — ставим выбранный прокси и выпускаем сертификат сами.
@@ -369,9 +618,9 @@ publish_cabinet_auto() {
     case "${_a}" in 2) choice=nginx ;; 3) choice=none ;; *) choice=caddy ;; esac
   fi
   case "${choice:-caddy}" in
-    nginx) _install_nginx_pkg; _nginx_add_vhost "$dom" ;;
-    none)  say "  ${DIM}Опубликуйте кабинет своим прокси: домен ${dom} → 127.0.0.1:5002${RST}" ;;
-    *)     _install_caddy_pkg; _caddy_add_vhost "$dom" ;;
+    nginx) _install_nginx_pkg; _nginx_add_vhost "$dom" "$port" ;;
+    none)  say "  ${DIM}Опубликуйте кабинет своим прокси: домен ${dom} → 127.0.0.1:${port}${RST}" ;;
+    *)     _install_caddy_pkg; _caddy_add_vhost "$dom" "$port" ;;
   esac
 }
 
@@ -381,17 +630,49 @@ publish_cabinet_auto() {
 if [ "$MODE" = "site" ]; then
   say "${BOLD}RemnaShop — установка кабинета на ОТДЕЛЬНОМ сервере${RST}"
   ok "Зависимости на месте"
+  # Имя compose-проекта в site-режиме compose берёт по КАТАЛОГУ первого -f, то
+  # есть `cabinet` у всех установок сразу: вторая на том же хосте разделила бы с
+  # первой том состояния заморозки и перетёрла бы её образы. Задаём имя по
+  # каталогу установки — но ТОЛЬКО на свежей: у работающей установки смена имени
+  # проекта означала бы новый (пустой) том, то есть потерю пауз.
+  FRESH_SITE=no
+  [ -s .env ] || FRESH_SITE=yes
   [ -f .env ] || { : > .env; ok "Создан пустой .env для кабинета"; }
+  # Права сужаем СРАЗУ, а не в конце: до flush_env в файл уже успевает лечь
+  # админский токен «Бедолаги» (set_env пишет напрямую), а новый файл создаётся
+  # с 644 — читаемым любым пользователем сервера.
+  chmod 600 .env 2>/dev/null || true
+  if [ "$FRESH_SITE" = yes ]; then
+    PROJ="$(basename "$PWD" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9_-')"
+    # Каталог самого репозитория дал бы имя `remnashop` — то же, что у установки
+    # с ботом на этом хосте.
+    [ "$PROJ" = remnashop ] && PROJ=remnashop-cabinet
+    ensure COMPOSE_PROJECT_NAME "${PROJ:-remnashop-cabinet}"
+  fi
 
   say ""
   say "${BOLD}Недостающие данные${RST} ${DIM}(секреты на сайт-сервере не нужны — их держит бот)${RST}"
 
   # Способ входа спросим ниже, когда узнаем URL кабинета (для подсказок).
 
+  # Бэкенд спрашиваем ПЕРВЫМ: от него зависит, куда смотрит кабинет. Раньше
+  # сначала спрашивали домен бота и писали по нему API_*, а потом ветка «Бедолаги»
+  # писала те же ключи второй раз — .env получал дубли и литерал '$host', после
+  # чего падала любая последующая команда compose.
+  prompt_cabinet_backend site
+
   # Домен API бота — кабинет проксирует /api/ на ПУБЛИЧНЫЙ API бота по https
   # (его уже отдаёт reverse-proxy бота; WG/приватный канал не нужен).
   # Из домена выводим API_UPSTREAM (домен:443), API_SCHEME=https, API_HOST_HEADER=домен.
-  if need_value API_UPSTREAM; then
+  if [ "$BACKEND_CHOICE" = bedolaga ]; then
+    # Кабинет и адаптер поднимаются одним compose и видят друг друга по имени
+    # сервиса. Пишем в .env, а не только в export: иначе установка живёт лишь
+    # внутри install.sh, а `docker compose logs/up` потом падает без значений.
+    set_env API_UPSTREAM "cabinet-adapter:8090"
+    set_env API_SCHEME http
+    # Литерал имени, а не '$host': доллар compose принимает за свою переменную.
+    set_env API_HOST_HEADER "cabinet-adapter"
+  elif need_value API_UPSTREAM; then
     while :; do
       ask API_BOT_DOMAIN "  Домен API бота, где отвечает /api/v1/* (напр. bot.example.com)"
       D="${ASKED:-}"; ASKED=""
@@ -413,7 +694,6 @@ if [ "$MODE" = "site" ]; then
   [ -n "${ASKED:-}" ] && ensure WEB_CABINET_URL "$ASKED"; ASKED=""
 
   # способ входа: OIDC (на боте) → классический виджет → только email
-  prompt_cabinet_backend
   prompt_login_method "$(getval WEB_CABINET_URL)" site
 
   flush_env "Добавлено RemnaShop (кабинет, отдельный сервер)"
@@ -431,37 +711,32 @@ if [ "$MODE" = "site" ]; then
   export API_SCHEME="$(getval API_SCHEME)"
   export API_HOST_HEADER="$API_DOM"
   export API_PATH_PREFIX="$(getval API_PATH_PREFIX)"
+  # Публичный адрес кабинета нужен адаптеру для проверки источника изменяющих
+  # запросов (CSRF): свой Host он видит как имя контейнера, а не как домен.
+  export WEB_CABINET_URL="$(getval WEB_CABINET_URL)"
 
   # Кабинет поверх чужого бота ходит не в бота, а в адаптер рядом с собой.
   SITE_COMPOSE=(-f cabinet/docker-compose.site.yml)
-  if [ "$(getval CABINET_BACKEND)" = bedolaga ]; then
+  if [ "$BACKEND_CHOICE" = bedolaga ]; then
     SITE_COMPOSE+=(-f cabinet/docker-compose.site-adapter.yml)
     export BEDOLAGA_UPSTREAM="$(getval BEDOLAGA_UPSTREAM)"
     export BEDOLAGA_ADMIN_TOKEN="$(getval BEDOLAGA_ADMIN_TOKEN)"
     export REMNAWAVE_URL="$(getval REMNAWAVE_URL)"
     export REMNAWAVE_TOKEN="$(getval REMNAWAVE_TOKEN)"
-    # Кабинет и адаптер поднимаются одним compose — значит видят друг друга по
-    # имени сервиса; API_UPSTREAM смотрит на адаптер, а не на домен бота.
-    export API_UPSTREAM="cabinet-adapter:8090"
-    export API_SCHEME=http
-    # Литерал, а не '$host': compose принял бы доллар за свою переменную и
-    # подставил пустую строку — nginx ушёл бы к адаптеру без Host-заголовка.
-    export API_HOST_HEADER="cabinet-adapter"
-    ensure API_UPSTREAM "cabinet-adapter:8090"
+    # Значения уже записаны в .env выше (при выборе бэкенда) — здесь только
+    # переносим их в окружение процесса compose.
+    export API_UPSTREAM="$(getval API_UPSTREAM)"
+    export API_SCHEME="$(getval API_SCHEME)"
+    export API_HOST_HEADER="$(getval API_HOST_HEADER)"
   fi
 
   # Пред-проверка: отвечает ли API бота (частая ошибка — неверный домен).
-  if [ "$(getval CABINET_BACKEND)" = bedolaga ]; then
-    BED="$(getval BEDOLAGA_UPSTREAM)"
-    PRE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "${BED}/cabinet/branding" 2>/dev/null || echo 000)"
-    if [ "$PRE" = "200" ]; then
-      ok "  API бота Bedolaga ${BED} отвечает"
-    else
-      warn "  ${BED}/cabinet/branding вернул '${PRE}' (ожидался 200)."
-      warn "  Проверьте адрес бота Bedolaga и что его web-API включён."
-    fi
+  if [ "$BACKEND_CHOICE" = bedolaga ]; then
+    # На повторном запуске вопрос про адрес пропускается — тогда проверяем здесь.
+    [ "$BED_CHECKED" = 1 ] || check_bedolaga_api "$(getval BEDOLAGA_UPSTREAM)" || true
   else
-    PRE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "https://${API_DOM}/api/v1/public/auth/me" 2>/dev/null || echo 000)"
+    PRE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "https://${API_DOM}/api/v1/public/auth/me" 2>/dev/null || true)"
+    PRE="${PRE:-000}"
     if [ "$PRE" = "401" ] || [ "$PRE" = "200" ]; then
       ok "  API бота https://${API_DOM} отвечает (${PRE})"
     else
@@ -482,19 +757,24 @@ if [ "$MODE" = "site" ]; then
     warn "  Порт 127.0.0.1:${CAB_PORT} занят — освобождаю прежний контейнер кабинета."
   fi
   $DC --env-file .env "${SITE_COMPOSE[@]}" down --remove-orphans 2>/dev/null || true
-  if [ "$(getval CABINET_BACKEND)" = bedolaga ]; then
+  if [ "$BACKEND_CHOICE" = bedolaga ]; then
     info "Собираю и поднимаю кабинет с адаптером (Bedolaga: $(getval BEDOLAGA_UPSTREAM))…"
   else
     info "Собираю и поднимаю кабинет (проксирует /api/ → https://${API_DOM})…"
   fi
   $DC --env-file .env "${SITE_COMPOSE[@]}" up -d --build --force-recreate
 
+  if [ "$BACKEND_CHOICE" = bedolaga ]; then
+    ADP="$(getval ADAPTER_CONTAINER)"
+    adapter_healthcheck "${ADP:-remnashop-cabinet-adapter}" || true
+  fi
+
   say ""
   ok "${BOLD}Готово!${RST}"
   say "  Кабинет: ${DIM}127.0.0.1:${CAB_PORT}${RST}  → проксируйте на ${BOLD}${CAB_URL:-ваш домен кабинета}${RST}"
   say ""
   say "  Логи:   ${DIM}$DC ${SITE_COMPOSE[*]} logs -f${RST}"
-  say "  ${YLW}Дальше:${RST} reverse-proxy с TLS (свободный 443) на домен кабинета → 127.0.0.1:5002."
+  say "  ${YLW}Дальше:${RST} reverse-proxy с TLS (свободный 443) на домен кабинета → 127.0.0.1:${CAB_PORT}."
   exit 0
 fi
 
@@ -516,6 +796,9 @@ if [ ! -f .env ]; then
   die "Нет .env — нечего дополнять."
 fi
 ok "Найден существующий .env — дополняю недостающим"
+# Сужаем права до записи секретов: в .env лежат токен бота, JWT и пароль почты,
+# а дальше ляжет ещё и админский токен «Бедолаги» (set_env пишет сразу в файл).
+chmod 600 .env 2>/dev/null || true
 
 say ""
 say "${BOLD}Недостающие данные${RST} ${DIM}(остальное — автоматически)${RST}"
@@ -535,7 +818,13 @@ fi
 CAB_URL="$(getval WEB_CABINET_URL)"; CAB_URL="${CAB_URL:-${ASKED:-}}"; ASKED=""
 
 # способ входа в кабинет: OIDC → классический виджет → только email
-prompt_cabinet_backend
+# Прежний бэкенд запоминаем ДО опроса: по нему видно, что это возврат с «Бедолаги»,
+# и надо убрать её адаптер (сам он из compose уже исчезнет и станет «сиротой»).
+PREV_BACKEND="$(getval CABINET_BACKEND)"
+# В режиме api кабинета здесь нет — он на другой машине, и бэкенд выбирают ТАМ,
+# своей установкой. Спрашивать тут было незачем: ответ ничего бы не изменил,
+# а «2» молча прописала бы адрес несуществующего адаптера.
+[ "$WITH_CABINET" = yes ] && prompt_cabinet_backend
 prompt_login_method "$CAB_URL"
 # Ключ должен присутствовать даже при выборе OIDC/email — иначе сборка кабинета
 # ругается на незаданную переменную build-arg (VITE_TELEGRAM_BOT_USERNAME).
@@ -556,14 +845,50 @@ ensure BOT_MINI_APP_RESERVE true
 # В режиме api кабинет не поднимаем — только бот/воркеры.
 # Кабинет поверх чужого бота работает через адаптер — добавляем его файл, чтобы
 # обычный `docker compose ...` без -f видел и поднимал этот сервис тоже.
+ADAPTER_YML="cabinet/docker-compose.adapter.yml"
 CABINET_COMPOSE=(-f docker-compose.yml -f cabinet/docker-compose.cabinet.yml)
 COMPOSE_LIST="docker-compose.yml:cabinet/docker-compose.cabinet.yml"
-if [ "$(getval CABINET_BACKEND)" = bedolaga ]; then
-  CABINET_COMPOSE+=(-f cabinet/docker-compose.adapter.yml)
-  COMPOSE_LIST="${COMPOSE_LIST}:cabinet/docker-compose.adapter.yml"
+if [ "$BACKEND_CHOICE" = bedolaga ]; then
+  CABINET_COMPOSE+=(-f "$ADAPTER_YML")
+  # Кабинет ходит в адаптер рядом, а не в бота: имя контейнера адаптера в общей
+  # сети. Пишем принудительно — при смене бэкенда адрес обязан перезаписаться.
+  # API_HOST_HEADER/API_SCHEME не трогаем: их дефолты живут в образе кабинета
+  # (Dockerfile), а литерал '$host' в .env compose принимает за свою переменную
+  # и подставляет пустоту — после этого падает любая команда compose.
+  # Имя контейнера адаптера читаем из .env (compose берёт его оттуда же): у второй
+  # установки на хосте оно своё, и прошитое имя увело бы кабинет в чужой адаптер.
+  ADP_NAME="$(getval ADAPTER_CONTAINER)"; ADP_NAME="${ADP_NAME:-${ADAPTER_CONTAINER:-remnashop-cabinet-adapter}}"
+  set_env API_UPSTREAM "${ADP_NAME}:8090"
+else
+  # Возврат на наш бот: адрес обязан уйти с адаптера, иначе кабинет продолжит
+  # смотреть в несуществующий сервис и отвечать 502 на весь /api/*. Сверяем и с
+  # именем из .env: у второй установки адаптер называется по-своему, и проверки
+  # по подстроке `cabinet-adapter` не хватало. Чужие адреса не трогаем.
+  ADP_NAME="$(getval ADAPTER_CONTAINER)"; ADP_NAME="${ADP_NAME:-remnashop-cabinet-adapter}"
+  case "$(getval API_UPSTREAM)" in
+    *cabinet-adapter*|"${ADP_NAME}:8090") set_env API_UPSTREAM "remnashop:5000" ;;
+  esac
+fi
+if [ "$BACKEND_CHOICE" != bedolaga ] && [ "$PREV_BACKEND" = bedolaga ]; then
+  # Контейнер адаптера остаётся работать и без своего compose-файла: compose его
+  # больше не видит и ругается «orphan containers», подсказывая --remove-orphans
+  # (которым легко снести заодно и нужное). Убираем его сами. Том с паузами
+  # (adapter-state) не трогаем — он понадобится, если оператор вернётся обратно.
+  ADP="$(getval ADAPTER_CONTAINER)"; ADP="${ADP:-remnashop-cabinet-adapter}"
+  if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$ADP"; then
+    docker rm -f "$ADP" >/dev/null 2>&1 || true
+    ok "  Адаптер Bedolaga удалён (память о паузах сохранена в томе adapter-state)"
+  fi
 fi
 if [ "$WITH_CABINET" = yes ]; then
-  ensure COMPOSE_FILE "$COMPOSE_LIST"
+  # В COMPOSE_FILE у оператора бывают СВОИ файлы (напр. docker-compose.local-ha.yml).
+  # Поэтому список не переписываем целиком, а трогаем ровно одну запись — адаптера:
+  # переписав его под себя, повторный install.sh молча выкинул бы чужие файлы, и
+  # `docker compose` без -f перестал бы видеть их сервисы.
+  CUR_CF="$(getval COMPOSE_FILE)"
+  NEW_CF="$(compose_list_drop "${CUR_CF:-$COMPOSE_LIST}" "$ADAPTER_YML")"
+  [ "$BACKEND_CHOICE" = bedolaga ] && NEW_CF="${NEW_CF:+$NEW_CF:}$ADAPTER_YML"
+  [ "$NEW_CF" = "$CUR_CF" ] || set_env COMPOSE_FILE "$NEW_CF"
 else
   ensure COMPOSE_FILE "docker-compose.yml"
 fi
@@ -626,16 +951,25 @@ docker network inspect remnawave-network >/dev/null 2>&1 || {
 # ── сборка и запуск ──────────────────────────────────────────────────────────
 say ""
 if [ "$WITH_CABINET" = yes ]; then
-  if [ "$(getval CABINET_BACKEND)" = bedolaga ]; then
+  if [ "$BACKEND_CHOICE" = bedolaga ]; then
+    # Честно: этот режим поднимает и НАШЕГО бота с его БД/воркерами — он нужен
+    # только тем, у кого оба бота на одной машине. Для чистой «Бедолаги» путь
+    # другой, иначе оператор будет искать, зачем ему наша инфраструктура.
+    warn "Поднимутся и наш бот с БД/воркерами. Только кабинет+адаптер ставит ./install.sh site"
     info "Собираю и поднимаю бота (overlay), воркеры, кабинет и адаптер Bedolaga…"
   else
     info "Собираю и поднимаю бота (overlay), воркеры и кабинет…"
   fi
   $DC "${CABINET_COMPOSE[@]}" up -d --build
+  if [ "$BACKEND_CHOICE" = bedolaga ]; then
+    ADP="$(getval ADAPTER_CONTAINER)"
+    adapter_healthcheck "${ADP:-remnashop-cabinet-adapter}" || true
+  fi
   say ""
   ok "${BOLD}Готово!${RST}"
+  CAB_PORT="$(getval CABINET_PORT)"; CAB_PORT="${CAB_PORT:-5002}"
   say "  Бот и API:  ${DIM}127.0.0.1:5000${RST}"
-  say "  Кабинет:    ${DIM}127.0.0.1:5002${RST}"
+  say "  Кабинет:    ${DIM}127.0.0.1:${CAB_PORT}${RST}"
   say ""
 
   # Пытаемся опубликовать кабинет автоматически через Caddy панели Remnawave.
@@ -645,7 +979,7 @@ if [ "$WITH_CABINET" = yes ]; then
     say "  ${DIM}(проверьте A-запись ${CAB_DOM} → IP этого сервера)${RST}"
   else
     # Caddy панели нет — ставим свой reverse-proxy сами (выбор Caddy/nginx).
-    publish_cabinet_auto "$CAB_DOM"
+    publish_cabinet_auto "$CAB_DOM" "$CAB_PORT"
   fi
   say ""
   if [ -n "$(getval TELEGRAM_OIDC_CLIENT_ID)" ]; then

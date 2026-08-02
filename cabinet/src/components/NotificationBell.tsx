@@ -5,9 +5,11 @@ import {
   ShieldAlert, Activity, Smartphone, CreditCard, Gift, Percent, type LucideIcon,
 } from "lucide-react";
 import { notificationsApi, type UserNotification } from "@/api/notifications";
+import { ApiError } from "@/types/api";
 import { formatRelativeOnline } from "@/lib/format";
 import { safeInternalPath } from "@/lib/nav";
 import { useT } from "@/i18n/I18nContext";
+import { useBranding } from "@/contexts/BrandingContext";
 
 // Центр уведомлений в кабинете: колокольчик со счётчиком непрочитанных + лента.
 // Чинит «push в небытие» на мобиле — уведомления теперь можно посмотреть позже.
@@ -26,6 +28,11 @@ function metaFor(n: UserNotification): { Icon: LucideIcon; cls: string } {
 
 export function NotificationBell() {
   const t = useT();
+  // Ленту бэкенд отдавать умеет, а «очистить всё» — не обязательно.
+  const { can } = useBranding();
+  // Бэкенд может не объявлять возможность, но и не уметь её (старые сборки
+  // адаптера): тогда узнаём об этом по первому отказу и больше кнопку не рисуем.
+  const [clearBroken, setClearBroken] = useState(false);
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<UserNotification[]>([]);
   const [unread, setUnread] = useState(0);
@@ -75,8 +82,13 @@ export function NotificationBell() {
   const clearAll = async () => {
     try {
       await notificationsApi.clear();
-    } catch {
-      /* тихо */
+    } catch (e) {
+      // Список чистим ТОЛЬКО после успеха: раньше он гас локально и возвращался
+      // после перезагрузки — кабинет обещал то, чего бэкенд не сделал.
+      // Убираем кнопку только на «такого не умею» (501/405/404); на 403/500/сеть
+      // это разовый отказ, и прятать рабочую кнопку из-за него нельзя.
+      if (e instanceof ApiError && [404, 405, 501].includes(e.status)) setClearBroken(true);
+      return;
     }
     setItems([]);
     setUnread(0);
@@ -131,7 +143,7 @@ export function NotificationBell() {
                   </span>
                 )}
               </div>
-              {items.length > 0 && (
+              {items.length > 0 && can("notifications_clear") && !clearBroken && (
                 <button
                   type="button"
                   onClick={clearAll}

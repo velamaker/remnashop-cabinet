@@ -156,3 +156,46 @@
 | GET, POST (xui — multipart) | `/api/admin/import/status, /import/squads, /import/sync-panel, /import/sync-bot, /import/xui` | Импорт/синхронизация пользователей из панели, бота и файла 3x-ui | {panel,bot,xui}; squads[]; {success,synced}; xui → {success,found,started} |
 | GET | `/api/admin/remnawave/system | /nodes | /hosts | /inbounds` | Живые данные панели Remnawave в админке (страница RemnaWave) | system{metadata.version, stats{cpu,memory,uptime,users,online_stats,nodes}}; nodes[{uuid,name,address,port,is_connected,is_disabled,users_online,traffic_used_bytes,xray_uptime,country_code,cpu_model,total_ram,last_status |
 | POST | `/api/admin/remnawave/nodes/{uuid}/{restart|enable|disable}, /remnawave/nodes/restart-all` | Управление нодами из админки | тело ответа не используется — после вызова перезапрашиваются ноды |
+
+## Как проверить бэкенд на соответствие этому документу
+
+Документ заморожен, но проверять по нему руками нечего: расхождения почти никогда
+не выглядят как «нет ручки». Выглядят они как 200 с трафиком в байтах вместо
+гигабайт, ценой в копейках вместо рублей или `null` вместо 401 — то есть кабинет
+не падает, а врёт. Для этого есть два инструмента, оба на голой стандартной
+библиотеке и оба только на чтение (ни одной мутирующей ручки — безопасно на боевой
+установке).
+
+**Контрактные тесты — `tests/contract/run_contract.py`.** Гоняются против ЛЮБОГО
+бэкенда по адресу из аргумента, проверяют обязательные поля, типы, ЕДИНИЦЫ
+ИЗМЕРЕНИЯ и формы ошибок (401 без сессии, 501 «раздела нет»), плюс сквозные
+сверки на стыке ручек (цена месяца в `/plans/public` против `/subscription/offers`,
+лимит трафика против расхода, счётчик колокольчика против ленты).
+
+```
+# адаптер поверх чужого бота (нужна тестовая учётка)
+python3 tests/contract/run_contract.py --base http://127.0.0.1:8090 \
+    --email … --password …
+# наш бэкенд без учётки: публичные пути и форма 401
+python3 tests/contract/run_contract.py --base http://127.0.0.1:5000
+```
+
+Отсутствие раздела провалом НЕ считается: честный 501 или выключенный признак в
+`appearance.features` — это спрятанный экран, кабинет так и задуман. Провал —
+«умеет, но отвечает не по контракту». Сам контракт в машинном виде лежит в
+`tests/contract/contract_spec.py`: правки туда идут ТОЛЬКО вслед за этим
+документом.
+
+**Канарейка на дрейф чужого API — `tests/contract/canary_bedolaga.py`.** Сравнивает
+сегодняшний API «Бедолаги» с зафиксированным снимком
+(`tests/contract/bedolaga-api-snapshot.json`) и показывает, что у них
+переименовали или убрали из того, чем пользуется адаптер.
+
+Единицы измерения, которые ломаются чаще всего:
+
+| Поле | Единица | Чем грозит промах |
+|---|---|---|
+| `traffic_limit` (подписка, тарифы, витрина) | **гигабайты**, 0 = безлимит | кабинет переводит ГБ в байты сам — байты на входе дают терабайты на экране |
+| `used_traffic_bytes`, `lifetime_used_traffic_bytes`, `traffic-history.days[].total`, `server-stats…total` | **байты** | соседнее поле в том же ответе — в ГБ; перепутать проще всего именно тут |
+| `balance`, `total_spent`, `earned`, `min_amount`/`max_amount` | **рубли** числом | у «Бедолаги» деньги в копейках — промах ровно в 100 раз |
+| `monthly_from_rub`, `max_duration_price_rub`, `original_amount`, `final_amount` | **рубли строкой** | кабинет их печатает, а не считает (`cabinet/src/types/api.ts`) |

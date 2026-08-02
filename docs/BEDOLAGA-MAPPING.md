@@ -1,157 +1,447 @@
-# Сверка контрактов: наш кабинет ↔ бот «Бедолага»
+# Кабинет поверх бота «Бедолага»: адаптер и сверка контрактов
 
-Их API снят со стенда (`/openapi.json`): **639** путей, из них **374** не админские.
-Наш контракт: **110** путей (`docs/CABINET-API-CONTRACT.md`).
+Первая половина документа — эксплуатация (что это, как включить, чем проверить),
+вторая — сверка ручек кабинета с их API.
 
-## Состояние адаптера (проверено на стенде)
+## Что такое адаптер
 
-- **18** путей проходят простой трансляцией по `adapter/route_map.json`;
-- **11** адаптер собирает сам (`adapter/compose.py`) — там, где у них нет ручки
+Кабинет умеет говорить только на своём контракте (`/api/v1/public/*`,
+`docs/CABINET-API-CONTRACT.md`). «Бедолага» — чужой бот со своим API. Адаптер —
+отдельный маленький контейнер между ними: принимает запрос кабинета и переводит
+его в вызов их API.
+
+- где ручка есть один-к-одному — простая трансляция по `adapter/route_map.json`;
+- где формы ответов расходятся — адаптер собирает ответ сам (`adapter/compose.py`):
+  пересчёт единиц (у них гигабайты и копейки, у нас байты и рубли), склейка
+  нескольких их ручек в одну нашу;
+- чего у них нет вовсе — честный 501, а кабинет такой раздел просто не показывает
+  (список возможностей отдаётся в `/api/appearance`, поле `features`);
+- расход трафика по дням и по нодам и живое состояние нод боту не принадлежат —
+  их адаптер берёт прямо из панели Remnawave.
+
+Ещё две вещи адаптер делает «сверх» перевода:
+
+- **мост авторизации.** Кабинет живёт на HttpOnly-куках и токенов не видит, их API
+  — на `Bearer` в заголовке. Адаптер логинится у них, их токены кладёт в свои куки
+  и подставляет заголовок в каждый проксируемый запрос;
+- **заморозка подписки** — фича кабинета, которой у «Бедолаги» нет вовсе. Для неё
+  нужны админский токен бота и место под своё состояние (см. ниже).
+
+При выборе бэкенда RemnaShop адаптер не участвует нигде: сервис не поднимается,
+кабинет ходит в наш бот напрямую.
+
+## Как включить
+
+Установщик спрашивает сам: **«Какой бот обслуживает кабинет?» → 2) Bedolaga**
+(с подтверждением — выбор переписывает адреса и поднимает лишний сервис).
+
+| Режим | Команда | Что получится |
+|---|---|---|
+| один сервер | `./install.sh` | наш бот + кабинет + адаптер, все в сети `remnawave-network` |
+| отдельный сервер | `./install.sh site` (или `site-install.sh` целиком) | только кабинет + адаптер, до бота — по публичному домену |
+
+Оператору «Бедолаги» подходит именно **site**: первый режим поднимает ещё и
+нашего бота с базой и требует заполненный `.env` от него. `./install.sh site`
+пригоден и на той же машине, где стоит «Бедолага».
+
+Что установщик пишет в `.env`: `CABINET_BACKEND=bedolaga`, `BEDOLAGA_HOST` и
+`BEDOLAGA_UPSTREAM` (адрес их API), `BEDOLAGA_ADMIN_TOKEN` (если ввели),
+`API_UPSTREAM` = `<контейнер адаптера>:8090`, `API_PATH_PREFIX=/api/v1/public/`
+(префикс НАШ в обоих случаях — кабинет ходит в адаптер, а тот отдаёт наш
+контракт), и добавляет в `COMPOSE_FILE` файл `cabinet/docker-compose.adapter.yml`
+(один сервер) или `cabinet/docker-compose.site-adapter.yml` (отдельный сервер).
+В site-режиме дополнительно пишутся `API_SCHEME=http` и
+`API_HOST_HEADER=cabinet-adapter`.
+
+Контейнеров получается два (плюс ваш reverse-proxy снаружи):
+
+| Контейнер | Что делает | Куда слушает |
+|---|---|---|
+| `remnashop-cabinet` (`CABINET_CONTAINER`) | сам кабинет: статика + nginx, который переписывает `/api/*` в `API_PATH_PREFIX` и шлёт в `API_UPSTREAM` | `127.0.0.1:${CABINET_PORT:-5002}` |
+| `remnashop-cabinet-adapter` (`ADAPTER_CONTAINER`) | адаптер | порт 8090 только внутри docker-сети, наружу не публикуется |
+
+Передумать: `CABINET_BACKEND=remnashop ./install.sh` — переменная окружения
+выигрывает у записанной в `.env`. На установке с ботом установщик сам вернёт
+`API_UPSTREAM` на наш бот, уберёт файл адаптера из `COMPOSE_FILE` и удалит его
+контейнер; том с паузами (см. ниже) при этом остаётся на месте. На отдельном
+сервере кабинета контейнер адаптера после такого возврата нужно убрать руками
+(`docker rm -f`) — иначе он останется работать «сиротой».
+
+## Переменные окружения
+
+| Ключ | Зачем | Если не задан |
+|---|---|---|
+| `BEDOLAGA_UPSTREAM` | адрес их API со схемой; на одном сервере установщик предлагает шлюз docker `http://172.17.0.1:8080` (их порт опубликован на хост), на отдельном — публичный `https://bot.example.com` | на отдельном сервере compose не стартует вовсе (значение обязательное); на одном подставит `http://bedolaga:8080` — имени с таким названием в штатной установке «Бедолаги» нет, будет 502 на весь `/api/*` |
+| `BEDOLAGA_ADMIN_TOKEN` | их админский токен — **только** для заморозки подписки (единственные два вызова: отключение и продление подписки) | заморозка честно выключена (`features.freeze=false`, блок в кабинете скрыт), остальной кабинет работает |
+| `REMNAWAVE_URL` | адрес панели: расход трафика по дням, разбивка по нодам, живое состояние нод | график трафика и «любимый сервер» пустые, статус нод берётся из флага бота «сервер доступен» |
+| `REMNAWAVE_TOKEN` | токен панели; панель включается, только если заданы **оба** ключа | то же |
+| `ADAPTER_ALLOWED_ORIGINS` | публичный адрес кабинета — с него разрешены изменяющие запросы (защита от CSRF). Несколько — через запятую, годится и полный URL, и голый хост. Оба compose-файла адаптера подставляют сюда `WEB_CABINET_URL` из `.env`, отдельно задавать обычно не нужно | проверка мягче: адаптер верит метке браузера `Sec-Fetch-Site` и отбивает запрос с сессионной кукой вовсе без источника. Задать стоит: только тогда правило строгое, как в нашем бэкенде |
+| `ADAPTER_STATE` | куда писать своё состояние внутри контейнера | `/data/state.db` — менять незачем, каталог смонтирован томом |
+| `ADAPTER_CONTAINER` | имя контейнера адаптера; по нему кабинет его и находит | `remnashop-cabinet-adapter` |
+| `CABINET_CONTAINER` | имя контейнера кабинета | `remnashop-cabinet` |
+| `CABINET_PORT` | порт кабинета на `127.0.0.1` (на него смотрит ваш reverse-proxy) | `5002` |
+| `BEDOLAGA_HOST` | что ввели в установщике — чтобы повторный запуск предлагал прежний адрес | вопрос задаётся с пустым ответом по умолчанию |
+
+Имена переменных панели у разных ботов свои, поэтому compose подхватывает и
+чужие: `REMNAWAVE_API_URL` / `REMNAWAVE_HOST` и `REMNAWAVE_API_KEY`. Адрес панели
+можно писать как угодно (полный URL, `host:port`, имя контейнера) — адаптер
+нормализует его сам (имя без порта получит `:3000`, схема без `://` — `http`).
+
+### Админский токен «Бедолаги»
+
+Установщик просит их **стартовый** токен один раз — это строка
+`WEB_API_DEFAULT_TOKEN` из `.env` бота «Бедолага» (их web-API должен быть включён:
+`WEB_API_ENABLED`). По нему установщик выпускает у них же отдельный именной токен
+`cabinet-adapter` их штатной ручкой `POST /tokens` и в `.env` кладёт именно его —
+чтобы кабинет не жил на стартовом (тот оживает при каждом рестарте бота, пока
+прописан у них в `.env`). После этого стартовый токен можно отозвать: у них есть
+`GET /tokens` и `POST /tokens/{id}/revoke`.
+
+**Обращаться как с паролем.** Областей действия у их токенов нет: одна строка
+открывает всё их админское API — пользователей, подписки, платежи, рассылки
+(в их OpenAPI под `X-API-Key` больше двух сотен операций). Отсюда практика:
+
+- токен хранится только в `.env` установки кабинета, и файл должен быть `600`
+  (установщик сужает права сразу, до записи токена);
+- в чатах, скриншотах и issue его не показывать — утёкший токен = полный доступ
+  к боту, лечится только отзывом через `/tokens/{id}/revoke` и выпуском нового;
+- канал до бота обязан быть **https**, если адаптер и бот на разных серверах:
+  токен уходит в каждом заголовке;
+- токен необязателен. Не давать его — законный выбор: пропадёт ровно одна
+  возможность (заморозка), и кабинет скроет её сам.
+
+## Заморозка подписки
+
+Общей заморозки у «Бедолаги» нет. Их собственная «пауза» (`/cabinet/subscription/pause`)
+— про другое: она работает только на суточных тарифах, а возобновление списывает
+деньги. Поэтому кабинетную заморозку адаптер делает сам, их же штатным админским
+API, не трогая код бота:
+
+| Шаг | Что делает адаптер | Что видит бот |
+|---|---|---|
+| «Заморозить» | `DELETE /subscriptions/{id}` | подписка выключена (статус `DISABLED`), в панели доступ снят; **срок не трогается** |
+| «Разморозить» | `POST /subscriptions/{id}/extend {days}` | срок сдвигается вперёд на длительность паузы, статус возвращается в `ACTIVE`, панель синхронизируется |
+
+Почему через их API, а не правкой панели: любое действие пользователя (продление,
+покупка, промокод, смена серверов) заставляет бота переписать панель из своей
+базы — панельная правка живёт до первого клика.
+
+Правила, из которых ничего нельзя выкинуть:
+
+- **пауза короче суток не снимается.** Их продление умеет только ЦЕЛЫЕ сутки, и
+  другого способа вернуть срок нет. Попытка снять раньше — честный 409 «Снять с
+  паузы можно через N ч»: округление вверх дарило бы календарный день за паузу в
+  секунду, а повторами — сколько угодно дней. Часы, не влезшие в целые сутки, не
+  теряются: остаток копится в своей памяти и учитывается при следующем снятии;
+- **предел паузы — 30 суток** (`FREEZE_MAX_DAYS`). Дольше можно стоять, но вернут
+  не больше 30 дней: их продление истёкшей подписке ведёт срок от «сейчас», и без
+  предела долгая пауза превращалась бы в подарок;
+- **никто не разбудит сам.** Планировщика авто-возобновления в адаптере нет —
+  снимает с паузы пользователь кнопкой в кабинете;
+- **заморозить можно только активную подписку** с ненулевым остатком;
+- если подписки, поставленной на паузу, у бота больше нет (куплен другой тариф,
+  удалена вручную) — на снятии адаптер это увидит по их 404, снимет свою запись и
+  скажет «оформите подписку заново»: держать человека на паузе навсегда нельзя.
+
+Блок заморозки включается в кабинете, только когда у адаптера есть **и** админский
+токен, **и** доступная своя память. Нет чего-то одного — `features.freeze=false`,
+кнопки нет вовсе, и человек не упирается в отказ после нажатия.
+
+### Где живёт состояние и что будет при его потере
+
+Кто на паузе и сколько ему осталось, помнит только адаптер — «Бедолага» о паузе не
+знает и знать не должна. Хранилище нарочно примитивное: SQLite одним файлом в томе
+`/data` (`ADAPTER_STATE`, по умолчанию `/data/state.db`), две таблицы:
+
+- `freezes` — остановленные подписки, момент паузы и сохранённый остаток срока;
+- `credits` — часы, не влезшие в целые сутки.
+
+Имя тома складывается из имени compose-проекта: `remnashop_adapter-state` (один
+сервер), `remnashop-cabinet_adapter-state` (свежая установка на отдельном сервере),
+`cabinet_adapter-state` (site-установки, сделанные до появления
+`COMPOSE_PROJECT_NAME`). Точное имя всегда покажет `docker volume ls`.
+
+**Потеря тома не лечится**: бот про заморозку не знает, поэтому люди останутся с
+выключенной подпиской, дни за время паузы у них уже сгорели (их `end_date` шёл
+всё время), а вернуть их будет нечем — записи об остатке больше нет. Отсюда
+правила:
+
+- `docker compose down -v` на установке с адаптером не делать;
+- перед переездом (в том числе миграцией «один сервер ↔ отдельный сервер») том
+  забрать с собой;
+- переименование compose-проекта = новый пустой том, то есть та же потеря.
+
+На установке «на сервере бота» бэкап делается сам: `./update.sh` кладёт архив
+состояния рядом с дампом базы (`/opt/remnashop-backups/adapter-state-*.tar.gz`).
+На отдельном сервере кабинета обновление — это повторный запуск `site-install.sh`,
+бэкапа там нет: копию нужно снять руками.
+
+```bash
+# бэкап (имя тома смотрим в docker volume ls)
+docker run --rm -v remnashop_adapter-state:/data -v "$PWD":/backup alpine \
+  tar czf /backup/adapter-state.tar.gz -C /data .
+
+# восстановление: адаптер остановлен, иначе перезапишем базу под работающим процессом
+docker stop remnashop-cabinet-adapter
+docker run --rm -v remnashop_adapter-state:/data -v "$PWD":/backup alpine \
+  sh -c 'tar xzf /backup/adapter-state.tar.gz -C /data && chown -R 10001:10001 /data'
+docker start remnashop-cabinet-adapter
+```
+
+Права: процесс в контейнере работает не под root, а под UID **10001** — новый том
+создаётся сразу с нужным владельцем. Если том достался от старой сборки (адаптер
+работал под root) или `/data` подменён bind-mount'ом каталога, принадлежащего
+root, писать будет некуда: `/adapter/health` покажет `"state": false`, а заморозка
+выключится. Лечится один раз:
+
+```bash
+docker run --rm -v remnashop_adapter-state:/data alpine chown -R 10001:10001 /data
+```
+
+## Что кабинет скрывает на этом бэкенде
+
+Кабинет один, а боты под ним разные. Вместо кнопок, которые упрутся в 501, он
+спрашивает у бэкенда список возможностей: `GET /api/appearance`, поле `features`.
+
+Правило совместимости: **наш собственный бэкенд поля `features` не отдаёт вовсе, и
+его отсутствие означает «умеет всё»**. Проверка в кабинете написана через
+`!== false` (`cabinet/src/lib/features.ts`), поэтому ни отсутствие оформления, ни
+отсутствие поля, ни отсутствие ключа ничего не прячут. Список существует только в
+адаптере.
+
+Список не пишется руками: каждая возможность объявляет, без каких путей она
+бессмысленна, а доступность считается по тому, что адаптер реально отдаёт (свои
+обработчики + карта маршрутов). Появился перевод ручки — возможность включилась
+сама. Если карта маршрутов не прочиталась, адаптер не заявляет `features` вообще:
+лучше показать лишнюю кнопку, чем схлопнуть кабинет в пустой экран.
+
+Что выключено сейчас (снимок на стенде; свою установку смотрите
+в `/api/appearance`):
+
+| Ключ | Что прячется в кабинете | Почему |
+|---|---|---|
+| `purchase` | оплата подписки картой на витрине | покупки картой у них нет вовсе, есть только списание с баланса — `docs/BEDOLAGA-MONEY.md` |
+| `points` | баллы и обмен баллов | баллов у них не существует: рефералка начисляет сразу рублями |
+| `gift` | подарочные подписки | их подарки (`/cabinet/gift/purchase`) — другая механика и другая форма тела, перевод не написан |
+| `push` | веб-пуши | подписки на пуш хранит бэкенд, у бота такого хранилища нет |
+| `sessions` | список активных сессий и «выйти везде» | это их refresh-токены, наружу они не отдаются |
+| `email_verify` | подтверждение адреса почты | нет соответствия в их API |
+| `password_change` | смена пароля в настройках | то же |
+| `account_delete` | удаление аккаунта | то же |
+| `data_export` | выгрузка своих данных | то же |
+| `notifications_clear` | кнопка «Очистить» в колокольчике | читать уведомления они дают, удалять скопом нечем; сама лента работает |
+| `admin` | вся админка кабинета | это десятки ручек; включаем, только когда появится список пользователей, иначе админ проваливается в экраны с ошибками |
+
+Что работает: подписка и пробный период, публичный прайс, витрина, оплата и
+продление **с баланса**, пополнение, автопродление, лента операций, промокоды,
+рефералка, обращения в поддержку, лента уведомлений, «Информация» (FAQ, правила,
+оферта), заморозка (при выданном токене).
+
+### Что скрывать нельзя
+
+Часть кабинета к бизнес-логике бота отношения не имеет, и на чужом бэкенде она не
+гасится, а добывается из того, что есть. Эти ключи в `features` не попадают вовсе
+(нет ключа = доступно):
+
+- то, что принадлежит слою Remnawave, — статус и список серверов, устройства
+  (HWID), расход по нодам, график трафика, перевыпуск ссылки подписки. Серверы и
+  устройства адаптер берёт из кабинетного API бота (он их и так отдаёт), трафик и
+  живое состояние нод — прямо из панели;
+- собственные фишки кабинета — каталог приложений, мастер диагностики, замер
+  скорости, онбординг, темы и языки: им бэкенд не нужен.
+
+## Сеть
+
+- **Один сервер.** Адаптер живёт в общей `remnawave-network` (внешняя сеть, её
+  создаёт установщик) — оттуда его по имени контейнера видит кабинет. До бота
+  адаптер ходит по `BEDOLAGA_UPSTREAM`: штатный compose «Бедолаги» держит бота в
+  своей сети, и его имя из `remnawave-network` не резолвится, поэтому по умолчанию
+  берётся шлюз docker `172.17.0.1:8080` — их порт опубликован на хост. Если бота
+  добавили в ту же сеть, можно указать имя его контейнера (`remnawave_bot:8080`).
+- **Отдельный сервер.** Сеть своя, до бота — по публичному домену и обязательно по
+  **https**: этим каналом идут админский токен и данные пользователей.
+- **Панель.** Адаптер должен видеть Remnawave по `REMNAWAVE_URL` — иначе график
+  трафика и разбивка по серверам останутся пустыми.
+- Наружу адаптер порт не публикует: к нему ходит только кабинет.
+
+## Как проверять установку
+
+**Здоровье.** У адаптера есть `/adapter/health` на порту 8090 (внутри сети). Его
+же дёргает установщик сразу после запуска и печатает ответ:
+
+```bash
+docker exec remnashop-cabinet-adapter python -c \
+  'import urllib.request;print(urllib.request.urlopen("http://127.0.0.1:8090/adapter/health",timeout=3).read().decode())'
+```
+
+```json
+{"upstream":"https://bot.example.com","panel":true,"admin_token":true,"state":true,
+ "mapped":9,"composed":39,"todo":36}
+```
+
+- `upstream` — куда адаптер ходит за данными (тот самый `BEDOLAGA_UPSTREAM`);
+- `panel: false` — панель не задана или задан только один из двух ключей: график
+  трафика и разбивка по нодам будут пустыми;
+- `admin_token: false` или `state: false` — заморозка выключена (нет токена бота
+  или адаптеру некуда писать состояние);
+- `mapped` / `composed` / `todo` — сколько путей закрыто картой, сколько адаптер
+  собирает сам и сколько путей контракта в карте пары не имеют. `todo` — не
+  «сломано»: часть этих путей закрыта своими обработчиками (см. сверку ниже).
+
+Эту же ручку проверяет `HEALTHCHECK` образа, поэтому состояние видно и в
+`docker ps` (`healthy` / `unhealthy`), а `docker logs <контейнер>` показывает, к
+кому именно адаптер не достучался.
+
+**Что реально увидит пользователь.** `/adapter/health` считает пути, а не экраны.
+Какие разделы кабинета оживут, а какие упрутся в 501, показывает самопроверка —
+она логинится тестовым пользователем и обходит ручки, которые кабинет дёргает сам
+(только чтение, ничего не создаёт и не списывает):
+
+```bash
+# учётку в командную строку не пишем — она осела бы в истории оболочки
+read -r  -p 'email: '  SELFCHECK_EMAIL
+read -rs -p 'пароль: ' SELFCHECK_PASSWORD
+export SELFCHECK_EMAIL SELFCHECK_PASSWORD
+
+# внутри контейнера: наружу порт адаптера не опубликован
+docker exec -e SELFCHECK_EMAIL -e SELFCHECK_PASSWORD remnashop-cabinet-adapter \
+  python selfcheck.py
+
+# с машины разработчика, если адаптер поднят локально с проброшенным портом
+python3 adapter/selfcheck.py
+```
+
+Учётку скрипт не подставляет сам (это диагностический скрипт в публичном
+репозитории): или через `SELFCHECK_EMAIL` / `SELFCHECK_PASSWORD`, или флагами
+`--email` / `--password`. Заводите для этого отдельного тестового пользователя, а
+не свою учётку владельца. Итог печатается тремя числами: «готово» (200),
+«не реализовано» (501 — раздел спрятан честно) и «требует разбора» (всё
+остальное; вот на это и надо смотреть).
+
+Самопроверка отвечает на вопрос «отвечает ли ручка», а не «правильные ли в ней
+данные». На соседние вопросы отвечают соседние инструменты:
+`tests/contract/run_contract.py` — сверка полей, типов и единиц измерения с
+контрактом; `tests/contract/canary_bedolaga.py` — не переехало ли что-то в их API
+с прошлого снимка.
+
+## Что с деньгами
+
+Раздел «деньги» на этом бэкенде работает частично: пополнение баланса, оплата и
+продление подписки **с баланса**, автопродление и лента операций — есть; покупка
+картой и баллы — выключены. Это не поломка, а осознанный отказ: пока перевод
+соответствующих ручек не написан и не проверен, кабинет не показывает кнопку,
+которая спишет деньги не так, как ожидает человек. Там же причина, по которой
+адаптер не предлагает **платный** пробный период (у них он бывает платным и молча
+списывает цену с баланса, а наш экран показывает пробный как бесплатный). Почему
+именно так — `docs/BEDOLAGA-MONEY.md`.
+
+---
+
+## Сверка контрактов
+
+Их API снят со стенда (`/openapi.json`): **639** путей, из них **429** в кабинетном
+префиксе `/cabinet`, а не админских среди этих 429 — **164**. Наш контракт:
+**112** путей (`docs/CABINET-API-CONTRACT.md`).
+
+### Состояние адаптера (проверено на стенде)
+
+Числа — снимок на момент правки документа; актуальные всегда показывает
+`/adapter/health`, они меняются с каждой закрытой ручкой.
+
+- **9** путей проходят простой трансляцией по `adapter/route_map.json`;
+- **39** адаптер собирает сам (`adapter/compose.py`) — там, где у них нет ручки
   один-к-одному или отличается форма ответа;
-- **45** ещё не закрыто: адаптер отвечает 501 с текстом, чего именно не хватает.
+- **36** путей контракта в карте пары не имеют, но 12 из них закрыты своими
+  обработчиками; реально отвечают 501 — **23** (список ниже).
 
-Собираем сами: `/api/appearance` (+ логотип) — из шести их публичных ручек
-(`/branding`, `/branding/colors`, `/branding/telegram-widget`, `/info/support-config`),
-кэш 60 с; `/api/auth/me` и `/api/auth/whoami` — форма и права (fail-closed: без
-подтверждённого признака админа доступа не даём); `/api/subscription/current`,
-`/trial-info`, `/devices`, `/servers`, `/api/status`, `/api/balance`,
-`/api/balance/transactions` — пересчёт единиц (у них гигабайты и копейки, у нас
-байты и рубли) и страниц в limit/offset.
+### Простая трансляция — 9 записей карты
+
+| Наш путь | Их путь |
+|---|---|
+| `POST /api/auth/login` | `/cabinet/auth/email/login` |
+| `POST /api/auth/register` | `/cabinet/auth/email/register/standalone` (обычная регистрация у них требует уже вошедшего) |
+| `POST /api/auth/refresh` | `/cabinet/auth/refresh` |
+| `POST /api/auth/logout` | `/cabinet/auth/logout` |
+| `POST /api/auth/telegram` | `/cabinet/auth/telegram` |
+| `POST /api/auth/password/reset/request` | `/cabinet/auth/password/forgot` |
+| `GET, POST /api/subscription/trial` | `/cabinet/subscription/trial` |
+| `GET, POST, DELETE /api/subscription/devices` | `/cabinet/subscription/devices` |
+| `DELETE /api/subscription/devices/{hwid}` | `/cabinet/subscription/devices/{hwid}` |
+
+Две поправки к таблице, которые видны только в коде:
+
+- вход и выход идут не через карту, а через мост авторизации (`main.py`,
+  `LOGIN_ROUTES`) — он же знает про два пути, которых в карте нет:
+  `/api/auth/telegram` ведёт на `/cabinet/auth/telegram/widget` (классический
+  виджет), а `/api/auth/telegram/webapp` — на `/cabinet/auth/telegram` (вход из
+  Mini App);
+- `GET /api/subscription/devices` перехватывает свой обработчик (у них другая
+  форма ответа); по карте уходят только `POST` и `DELETE`.
+
+### Собирает сам — 39
+
+Оформление и права: `/api/appearance` (+ `/appearance/logo`) — из четырёх их
+публичных ручек (`/branding`, `/branding/colors`, `/branding/telegram-widget`,
+`/info/support-config`), кэш 60 с, при их тех-работах — 15 с; `/api/auth/me` и
+`/api/auth/whoami` (fail-closed: без подтверждённого признака админа доступа не
+даём).
+
+Подписка: `/api/subscription/current` (гигабайты и «дней осталось» → наши поля и
+срок), `/trial-info`, `/devices`, `/servers`, `/reissue` (у них это `revoke`),
+`/freeze-status`, `/freeze`, `/unfreeze`, `/service-status`.
+
+Панельные: `/api/subscription/server-stats` и `/traffic-history` — расход по нодам
+и по дням из `/api/bandwidth-stats` Remnawave (там уже байты, пересчёта нет), плюс
+состояние нод для мастера диагностики.
+
+Деньги: `/api/balance` (копейки → рубли), `/balance/transactions` (их страницы →
+наши limit/offset), `/balance/topup`, `/balance/topup/config` (пересечение лимитов
+их платёжных методов), `/balance/autopay` (у нас POST, у них PATCH),
+`/balance/spend-on-renewal`, `/subscription/pay-with-balance`,
+`/subscription/offers` (цена покупки и цена продления считаются у них разными
+ручками — берём ту, по которой и спишем), `/plans/public`, `/promo-banner`,
+`/trial-discount`, `/promocode/activate`.
+
+Остальное: `/api/status`, `/api/info` (пять вкладок мягкой сборкой, с учётом
+админской подмены вкладок), `/api/apps`, `/api/notifications` (+ `/read`,
+`/unread-count`) — лента собирается из их тикетных уведомлений,
+`/api/support/tickets` (список и создание, `{id}`, `{id}/messages`),
+`/api/referral/program`, `/api/referral/earnings`.
+
+### Отвечают 501 — 23
+
+`/api/auth/change-password`, `/api/auth/password/set`,
+`/api/auth/password/reset/confirm`, `/api/auth/email`, `/api/auth/email/change`,
+`/api/auth/email/confirm`, `/api/auth/email/request-verification`,
+`/api/auth/telegram/link`, `/api/subscription/purchase`, `/api/subscription/extend`,
+`/api/balance/convert-points`, `/api/gift/my`, `/api/gift/create`,
+`/api/sessions`, `/api/sessions/logout-all`, `/api/push/vapid-key`,
+`/api/push/status`, `/api/push/subscribe`, `/api/push/unsubscribe`,
+`/api/push/test`, `/api/support/tickets/{id}/close`, `/api/account/delete`,
+`/api/account/export`.
+
+Плюс вся админка кабинета (`/api/admin/*`): переводов нет ни одного, поэтому
+`features.admin=false` и раздела в кабинете нет.
 
 ### Похоже по имени, но по смыслу другое — не мапим
 
 Машинная карта подобрала эти пары по созвучию; каждая сделала бы не то, что просит
-кабинет, поэтому они переведены в 501 (см. `mismatched` в `route_map.json`):
+кабинет, поэтому они переведены в 501 или закрыты своим обработчиком (см.
+`mismatched` в `route_map.json`):
 
 | Наш путь | Что подобралось | Почему нет |
 |---|---|---|
 | `/api/gift/create` | `/cabinet/referral/withdrawal/create` | это заявка на **вывод денег**, а не подарок (подарки у них — `/cabinet/gift/purchase`) |
 | `/api/account/export` | `/cabinet/admin/rbac/audit-log/export` | админский аудит-лог, а не выгрузка своих данных |
 | `/api/info` | `/cabinet/subscription/info` | у них про подписку, у нас — FAQ/правила (`/cabinet/info-pages`) |
-| `/api/subscription/offers` | `/cabinet/promo/offers` | у них персональные промо-скидки, нам нужны тарифы с ценами (`/cabinet/subscription/purchase-options`) |
+| `/api/subscription/offers` | `/cabinet/promo/offers` | у них персональные промо-скидки, нам нужны тарифы с ценами |
+| `/api/notifications` | `/cabinet/notifications` | у них это **настройки рассылок**, а не лента; кабинет от такого ответа роняет колокольчик |
+| `/api/balance/topup`, `/api/balance/autopay`, `/api/promocode/activate`, `/api/referral/earnings` | их одноимённые ручки | другая форма тела или метод (у автоплатежа PATCH против нашего POST — прямой проброс давал бы 405); закрыты обработчиками |
 
 ### Чего у них нет вовсе
 
 Пинг и аптайм нод (адреса серверов наружу не отдаются), публичный статус сервиса
-без авторизации, расход трафика за всё время, счётчики «всего потрачено/покупок»,
-баллы рефералки (у них начисление сразу рублями). Эти поля отдаём пустыми или
-честным 501 — не подставляем правдоподобные нули туда, где их можно принять за факт.
-
-## Совпадают как есть — 16
-
-- `/api/auth/me`
-- `/api/auth/refresh`
-- `/api/auth/logout`
-- `/api/auth/telegram`
-- `/api/auth/email/change`
-- `/api/subscription/purchase`
-- `/api/subscription/trial`
-- `/api/subscription/devices`
-- `/api/subscription/devices/{hwid}`
-- `/api/subscription/devices`
-- `/api/balance`
-- `/api/balance/topup`
-- `/api/referral/earnings`
-- `/api/promocode/activate`
-- `/api/admin/users/{id}`
-- `/api/admin/settings`
-
-## Есть, но под другим именем — 41 (адаптер переименовывает)
-
-- `/api/admin/appearance, /appearance/logo` → `/branding/logo`
-- `/api/auth/login` → `/auth/email/login`
-- `/api/auth/register` → `/auth/email/register`
-- `/api/auth/password/reset/request` → `/auth/deeplink/request`
-- `/api/subscription/offers` → `/promo/offers`
-- `/api/subscription/servers` → `/admin/servers, /admin/remnawave/sync/servers`
-- `/api/admin/subscriptions/user/{id}` → `/auth/account/unlink/{x}, /auth/merge/{x}, /subscription/devices/{x}, /subscript`
-- `/api/admin/subscriptions/user/{id}/{extend|disable|delete|grant|reset-trial|reset-traffic|reissue|referral-reset|traffic-limit|device-limit|squad-toggle|sync|message|points|balance|devices/delete}` → `/auth/account/unlink/{x}, /auth/merge/{x}, /subscription/devices/{x}, /subscript`
-- `/api/status` → `/auth/email/change/status, /referral/partner/status, /admin/tickets/{x}/status, `
-- `/api/info` → `/subscription/info`
-- `/api/balance/topup/config` → `/wheel/config, /gift/config, /admin/wheel/config, /admin/apps/remnawave/config`
-- `/api/balance/autopay` → `/subscription/autopay`
-- `/api/gift/create` → `/referral/withdrawal/create`
-- `/api/notifications/unread-count` → `/tickets/notifications/unread-count, /admin/tickets/notifications/unread-count`
-- `/api/notifications/read` → `/tickets/notifications/{x}/read, /tickets/notifications/ticket/{x}/read, /admin/`
-- `/api/notifications` → `/tickets/notifications, /notifications, /admin/tickets/notifications`
-- `/api/push/status` → `/auth/email/change/status, /referral/partner/status, /admin/tickets/{x}/status, `
-- `/api/push/test` → `/notifications/test, /admin/email-templates/{x}/test`
-- `/api/support/tickets` → `/tickets, /admin/tickets`
-- `/api/support/tickets` → `/tickets, /admin/tickets`
-- `/api/support/tickets/{id}` → `/auth/account/unlink/{x}, /auth/merge/{x}, /subscription/devices/{x}, /subscript`
-- `/api/support/tickets/{id}/messages` → `/tickets/{x}/messages`
-- `/api/account/export` → `/admin/rbac/audit-log/export`
-- `/api/admin/statistics/overview` → `/admin/campaigns/overview, /admin/remnawave/nodes/overview`
-- `/api/admin/statistics/sales | /statistics/daily?days | /statistics/cohorts?months | /statistics/metrics | /statistics/transactions` → `/balance/transactions, /admin/apple-iap/transactions, /admin/users/{x}/transacti`
-- `/api/admin/transactions/{payment_id}` → `/auth/account/unlink/{x}, /auth/merge/{x}, /subscription/devices/{x}, /subscript`
-- `/api/admin/plans, /plans/{id}, /plans/{id}/toggle, /plans/meta/squads` → `/admin/remnawave/squads`
-- `/api/admin/promocodes, /promocodes/{id}, /promocodes/{id}/toggle, /promocodes/{id}/stats` → `/referral/partner/campaigns/{x}/stats, /admin/tickets/stats, /admin/tariffs/{x}/`
-- `/api/admin/gateways, /gateways/{id}/toggle, /gateways/{id}/fields, /gateways/{id}/fields/{field}, /gateways/{id}/test` → `/notifications/test, /admin/email-templates/{x}/test`
-- `/api/admin/{cashback|topup|trial-discount|reserve|promo-banner|winback|digest|traffic-alert|new-device|login-alert|email-gate|freeze|morning-summary|admin-ip}` → `/auth/account/unlink/{x}, /auth/merge/{x}, /subscription/devices/{x}, /subscript`
-- `/api/admin/server-status, /server-status/nodes` → `/admin/stats/nodes, /admin/ban-system/nodes, /admin/remnawave/nodes`
-- `/api/admin/info` → `/subscription/info`
-- `/api/admin/menu, /menu/buttons` → `/admin/broadcasts/buttons`
-- `/api/admin/email-settings, /email-settings/test` → `/notifications/test, /admin/email-templates/{x}/test`
-- `/api/admin/email-template, /email-template/test` → `/notifications/test, /admin/email-templates/{x}/test`
-- `/api/admin/2fa/status | /2fa/setup | /2fa/enable | /2fa/unlock | /2fa/disable` → `/admin/users/{x}/disable`
-- `/api/admin/grants/catalog, /grants/{userId}` → `/auth/account/unlink/{x}, /auth/merge/{x}, /subscription/devices/{x}, /subscript`
-- `/api/admin/ad-links, /ad-links/{id}, /ad-links/{id}/stats` → `/referral/partner/campaigns/{x}/stats, /admin/tickets/stats, /admin/tariffs/{x}/`
-- `/api/admin/notifications?limit, /notifications, /notifications/settings` → `/admin/tickets/settings, /admin/settings, /admin/ban-system/settings, /admin/par`
-- `/api/admin/remnawave/system | /nodes | /hosts | /inbounds` → `/admin/remnawave/inbounds`
-- `/api/admin/remnawave/nodes/{uuid}/{restart|enable|disable}, /remnawave/nodes/restart-all` → `/admin/remnawave/nodes/restart-all`
-
-## Нет у них — 53 (закрывать самим)
-
-- `/api/appearance`
-- `/api/auth/whoami`
-- `/api/auth/telegram/webapp`
-- `/api/auth/telegram/link`
-- `/api/auth/change-password`
-- `/api/auth/password/set`
-- `/api/auth/password/reset/confirm`
-- `/api/auth/email/request-verification`
-- `/api/auth/email/confirm`
-- `/api/auth/email`
-- `/api/admin/auth-settings`
-- `/api/subscription/current`
-- `/api/subscription/extend`
-- `/api/subscription/pay-with-balance`
-- `/api/subscription/trial-info`
-- `/api/subscription/reissue`
-- `/api/subscription/server-stats`
-- `/api/subscription/traffic-history`
-- `/api/subscription/service-status`
-- `/api/subscription/freeze-status`
-- `/api/subscription/freeze`
-- `/api/subscription/unfreeze`
-- `/api/admin/subscriptions/user/{id}/devices | /transactions?limit`
-- `/api/admin/subscription-app, /subscription-app/routing/default`
-- `/api/plans/public`
-- `/api/apps`
-- `/api/balance/transactions?limit&offset`
-- `/api/balance/spend-on-renewal`
-- `/api/balance/convert-points`
-- `/api/referral/program`
-- `/api/gift/my`
-- `/api/promo-banner`
-- `/api/trial-discount`
-- `/api/notifications?limit=`
-- `/api/push/vapid-key`
-- `/api/push/subscribe`
-- `/api/push/unsubscribe`
-- `/api/sessions`
-- `/api/sessions/logout-all`
-- `/api/support/tickets/{id}/close`
-- `/api/account/delete`
-- `/api/admin/users?limit&offset&search&blocked&role&sort&order&expiring_days`
-- `/api/admin/users/{id}/logins | /referrals | /traffic-by-node?days`
-- `/api/admin/users/{id}/block | /trial | /role | /discount`
-- `/api/admin/users/bulk-action`
-- `/api/admin/users/export.xlsx | /api/admin/transactions/export.xlsx`
-- `/api/admin/transactions?limit&offset&status&gateway&date_from&date_to`
-- `/api/admin/broadcasts, /broadcasts/{task_id}, /broadcasts/audience-counts`
-- `/api/admin/apps, /apps/refresh-links`
-- `/api/admin/abuse/trials?min_accounts&only_trial`
-- `/api/admin/audit?limit&actor&method&path&date_from&date_to`
-- `/api/admin/updates?force=1`
-- `/api/admin/settings-io/export, /settings-io/import`
+без авторизации (список серверов виден только вошедшему), расход трафика за всё
+время, баллы рефералки (начисление сразу рублями), готовый публичный прайс для
+лендинга (гостю их витрина отвечает 401). Эти поля отдаём пустыми или честным 501
+— не подставляем правдоподобные нули туда, где их можно принять за факт.

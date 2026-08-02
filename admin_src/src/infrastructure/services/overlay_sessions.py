@@ -1,12 +1,16 @@
-"""«Выйти со всех устройств» — инвалидация сессий по времени (overlay).
+"""Отзыв сессий (overlay): «выйти со всех устройств» и «выйти здесь».
 
-Токен с claim iat раньше пользовательского invalidated_at считается недействительным.
-Проверку делает middleware (overlay_app). Чтобы не долбить БД на каждый запрос —
-кэш всех инвалидаций в памяти с TTL; на logout-all кэш обновляется сразу.
+Два разных отзыва:
+  • logout-all — токен с claim iat раньше пользовательского invalidated_at недействителен;
+  • обычный «Выйти» — недействителен один конкретный токен (revoked_tokens).
+Проверку делает middleware (overlay_app). Чтобы не долбить БД на каждый запрос — кэш
+в памяти с TTL; тот процесс, который выполнил отзыв, обновляет свой кэш сразу, соседняя
+копия бэкенда (локальный HA) увидит отзыв в пределах TTL.
 """
 
 from __future__ import annotations
 
+import hashlib
 import time
 from typing import Optional
 
@@ -55,3 +59,52 @@ async def invalidate_all(session: AsyncSession, user_id: int) -> None:
     )
     await session.commit()
     _CACHE[int(user_id)] = time.time()  # сразу в кэш
+
+
+# --- отзыв одного токена («Выйти» на этом устройстве) ---------------------------
+
+_REVOKED: dict[str, float] = {}  # sha256(token) → exp (unix ts)
+_REVOKED_LOADED: float = 0.0
+
+
+def token_fingerprint(token: str) -> str:
+    """Хранить сам токен нельзя — из базы он утёк бы как готовый ключ доступа."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+async def revoke_token(session: AsyncSession, token: str, expires_at: Optional[float]) -> None:
+    """Гасит один access-токен до конца его срока (обычный выход).
+
+    `expires_at` — claim exp; без него держим час (дольше наш access не живёт).
+    """
+    exp = float(expires_at) if expires_at else time.time() + 3600
+    fingerprint = token_fingerprint(token)
+    await session.execute(
+        text(
+            "INSERT INTO revoked_tokens (token_hash, expires_at) "
+            "VALUES (:h, to_timestamp(:e)) ON CONFLICT (token_hash) DO NOTHING"
+        ),
+        {"h": fingerprint, "e": exp},
+    )
+    # Протухшие записи убираем здесь же: отдельного планировщика ради этого не нужно.
+    await session.execute(text("DELETE FROM revoked_tokens WHERE expires_at < now()"))
+    await session.commit()
+    _REVOKED[fingerprint] = exp  # сразу в кэш
+
+
+async def token_revoked(session: AsyncSession, token: str) -> bool:
+    """True — этот токен погашен выходом."""
+    global _REVOKED, _REVOKED_LOADED
+    if time.time() - _REVOKED_LOADED > _TTL:
+        try:
+            rows = (
+                await session.execute(
+                    text("SELECT token_hash, expires_at FROM revoked_tokens WHERE expires_at > now()")
+                )
+            ).all()
+            _REVOKED = {str(h): ts.timestamp() for h, ts in rows}
+            _REVOKED_LOADED = time.time()
+        except Exception:  # noqa: BLE001 — как и выше, fail-closed: держим прежний кэш
+            pass
+    exp = _REVOKED.get(token_fingerprint(token))
+    return exp is not None and exp > time.time()

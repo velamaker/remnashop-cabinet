@@ -13,12 +13,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import html
 import json
 import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
+from urllib.parse import quote
 
 import httpx
 
@@ -66,6 +69,11 @@ class Ctx:
         self._body = body
         # Своя память адаптера (state.State) — нужна там, где фича наша, а не бота.
         self.state = state
+
+    def param(self, name: str) -> str:
+        """Кусок пути для подстановки в URL апстрима — уже экранированный: без
+        этого «?» или «#» внутри значения уезжают к нему как query/фрагмент."""
+        return quote(str(self.params.get(name, "")), safe="")
 
     def payload(self) -> dict[str, Any]:
         """Тело запроса от кабинета. Пустое или битое — пустой словарь: падать
@@ -125,15 +133,24 @@ class Ctx:
         self, path: str, default: Any = None, method: str = "GET",
         soft: bool = False, **kw: Any
     ) -> Any:
-        """Чтение с мягким провалом там, где данных может не быть.
+        """Чтение у бота. По умолчанию ЛЮБАЯ его ошибка доезжает до кабинета.
 
-        Две вещи мягко глотать НЕЛЬЗЯ, иначе кабинет покажет аварию как факт:
+        Раньше мягко глотался любой 4xx, кроме 401/403, — и это ровно та беда, от
+        которой функция должна защищать: их 404 «No subscription found», 429
+        «Too many requests» или 422 на незнакомый параметр превращались в «данных
+        нет». Человек с оплаченной подпиской видел «подписки нет» и мог купить
+        вторую; баланс показывал 0 ₽, а «Правила» и список обращений — пустоту.
+        Поэтому наверх уходят все три вида беды:
           • «нет сессии» (401/403) — иначе вместо возврата на вход человек
             увидит «у вас нет подписки»;
-          • «бот не ответил» — иначе при перезапуске бота в кабинете нарисуются
-            баланс 0 ₽, пустые «Правила» и «обращений нет».
-        `soft=True` — только для необязательных кусочков (например, оформление
-        собирается из шести ручек, и одна отвалившаяся не должна ронять экран).
+          • «бот не ответил» — сеть или таймаут: это 502, а не пустой экран;
+          • «бот ответил ошибкой» — 4xx отдаём кабинету с ЕГО кодом и текстом
+            (причина видна человеку), 5xx схлопываем в 502 «попробуйте позже»,
+            потому что их внутренние трейсы показывать нечего.
+        `soft=True` — единственный способ получить мягкую деградацию, и ставится
+        он осознанно там, где кусочек необязателен: экран собирается из нескольких
+        ручек, и одна отвалившаяся не должна ронять его целиком. 401/403 не
+        глотает даже он — чужая или истёкшая сессия это не «нет данных».
         """
         try:
             resp = await self.call(method, path, **kw)
@@ -145,8 +162,19 @@ class Ctx:
             ) from exc
         if resp.status_code in (401, 403):
             raise UpstreamError(resp)
+        if resp.status_code >= 500:
+            if soft:
+                return default
+            raise UpstreamError(
+                httpx.Response(502, json={"detail": "Бэкенд ответил ошибкой — попробуйте позже"})
+            )
         if resp.status_code >= 400:
-            return default
+            if soft:
+                return default
+            # Их код и их текст: «Слишком много активаций», «Тариф не найден» —
+            # это ответ пользователю, а не поломка, и подменять его пустотой
+            # (а тем более своим 502) значит скрывать причину.
+            raise _upstream_error(resp)
         try:
             return resp.json()
         except ValueError:
@@ -186,6 +214,10 @@ FEATURE_REQUIREMENTS: dict[str, list[tuple[str, str]]] = {
     "gift": [("GET", "/api/gift/my"), ("POST", "/api/gift/create")],
     "tickets": [("GET", "/api/support/tickets")],
     "notifications": [("GET", "/api/notifications")],
+    # Очистка ленты — отдельная возможность: читать уведомления «Бедолага» даёт,
+    # а удалять их скопом нечем. Без этого ключа кнопка «Очистить» считалась
+    # доступной (нет ключа = умеет) и узнавала правду только по нажатию.
+    "notifications_clear": [("DELETE", "/api/notifications")],
     "info_pages": [("GET", "/api/info")],
     "email_verify": [("POST", "/api/auth/email/request-verification")],
     "password_change": [("POST", "/api/auth/change-password")],
@@ -197,7 +229,9 @@ FEATURE_REQUIREMENTS: dict[str, list[tuple[str, str]]] = {
     "sessions": [("GET", "/api/sessions")],
     "push": [("GET", "/api/push/status")],
     # Админка — десятки ручек; включаем, только когда появится список
-    # пользователей, иначе админ проваливается в экраны с ошибками.
+    # пользователей, иначе админ проваливается в экраны с ошибками. Это вход в
+    # раздел целиком; какие пункты меню внутри показывать, решает отдельный
+    # список разделов (ADMIN_SECTION_REQUIREMENTS → whoami.sections).
     "admin": [("GET", "/api/admin/users")],
 }
 
@@ -237,6 +271,31 @@ def set_route_probe(probe: Callable[[str, str], bool]) -> None:
     _serves = probe
 
 
+# Параметр в шаблоне пути: `/api/admin/users/{id}`. Имя параметра выбирает автор
+# обработчика (`{id}`, `{user_id}`), поэтому при сверке имена стираем — иначе
+# таблица разделов ниже разъезжалась бы с админскими ручками из-за одного слова.
+_PATH_PARAM = re.compile(r"\{[^/}]*\}")
+
+
+def _implemented(method: str, path: str) -> bool:
+    """Отдаёт ли адаптер этот путь — своим обработчиком или по карте маршрутов.
+
+    Путь может быть шаблоном (`/api/admin/users/{id}`): у своих обработчиков
+    сверяем шаблоны без имён параметров, а карте маршрутов подставляем заглушку —
+    она умеет сверять только конкретный путь, шаблон ей ни о чём не говорит.
+    """
+    m = method.upper()
+    if (m, path) in HANDLERS:
+        return True
+    if "{" in path:
+        want = _PATH_PARAM.sub("{}", path)
+        if any(hm == m and _PATH_PARAM.sub("{}", hp) == want for hm, hp in HANDLERS):
+            return True
+    if _serves is None:
+        return False
+    return bool(_serves(m, _PATH_PARAM.sub("0", path)))
+
+
 def features() -> dict[str, bool] | None:
     """Что умеет этот бэкенд. None = «не знаем» — кабинет тогда показывает всё.
 
@@ -247,17 +306,130 @@ def features() -> dict[str, bool] | None:
     if _serves is None:
         return None
 
-    def ok(method: str, path: str) -> bool:
-        if (method.upper(), path) in HANDLERS:
-            return True
-        return bool(_serves(method, path))
-
     result = {
-        name: all(ok(m, p) for m, p in needs)
+        name: all(_implemented(m, p) for m, p in needs)
         for name, needs in FEATURE_REQUIREMENTS.items()
     }
     result.update(FEATURE_OVERRIDES)
     return result
+
+
+# --- какие разделы админки адаптер реально отдаёт ---------------------------
+#
+# Права админа кабинет получает списком разделов (`sections` в whoami): пусто
+# при full_access=true читается как «все разделы», непустой — «только эти».
+# Для чужого бота full_access давать нельзя: их админ — админ ИХ бота, а у нас
+# сорок админских экранов, и переведены из них единицы. Отдать «все» значит
+# показать человеку меню, где почти каждый пункт отвечает 501.
+#
+# Поэтому список считается так же, как features: раздел объявляет, без каких
+# путей он пустой, и включается САМ, когда путь появится в адаптере. Руками тут
+# ничего не перечисляется и не сверяется.
+#
+# Ключи и их порядок — из кабинета (admin_src/src/web/permissions.py: тот же
+# порядок он показывает в UI). Пути — те, что кабинет реально дёргает
+# (cabinet/src/api/*.ts, префикс /api/admin).
+#
+# ПОЧЕМУ У ГРУПП ПЕРЕЧИСЛЕНЫ ВСЕ ЭКРАНЫ. Раздел кабинета — это не один экран, а
+# группа пунктов меню, и фильтр в меню один на всю группу. Включив «content»
+# из-за одной переведённой ручки, мы показали бы пять пунктов, четыре из
+# которых сломаны. Раздел честен только целиком.
+#
+# Методы только читающие: пока can_write=false, менять всё равно нечего.
+ADMIN_SECTION_REQUIREMENTS: dict[str, list[tuple[str, str]]] = {
+    "dashboard": [("GET", "/api/admin/statistics/overview")],
+    # Список без карточки бесполезен: клик по строке — это весь смысл экрана.
+    "users": [("GET", "/api/admin/users"), ("GET", "/api/admin/users/{id}")],
+    # Отдельного пункта меню нет — это вкладки внутри карточки пользователя.
+    "subscriptions": [("GET", "/api/admin/subscriptions/user/{id}")],
+    "transactions": [("GET", "/api/admin/transactions")],
+    "plans": [("GET", "/api/admin/plans")],
+    "promocodes": [("GET", "/api/admin/promocodes")],
+    "gateways": [("GET", "/api/admin/gateways")],
+    "broadcasts": [("GET", "/api/admin/broadcasts")],
+    "ad_links": [("GET", "/api/admin/ad-links")],
+    # Список обращений без переписки — витрина без ответа, поэтому оба пути.
+    "support": [
+        ("GET", "/api/admin/support/tickets"),
+        ("GET", "/api/admin/support/tickets/{id}"),
+    ],
+    "remnawave": [
+        ("GET", "/api/admin/remnawave/system"),
+        ("GET", "/api/admin/remnawave/nodes"),
+    ],
+    # Группа «Кабинет»: оформление, доступ и язык (та же ручка), информация,
+    # меню, приложения.
+    "content": [
+        ("GET", "/api/admin/appearance"),
+        ("GET", "/api/admin/info"),
+        ("GET", "/api/admin/menu"),
+        ("GET", "/api/admin/menu/buttons"),
+        ("GET", "/api/admin/apps"),
+    ],
+    # Самая большая группа: полтора десятка пунктов меню плюс мега-экран
+    # «Настройки», который сам собирается из десятка ручек.
+    "settings": [
+        ("GET", "/api/admin/settings"),
+        ("GET", "/api/admin/cashback"),
+        ("GET", "/api/admin/topup"),
+        ("GET", "/api/admin/reserve"),
+        ("GET", "/api/admin/freeze"),
+        ("GET", "/api/admin/promo-banner"),
+        ("GET", "/api/admin/trial-discount"),
+        ("GET", "/api/admin/winback"),
+        ("GET", "/api/admin/digest"),
+        ("GET", "/api/admin/traffic-alert"),
+        ("GET", "/api/admin/new-device"),
+        ("GET", "/api/admin/login-alert"),
+        ("GET", "/api/admin/email-gate"),
+        ("GET", "/api/admin/morning-summary"),
+        ("GET", "/api/admin/subscription-app"),
+        ("GET", "/api/admin/server-status"),
+        ("GET", "/api/admin/server-status/nodes"),
+        ("GET", "/api/admin/email-settings"),
+        ("GET", "/api/admin/email-template"),
+        ("GET", "/api/admin/auth-settings"),
+        ("GET", "/api/admin/notifications"),
+        ("GET", "/api/admin/notifications/settings"),
+        ("GET", "/api/admin/settings-io/export"),
+        ("GET", "/api/admin/admin-ip"),
+        ("GET", "/api/admin/2fa/status"),
+    ],
+    "audit": [("GET", "/api/admin/audit")],
+    "updates": [("GET", "/api/admin/updates")],
+    "abuse": [("GET", "/api/admin/abuse/trials")],
+    "import": [("GET", "/api/admin/import/status")],
+}
+
+# Методы, которые ничего не меняют. Всё остальное под /api/admin/ — мутация.
+_READ_METHODS = ("GET", "HEAD", "OPTIONS")
+
+
+def admin_sections() -> list[str]:
+    """Разделы админки, которые адаптер отдаёт целиком.
+
+    Fail-closed и без «не знаем»: в отличие от features, пустой список ничего не
+    ломает — кабинет просто не покажет ни одного админского пункта. Это ровно то
+    поведение, которое нужно, пока переводить нечего.
+    """
+    return [
+        name
+        for name, needs in ADMIN_SECTION_REQUIREMENTS.items()
+        if needs and all(_implemented(m, p) for m, p in needs)
+    ]
+
+
+def admin_can_write() -> bool:
+    """Есть ли у адаптера хоть одна ИЗМЕНЯЮЩАЯ админская ручка.
+
+    Кабинет по этому флагу решает, рисовать ли кнопки сохранения и действий.
+    Пока переведены только чтения, честный ответ — «нет»: иначе админ жмёт
+    «Сохранить» и получает 501 вместо результата.
+    """
+    return any(
+        method not in _READ_METHODS and path.startswith("/api/admin/")
+        for method, path in HANDLERS
+    )
 
 
 # --- оформление -------------------------------------------------------------
@@ -289,6 +461,16 @@ def _maintenance_from(resp: httpx.Response) -> tuple[bool, str]:
         return False, ""
     message = body.get("message") or body.get("detail") or ""
     return True, message if isinstance(message, str) else ""
+
+
+@handler("GET", "/api/apps")
+async def apps(_: Ctx) -> dict[str, Any]:
+    """Каталог приложений — фича самого кабинета: список зашит в него, а эта
+    ручка отдаёт лишь выбор админа (приоритет, что показывать, свои ссылки).
+    На чужом бэкенде такого выбора нет, поэтому отдаём «настроек нет» — кабинет
+    покажет весь каталог. Раньше здесь был 501 на каждой странице подключения:
+    ошибку кабинет гасил, но экран каталога считался сломанным."""
+    return {"priority": None, "enabled": None, "custom": []}
 
 
 @handler("GET", "/api/appearance")
@@ -384,22 +566,38 @@ async def me(ctx: Ctx) -> dict[str, Any]:
 @handler("GET", "/api/auth/whoami")
 async def whoami(ctx: Ctx) -> dict[str, Any]:
     """Права. Всё, чего не знаем наверняка, — закрыто (fail-closed)."""
-    is_admin = bool((await ctx.json("/cabinet/auth/me/is-admin", {}) or {}).get("is_admin"))
-    perms = await ctx.json("/cabinet/auth/me/permissions", {}) or {}
+    # Осознанно мягко: обе ручки прав есть не в каждой сборке «Бедолаги», и их
+    # отсутствие обязано читаться как «не админ», а не ронять кабинет — whoami
+    # дёргается на каждой странице, её ошибка = белый экран у обычного человека.
+    # Fail-closed это не нарушает: без ответа прав не выдаём.
+    is_admin = bool((await ctx.json("/cabinet/auth/me/is-admin", {}, soft=True) or {}).get("is_admin"))
+    perms = await ctx.json("/cabinet/auth/me/permissions", {}, soft=True) or {}
+    # А вот «кто я» — строго: не знаем пользователя, значит и отвечать нечего.
     user = await ctx.json("/cabinet/auth/me", {}) or {}
     role_level = perms.get("role_level") or 0
+
+    # Админ у них — админ ИХ бота, а не нашего кабинета: их ручка отвечает только
+    # «да/нет», ничего не зная про наши сорок экранов. Поэтому доступ выдаём не
+    # «весь», а ровно по тому, что адаптер умеет перевести: full_access никогда,
+    # sections — посчитанный список. Появится новая ручка — раздел придёт сам.
+    sections = admin_sections() if is_admin else []
+    # Мутации разрешаем только когда переведена хоть одна изменяющая ручка,
+    # иначе кабинет рисует кнопки, за которыми 501.
+    can_write = bool(sections) and admin_can_write()
     return {
         "role": role_level or None,
         "is_admin": is_admin,
-        # Разделения «только просмотр» у них в кабинетном API нет: либо админ,
-        # либо нет. Не выдаём права, которых не можем подтвердить.
-        "is_readonly_admin": False,
+        # Их кабинетное API про «только просмотр» не знает — этот режим наш:
+        # пока менять нечем, админ видит данные и не видит кнопок сохранения.
+        "is_readonly_admin": is_admin and not can_write,
         "can_access_admin": is_admin,
-        "is_owner": is_admin and role_level >= 90,
-        "full_access": is_admin,
-        "can_write": is_admin,
-        # Пусто при full_access = «все разделы» (так это читает кабинет).
-        "sections": [],
+        # Владелец в кабинете — это право раздавать доступы и менять роли, то
+        # есть сплошные мутации. Без них флаг только показал бы неработающее.
+        "is_owner": is_admin and can_write and role_level >= 90,
+        # Никогда: «полный доступ» = все разделы, включая непереведённые.
+        "full_access": False,
+        "can_write": can_write,
+        "sections": sections,
         "grant_expires_at": None,
         # Пароль есть у всех, кто вошёл по почте; у телеграм-входа — нет.
         "has_password": (user.get("auth_type") or "").lower() == "email",
@@ -437,11 +635,21 @@ async def subscription_current(ctx: Ctx) -> Any:
             duration = 0
 
     limit_gb = sub.get("traffic_limit_gb") or 0
+    # Пауза: у них подписка при этом просто выключена, и кабинет без подсказки
+    # звал «продлить, доступ приостановлен» человека, который сам нажал «Пауза».
+    # Спрашиваем только у выключенных — активной подписке пауза невозможна.
+    status = str(sub.get("status") or "").upper()
+    frozen = False
+    if status != "ACTIVE" and ctx.state is not None and ctx.state.available:
+        me = await ctx.json("/cabinet/auth/me", {}, soft=True) or {}
+        user_key = str(me.get("id") or "")
+        frozen = bool(user_key and ctx.state.get_freeze(user_key))
     return {
         # Свой идентификатор в панели они в кабинет не отдают; кабинет использует
         # его только как ключ отображения — подставляем id подписки.
         "user_remna_id": str(sub.get("id") or ""),
-        "status": str(sub.get("status") or "").upper(),
+        "status": status,
+        "frozen": frozen,
         "is_trial": bool(sub.get("is_trial")),
         # ГИГАБАЙТЫ, как в нашем контракте: `subscriptions.traffic_limit` у нас
         # хранится и отдаётся в ГБ (в байты переводится только на выходе в
@@ -548,7 +756,7 @@ async def status(ctx: Ctx) -> dict[str, Any]:
     return _nodes_from_countries(await ctx.json("/cabinet/subscription/countries", {}) or {})
 
 
-# --- деньги (пока только чтение) --------------------------------------------
+# --- деньги: баланс и лента операций -----------------------------------------
 
 
 @handler("GET", "/api/balance")
@@ -558,9 +766,12 @@ async def balance(ctx: Ctx) -> dict[str, Any]:
     # Сумма трат есть готовая — её считает их же программа лояльности; перебирать
     # ленту транзакций ради неё не нужно. Число покупок берём счётчиком `total`
     # с фильтром по типу, поэтому запрашиваем одну запись, а не всю страницу.
-    loyalty = await ctx.json("/cabinet/promo/loyalty-tiers", {}) or {}
+    # Мягко ТОЛЬКО эти два: сумма трат и число покупок — подписи под балансом.
+    # Программы лояльности может не быть вовсе, а фильтр по типу транзакции чужая
+    # сборка вправе не знать (422) — прятать из-за этого сам баланс нельзя.
+    loyalty = await ctx.json("/cabinet/promo/loyalty-tiers", {}, soft=True) or {}
     purchases = await ctx.json(
-        "/cabinet/balance/transactions", {},
+        "/cabinet/balance/transactions", {}, soft=True,
         params={"type": "subscription_payment", "per_page": 1},
     ) or {}
     return {
@@ -918,6 +1129,418 @@ async def topup_config(ctx: Ctx) -> dict[str, Any]:
     }
 
 
+# --- деньги: списание с баланса и пополнение ----------------------------------
+#
+# ЧЕГО ЗДЕСЬ НЕТ И ПОЧЕМУ (docs/BEDOLAGA-MONEY.md §2-3). Покупки подписки картой
+# у «Бедолаги» не существует вовсе: карта есть только у пополнения баланса, а
+# подписка всегда оплачивается списанием. Собрать «оплатить картой» связкой
+# «пополнить → дождаться зачисления → купить» технически можно, но это сразу три
+# ловушки, и каждая стоит пользователю денег:
+#   • на КАЖДОЕ зачисление их код сам продлевает истёкшую подписку на кратчайший
+#     период (`try_auto_extend_expired_after_topup` вызывается безусловно, флаг
+#     AUTO_PURCHASE_AFTER_TOPUP_ENABLED его не выключает) — деньги, отложенные на
+#     90 дней, уходят на 14, и на задуманную покупку остатка уже нет;
+#   • дожимать покупку по условию «баланса стало достаточно» нельзя: порог
+#     перешагивают чужие деньги — реферальная комиссия, промокод, начисление
+#     админом, пополнение из бота на другие цели, — и адаптер спишет за брошенную
+#     корзину;
+#   • их `POST /balance/pending-payments/{method}/{id}/check` — не проверка
+#     статуса, а ЗАЧИСЛЕНИЕ средств; дёргать его «чтобы обновить экран» нельзя, и
+#     именно поэтому у нас нет ручки «проверить платёж».
+# Поэтому здесь только то, где деньги двигает сам пользователь одним явным
+# действием: списание с баланса и создание счёта на пополнение. Ожиданий,
+# фоновых дожимов и состояния «ждём оплату под эту покупку» адаптер не хранит.
+#
+# Единственная связь пополнения с покупкой — их собственная и нам неподвластная:
+# на отказ «не хватает средств» они сохраняют корзину, и та же корзина потом
+# работает замком от автопродления (при выключенном AUTO_PURCHASE_AFTER_TOPUP —
+# ничего не покупает, при включенном — покупает ровно выбранное человеком).
+# Удалить или создать её через их API нечем, поэтому мы на неё и не опираемся.
+
+# Пока списание идёт, второй такой же запрос от той же сессии не пропускаем:
+# идемпотентности у их покупки нет (повтор = второе списание), а двойной клик и
+# перезагрузка вкладки — самый обычный способ нажать «оплатить» дважды. Ключ —
+# отпечаток токена сессии, живёт не дольше нашего таймаута к боту.
+_CHARGE_LOCK_TTL = 40.0
+_charging: dict[str, float] = {}
+
+# Сколько ждать, сверяя баланс, когда исход списания неизвестен. Списание они
+# коммитят до похода в панель Remnawave, поэтому доехать оно должно быстро; общее
+# ожидание держим коротким — сверх него уже истекает наш собственный дедлайн.
+_CHARGE_RECHECK = (0.5, 2.0)
+
+# Их ошибки денег — английские строки, а кабинет показывает `detail` пользователю
+# как есть (cabinet/src/api/client.ts:54). Переводим известное, незнакомое
+# пропускаем без изменений — лучше англ. текст, чем «что-то пошло не так».
+_MONEY_ERRORS = {
+    "Subscription purchases are restricted for this account":
+        "Покупка подписки для этого аккаунта закрыта — напишите в поддержку",
+    "Subscription renewal is restricted for this account":
+        "Продление подписки для этого аккаунта закрыто — напишите в поддержку",
+    "Balance top-up is restricted for this account":
+        "Пополнение баланса для этого аккаунта закрыто — напишите в поддержку",
+    "Purchases are restricted for this account":
+        "Покупки для этого аккаунта закрыты — напишите в поддержку",
+    "Tariffs mode is not enabled": "Продажа тарифов в боте выключена",
+    "Tariff not found or inactive": "Этот тариф больше не продаётся",
+    "This tariff is not available for your promo group":
+        "Этот тариф недоступен для вашей группы",
+    "Selected period is not available for this tariff":
+        "Этот срок для тарифа больше не доступен",
+    "Selected renewal period is not available": "Этот срок продления больше не доступен",
+    "Invalid renewal period": "Неверный срок продления",
+    "Invalid tariff period or pricing configuration": "Для этого срока не задана цена",
+    "No subscription found": "Подписка не найдена",
+    "Classic subscriptions cannot be renewed. Please purchase a tariff.":
+        "Эту подписку продлить нельзя — выберите тариф",
+    "You already have an active subscription for this tariff":
+        "У вас уже есть активная подписка на этот тариф",
+    "Autopay is not available for trial subscriptions":
+        "Автопродление недоступно для пробной подписки",
+    "Autopay is not available for daily subscriptions":
+        "Автопродление недоступно для суточной подписки",
+    "Autopay is not available for classic subscriptions. Please purchase a tariff.":
+        "Автопродление доступно только для тарифной подписки",
+    "Invalid or unavailable payment method": "Этот способ оплаты недоступен",
+    "Failed to charge balance": "Не удалось списать деньги с баланса",
+    "Failed to process tariff purchase": "Не удалось оформить покупку",
+    "Too many requests": "Слишком часто — подождите минуту",
+}
+
+
+def _money_text(text: str) -> str:
+    """Их текст ошибки по-русски. Часть сообщений они собирают с числами
+    («Minimum amount is 100.00 RUB»), поэтому кроме словаря есть два правила по
+    началу строки — иначе именно эти, самые частые, остались бы английскими."""
+    text = text.strip()
+    known = _MONEY_ERRORS.get(text)
+    if known:
+        return known
+    if text.startswith("Minimum amount is"):
+        return "Сумма меньше минимальной для этого способа оплаты: " + text[len("Minimum amount is "):].replace("RUB", "₽")
+    if text.startswith("Maximum amount is"):
+        return "Сумма больше максимальной для этого способа оплаты: " + text[len("Maximum amount is "):].replace("RUB", "₽")
+    if text.startswith("Cannot renew subscription with status"):
+        return "Подписку в текущем состоянии продлить нельзя"
+    return text
+
+
+def _fail(status: int, detail: str) -> UpstreamError:
+    """Отказ от самого адаптера — в той же форме, что и ошибка бота."""
+    return UpstreamError(httpx.Response(status, json={"detail": detail}))
+
+
+def _upstream_error(resp: httpx.Response) -> UpstreamError:
+    """Их ошибку — в вид, который кабинет покажет человеку.
+
+    Живёт в денежном разделе, но нужна везде: через неё же `Ctx.json` отдаёт любой
+    их 4xx, поэтому и словарь переводов, и разбор `detail` здесь общие.
+
+    Кабинет печатает `detail` как есть и умеет только строку: объект (а их 402
+    «недостаточно средств» кладёт в `detail` именно объект) он выведет сырым
+    JSON — вместо причины пользователь увидит фигурные скобки.
+    """
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    detail = body.get("detail") if isinstance(body, dict) else None
+    if isinstance(detail, dict):
+        text = str(detail.get("message") or "").strip() or "Недостаточно средств на балансе"
+    elif isinstance(detail, list):
+        # Их 422 от pydantic: список объектов с `msg`.
+        text = "; ".join(
+            str(d.get("msg") if isinstance(d, dict) else d) for d in detail
+        ) or "Запрос отклонён"
+    elif isinstance(detail, str) and detail.strip():
+        text = detail
+    else:
+        text = "Не удалось выполнить операцию"
+    return UpstreamError(httpx.Response(resp.status_code, json={"detail": _money_text(text)}))
+
+
+def _charge_lock(token: str | None) -> str | None:
+    """Занять «идёт списание» для этой сессии; None — уже занято."""
+    if not token:
+        # Без сессии списывать нечего: их ручка ответит 401, и общий на всех
+        # анонимов замок только мешал бы.
+        return ""
+    key = hashlib.sha256(token.encode()).hexdigest()
+    now = time.monotonic()
+    for old, until in list(_charging.items()):
+        if until <= now:
+            del _charging[old]
+    if key in _charging:
+        return None
+    _charging[key] = now + _CHARGE_LOCK_TTL
+    return key
+
+
+async def _balance_kopeks(ctx: Ctx) -> int | None:
+    """Баланс в копейках; None — прочитать не удалось (сверять будет нечем)."""
+    try:
+        data = await ctx.json("/cabinet/balance", None, soft=True)
+    except UpstreamError:
+        return None
+    value = data.get("balance_kopeks") if isinstance(data, dict) else None
+    return int(value) if isinstance(value, (int, float)) else None
+
+
+async def _charged(ctx: Ctx, before: int | None) -> int | None:
+    """Списались ли деньги, когда ответа мы не дождались. None — узнать не удалось.
+
+    Их покупка синхронно ходит в панель Remnawave и может не уложиться в наш
+    таймаут, УЖЕ списав деньги (docs/BEDOLAGA-MONEY.md §3). Ответить «ошибка» в
+    такой ситуации — пригласить нажать ещё раз, а идемпотентности у их ручки нет.
+    Само списание они коммитят отдельной транзакцией до похода в панель
+    (`subtract_user_balance`), поэтому факт видно по балансу; несколько секунд
+    даём ему доехать. Чужое зачисление (рефералка, промокод) баланс только
+    увеличивает, так что уменьшение — признак именно списания.
+    """
+    if before is None:
+        return None
+    for pause in _CHARGE_RECHECK:
+        await asyncio.sleep(pause)
+        after = await _balance_kopeks(ctx)
+        if after is not None and after < before:
+            return before - after
+    return None
+
+
+async def _spend(
+    ctx: Ctx, path: str, body: dict[str, Any]
+) -> tuple[dict[str, Any], int | None, int | None]:
+    """Списание с баланса их ручкой. Возвращает (их ответ, списано, баланс) в копейках.
+
+    Ответ пустой, а суммы заполнены, когда исход выяснен сверкой баланса, а не их
+    ответом: для кабинета это такой же успех, просто подробностей у нас меньше.
+    """
+    lock = _charge_lock(ctx.token)
+    if lock is None:
+        raise _fail(409, "Оплата уже выполняется — дождитесь ответа, не нажимайте второй раз")
+    before = await _balance_kopeks(ctx)
+    try:
+        try:
+            resp = await ctx.call("POST", path, json=body)
+        except httpx.HTTPError:
+            spent = await _charged(ctx, before)
+            if spent is None:
+                raise _fail(
+                    504,
+                    "Сервис не ответил вовремя. Обновите страницу и проверьте подписку: "
+                    "если оплата всё-таки прошла, повторная попытка спишет деньги второй раз.",
+                ) from None
+            return {}, spent, (before - spent if before is not None else None)
+        if resp.status_code >= 500:
+            # Их обработчик покупки ловит любую свою ошибку уже ПОСЛЕ списания —
+            # тогда «попробуйте ещё раз» означает второе списание.
+            if await _charged(ctx, before) is not None:
+                raise _fail(
+                    502,
+                    "Деньги списаны, но сервис не подтвердил операцию. Не платите повторно — "
+                    "обновите страницу и напишите в поддержку, если подписка не изменилась.",
+                )
+        if resp.status_code >= 400:
+            raise _upstream_error(resp)
+        data = resp.json() if resp.content else {}
+        return (data if isinstance(data, dict) else {}), None, None
+    finally:
+        _charging.pop(lock, None)
+
+
+def _positive_int(value: Any) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return number if number > 0 else 0
+
+
+async def _current_subscription(ctx: Ctx) -> dict[str, Any]:
+    """Подписка как её видит бот. Мягкого провала здесь быть не должно: по этому
+    ответу выбирается ручка списания, и «данных нет» увело бы покупку не туда."""
+    data = await ctx.json("/cabinet/subscription", {}) or {}
+    return (data.get("subscription") or {}) if data.get("has_subscription") else {}
+
+
+@handler("POST", "/api/subscription/pay-with-balance")
+async def pay_with_balance(ctx: Ctx) -> dict[str, Any]:
+    """Оплата тарифа с баланса — единственная покупка подписки, которая у
+    «Бедолаги» есть.
+
+    Продление текущего тарифа и покупку другого они считают РАЗНЫМИ ручками с
+    разной ценой: `renewal-options`/`renew` учитывают персональное промо и
+    докупленные устройства, `purchase-options`/`purchase-tariff` — цену каталога.
+    Витрина показывает цену из первой пары для текущего тарифа и из второй для
+    остальных (см. `subscription_offers`), поэтому и списываем той же ручкой,
+    какой посчитана показанная цена: цифра на кнопке обязана совпасть со
+    списанной.
+
+    `gateway_type` из тела не используем намеренно: платит баланс, а шлюз у них
+    выбирается только при пополнении — кабинет присылает его за компанию.
+    """
+    body = ctx.payload()
+    tariff_id = _positive_int(body.get("plan_code"))
+    days = _positive_int(body.get("duration_days"))
+    if not tariff_id or not days:
+        raise _fail(400, "Выберите тариф и срок")
+
+    sub = await _current_subscription(ctx)
+    if sub.get("tariff_id") == tariff_id:
+        data, spent, balance = await _spend(
+            ctx, "/cabinet/subscription/renew", {"period_days": days}
+        )
+        purchase_type = "RENEW"
+        spent = spent if spent is not None else _positive_int(data.get("amount_paid_kopeks"))
+    else:
+        data, spent, balance = await _spend(
+            ctx, "/cabinet/subscription/purchase-tariff",
+            {"tariff_id": tariff_id, "period_days": days},
+        )
+        purchase_type = "CHANGE" if sub else "NEW"
+        spent = spent if spent is not None else _positive_int(data.get("charged_amount"))
+        if balance is None and isinstance(data.get("balance_kopeks"), int):
+            balance = data["balance_kopeks"]
+
+    if balance is None:
+        # Их продление баланс в ответе не возвращает — перечитываем, иначе кабинет
+        # покажет старую сумму рядом с уже потраченными деньгами.
+        balance = await _balance_kopeks(ctx)
+    return {
+        "success": True,
+        "purchase_type": purchase_type,
+        "spent": round(spent / 100, 2),
+        "balance": round((balance or 0) / 100, 2),
+    }
+
+
+@handler("POST", "/api/balance/spend-on-renewal")
+async def spend_on_renewal(ctx: Ctx) -> dict[str, Any]:
+    """Продление текущей подписки с баланса (карточка на «Балансе»).
+
+    Та же их ручка, что и у продления из витрины, — цену считает `renewal-options`,
+    её же кабинет и показывает рядом с кнопкой.
+    """
+    days = _positive_int(ctx.payload().get("duration_days"))
+    if not days:
+        raise _fail(400, "Выберите срок продления")
+
+    data, spent, balance = await _spend(
+        ctx, "/cabinet/subscription/renew", {"period_days": days}
+    )
+    spent = spent if spent is not None else _positive_int(data.get("amount_paid_kopeks"))
+    if balance is None:
+        balance = await _balance_kopeks(ctx)
+    expire_at = data.get("new_end_date")
+    if not expire_at:
+        # Исход выяснен сверкой баланса — новую дату спрашиваем у бота, а не
+        # считаем сами: их продление истёкшей подписки ведёт срок от «сейчас».
+        # Не дозвонились — деньги всё равно списаны, и падать ошибкой поверх
+        # состоявшейся оплаты нельзя: кабинет перечитает дату с экрана подписки.
+        try:
+            expire_at = (await _current_subscription(ctx)).get("end_date")
+        except UpstreamError:
+            expire_at = None
+    return {
+        "success": True,
+        "days_added": days,
+        "spent": round(spent / 100, 2),
+        "balance": round((balance or 0) / 100, 2),
+        "expire_at": expire_at,
+    }
+
+
+@handler("POST", "/api/balance/autopay")
+async def autopay(ctx: Ctx) -> dict[str, Any]:
+    """Тумблер автопродления с баланса. У нас POST на «Балансе», у них PATCH в
+    подписке — прямая трансляция по карте давала гарантированный 405.
+
+    `days_before` намеренно не передаём: за сколько дней списывать, настраивает
+    владелец бота, и наш тумблер (в кабинете это одна кнопка «вкл/выкл») не должен
+    втихую переписывать его настройку.
+    """
+    enabled = bool(ctx.payload().get("enabled"))
+    resp = await ctx.call(
+        "PATCH", "/cabinet/subscription/autopay", json={"enabled": enabled}
+    )
+    if resp.status_code >= 400:
+        # Их отказы здесь осмысленные (пробная и суточная подписка автопродления
+        # не поддерживают) — глотать их нельзя, тумблер должен вернуться назад.
+        raise _upstream_error(resp)
+    data = resp.json() if resp.content else {}
+    return {
+        "success": True,
+        "autopay_enabled": bool((data or {}).get("autopay_enabled")),
+    }
+
+
+@handler("POST", "/api/balance/topup")
+async def topup(ctx: Ctx) -> dict[str, Any]:
+    """Счёт на пополнение баланса — единственная оплата картой, которая у
+    «Бедолаги» есть.
+
+    Адаптер только переводит форму: рубли → копейки, `GATEWAY` → их id способа
+    оплаты. Связки «пополнил → купил» здесь нет намеренно (почему — в шапке
+    раздела): деньги ложатся на баланс, покупку человек подтверждает отдельно.
+
+    Куда шлюз вернёт пользователя после оплаты, решает НАСТРОЙКА БОТА (`CABINET_URL`):
+    передать свой адрес в запросе нечем. Зачисление от этого не зависит — его
+    делает вебхук бота, — но пока владелец не пропишет там адрес нашего кабинета,
+    после оплаты человек окажется не у нас.
+    """
+    body = ctx.payload()
+    try:
+        amount = float(body.get("amount"))
+    except (TypeError, ValueError):
+        raise _fail(400, "Укажите сумму пополнения") from None
+    kopeks = int(round(amount * 100))
+    if kopeks < _TOPUP_FLOOR_KOPEKS:
+        # Их схема запроса режет меньшее ge=1000, но текстом pydantic по-английски.
+        raise _fail(400, f"Минимальная сумма пополнения — {_TOPUP_FLOOR_KOPEKS // 100} ₽")
+
+    gateway = str(body.get("gateway_type") or "").strip().lower()
+    # Список тот же, что кабинет получил в /balance/topup/config: недоступные
+    # способы и Telegram Stars (их счёт выдаёт только бот) сюда не попадают.
+    method = next(
+        (m for m in await _payment_methods(ctx) if str(m.get("id") or "").lower() == gateway),
+        None,
+    )
+    if method is None:
+        raise _fail(400, "Этот способ оплаты недоступен")
+
+    resp = await ctx.call(
+        "POST", "/cabinet/balance/topup",
+        json={"amount_kopeks": kopeks, "payment_method": method["id"]},
+    )
+    if resp.status_code >= 400:
+        raise _upstream_error(resp)
+    data = resp.json() if resp.content else {}
+    url = (data or {}).get("payment_url")
+    if not url:
+        # Денег ещё не двигали: счёт не создан, повтор безопасен.
+        raise _fail(502, "Платёжный шлюз не вернул ссылку на оплату — попробуйте другой способ")
+    charged = _positive_int(data.get("amount_kopeks")) or kopeks
+    return {
+        "payment_id": str(data.get("payment_id") or ""),
+        "payment_url": url,
+        "amount": _rub(charged),
+        # Бонуса за пополнение у них нет вовсе (см. /api/balance/topup/config).
+        "bonus": _rub(0),
+        "total": _rub(charged),
+    }
+
+
+# Ручек `POST /api/subscription/purchase` и `/api/subscription/extend` (оплата
+# подписки картой) здесь нет намеренно: у «Бедолаги» такой операции не существует,
+# а собирать её из пополнения и автопокупки — это три ловушки из шапки раздела.
+# main.py отвечает на эти пути 501, кабинет по списку возможностей прячет кнопку
+# «оплатить картой» и оставляет «оплатить с баланса».
+#
+# `POST /api/balance/convert-points` тоже нет: баллов у них не существует —
+# рефералка начисляет сразу рублями (`/api/balance` отдаёт points: 0), менять не
+# на что. Кабинет карточку конвертации в такой ситуации не рисует.
+
+
 # --- поддержка: тикеты ---------------------------------------------------------
 
 # Их статусов четыре и они в нижнем регистре (app/database/models.py:3261,
@@ -983,7 +1606,7 @@ _STATUSES_MD = """## Статусы подписки
 - **Истекает скоро** — до окончания подписки осталось менее 3 дней. Рекомендуем продлить заранее.
 - **Истекла** — срок действия подписки завершился. Подключение приостановлено. Продлите подписку для восстановления доступа.
 - **Пробная** — активен бесплатный пробный период. После его окончания необходимо оформить подписку.
-- **Отключена** — подписка отключена администратором. Обратитесь в поддержку для уточнения причины.
+- **Отключена** — доступ выключен. Либо вы сами поставили подписку на паузу (возобновите её в разделе «Подписка»), либо её отключил администратор — тогда напишите в поддержку.
 - **Нет подписки** — подписка ещё не оформлена. Перейдите в раздел «Тарифы», чтобы выбрать план.
 
 ## Статусы трафика
@@ -1096,38 +1719,45 @@ async def info(ctx: Ctx) -> dict[str, Any]:
         return cached[1]
 
     params = {"language": lang}
+    # ВЕСЬ этот экран собирается мягко (soft=True), и это осознанно: вкладок пять,
+    # каждая приходит своей ручкой, набор ручек у разных сборок «Бедолаги» разный,
+    # а подменную инфо-страницу админ может выключить между двумя запросами (их
+    # ответ на такой slug — честный 404). Отсутствующая вкладка — пустой текст,
+    # ронять из-за неё FAQ и правила нельзя. Это единственное место, где «данных
+    # нет» действительно означает «данных нет», а не спрятанную аварию.
+    #
     # Админ может подменить любую вкладку своей инфо-страницей: карта «вкладка →
     # slug» (app/database/crud/info_pages.py:157-178). Подмена важнее дефолта —
     # иначе кабинет покажет текст, который в боте уже выключен.
-    swap = await ctx.json("/cabinet/info-pages/tab-replacements", {}) or {}
+    swap = await ctx.json("/cabinet/info-pages/tab-replacements", {}, soft=True) or {}
 
     async def replaced(tab: str) -> str:
         slug = swap.get(tab)
         if not slug:
             return ""
-        page = await ctx.json(f"/cabinet/info-pages/{slug}", {}) or {}
+        page = await ctx.json(f"/cabinet/info-pages/{slug}", {}, soft=True) or {}
         return _md(_pick_lang(page.get("content"), lang))
 
     faq_md = await replaced("faq")
     if faq_md:
         # Подменённая вкладка — один документ, а у нас список вопрос/ответ:
         # заголовком берём название страницы, чтобы аккордеон не был безымянным.
-        page = await ctx.json(f"/cabinet/info-pages/{swap['faq']}", {}) or {}
+        page = await ctx.json(f"/cabinet/info-pages/{swap['faq']}", {}, soft=True) or {}
         faq = [{"q": _plain(_pick_lang(page.get("title"), lang)) or "FAQ", "a": faq_md}]
     else:
         faq = [
             {"q": _plain(p.get("title")), "a": _plain(p.get("content"))}
-            for p in (await ctx.json("/cabinet/info/faq", [], params=params) or [])
+            for p in (await ctx.json("/cabinet/info/faq", [], soft=True, params=params) or [])
         ]
 
     rules = await replaced("rules") or _md(
-        (await ctx.json("/cabinet/info/rules", {}, params=params) or {}).get("content")
+        (await ctx.json("/cabinet/info/rules", {}, soft=True, params=params) or {}).get("content")
     )
     privacy = await replaced("privacy") or _md(
-        (await ctx.json("/cabinet/info/privacy-policy", {}, params=params) or {}).get("content")
+        (await ctx.json("/cabinet/info/privacy-policy", {}, soft=True, params=params) or {}).get("content")
     )
     offer = await replaced("offer") or _md(
-        (await ctx.json("/cabinet/info/public-offer", {}, params=params) or {}).get("content")
+        (await ctx.json("/cabinet/info/public-offer", {}, soft=True, params=params) or {}).get("content")
     )
 
     # Все пять ключей обязаны быть на месте и быть строками: кабинет отдаёт
@@ -1141,36 +1771,6 @@ async def info(ctx: Ctx) -> dict[str, Any]:
     }
     _info_cache[lang] = (now, data)
     return data
-
-
-    def __init__(
-        self,
-        client: httpx.AsyncClient,
-        token: str | None,
-        query: dict[str, str],
-        panel: httpx.AsyncClient | None = None,
-        params: dict[str, str] | None = None,
-        body: bytes = b"",
-    ):
-        self._client = client
-        self._panel = panel
-        self.token = token
-        self.query = query
-        # Путь с параметром («…/tickets/{id}/messages») и тело запроса: без них
-        # свои обработчики умеют только GET без аргументов.
-        self.params = params or {}
-        self.body = body
-
-    def payload(self) -> dict[str, Any]:
-        """Тело кабинета словарём. Пустое тело — это {} (так кабинет просит
-        «отметить все прочитанными»), а не ошибка."""
-        if not self.body:
-            return {}
-        try:
-            data = json.loads(self.body)
-        except ValueError:
-            return {}
-        return data if isinstance(data, dict) else {}
 
 
 # --- промо и рефералка ------------------------------------------------------
@@ -1199,8 +1799,10 @@ async def referral_program(ctx: Ctx) -> dict[str, Any]:
     # `active_referrals` — это «с действующей подпиской», метрика другая, но ближайшая.
     paid = int(info.get("active_referrals") or 0)
     if 0 < total <= 100:
+        # Мягко осознанно: это уточнение уже посчитанной цифры, и запасное значение
+        # (`active_referrals`) у нас на руках — ронять из-за него весь раздел глупо.
         lst = await ctx.json(
-            "/cabinet/referral/list", {}, params={"page": 1, "per_page": 100}
+            "/cabinet/referral/list", {}, soft=True, params={"page": 1, "per_page": 100}
         ) or {}
         items = lst.get("items")
         if isinstance(items, list) and len(items) == int(lst.get("total") or -1):
@@ -1368,7 +1970,7 @@ async def ticket_create(ctx: Ctx) -> dict[str, Any]:
 async def ticket_detail(ctx: Ctx) -> dict[str, Any]:
     """Переписка. 404 «чужой/несуществующий тикет» — их ответ, не наша выдумка,
     поэтому уходит наверх как есть, а не превращается в пустой диалог."""
-    resp = await ctx.call("GET", f"/cabinet/tickets/{ctx.params['id']}")
+    resp = await ctx.call("GET", f"/cabinet/tickets/{ctx.param('id')}")
     if resp.status_code >= 400:
         raise UpstreamError(resp)
     t = resp.json() or {}
@@ -1388,7 +1990,7 @@ async def ticket_reply(ctx: Ctx) -> dict[str, Any]:
     (как в route_map до этого) даёт 422 «message or media is required», то есть
     ответить в тикет было нельзя вообще. Запись из карты надо снять."""
     resp = await ctx.call(
-        "POST", f"/cabinet/tickets/{ctx.params['id']}/messages",
+        "POST", f"/cabinet/tickets/{ctx.param('id')}/messages",
         json={"message": str(ctx.payload().get("body") or "").strip()},
     )
     if resp.status_code >= 400:
@@ -1405,18 +2007,7 @@ async def ticket_reply(ctx: Ctx) -> dict[str, Any]:
 # (cabinet/src/api/support.ts:54), но не вызывается ни на одном экране.
 
 
-# --- поддержка: уведомления ----------------------------------------------------
-
-# У них уведомления двух видов, и «общие» — не лента:
-#   /cabinet/tickets/notifications — настоящая лента (is_read, created_at), но
-#     только про тикеты; пользователю доезжает один тип, admin_reply
-#     (app/database/crud/ticket_notification.py:216-235);
-#   /cabinet/notifications — НАСТРОЙКИ рассылок (routes/notifications.py:84-90),
-#   /cabinet/notifications/history — заглушка, всегда пустой список
-#     (routes/notifications.py:136-151).
-# Поэтому лента собирается из тикетных, а не из «общих»: подставить настройки в
-# колокольчик — уронить его (NotificationBell.tsx:57-59 получит items=undefined).
-_NOTIF_TITLE = {"admin_reply": "Ответ поддержки"}
+# --- поддержка: отметка уведомления прочитанным --------------------------------
 
 
 @handler("POST", "/api/notifications/read")
@@ -1426,81 +2017,19 @@ async def notifications_read(ctx: Ctx) -> dict[str, bool]:
     if notif_id is None:
         path = "/cabinet/tickets/notifications/read-all"
     else:
-        path = f"/cabinet/tickets/notifications/{int(notif_id)}/read"
+        # id приходит от клиента: без проверки `int("abc")` роняет обработчик.
+        try:
+            path = f"/cabinet/tickets/notifications/{int(notif_id)}/read"
+        except (TypeError, ValueError):
+            raise UpstreamError(
+                httpx.Response(400, json={"detail": "Неверный идентификатор уведомления"})
+            ) from None
     resp = await ctx.call("POST", path)
     # 404 — уведомления уже нет; для колокольчика это ровно то же «прочитано».
     # 403 (чужое или админское) прячем не будем: это признак ошибки, не нормы.
     if resp.status_code >= 400 and resp.status_code != 404:
         raise UpstreamError(resp)
     return {"ok": True}
-
-
-# --- поддержка: «Информация» ---------------------------------------------------
-
-# Собирается из пяти-шести их ручек, а страница открывается заново при каждом
-# заходе — держим короткий кэш по языку, как для оформления.
-_INFO_TTL = 60.0
-_info_cache: dict[str, tuple[float, dict[str, Any]]] = {}
-
-_HTML_TAG = re.compile(r"<[^>]+>")
-
-# Расшифровка статусов — текст КАБИНЕТА, а не данные бота: у «Бедолаги» такой
-# ручки нет и быть не может. Отдаём ту же константу, что наш собственный бэкенд
-# (src/web/endpoints/public/info_content.py:138-149), иначе вкладка «Статусы»
-# просто пустая. Плейсхолдера {brand} в этом тексте нет — подстановка не нужна.
-_STATUSES_MD = """## Статусы подписки
-- **Активна** — подписка активна и работает. Подключение доступно на всех ваших устройствах.
-- **Истекает скоро** — до окончания подписки осталось менее 3 дней. Рекомендуем продлить заранее.
-- **Истекла** — срок действия подписки завершился. Подключение приостановлено. Продлите подписку для восстановления доступа.
-- **Пробная** — активен бесплатный пробный период. После его окончания необходимо оформить подписку.
-- **Отключена** — подписка отключена администратором. Обратитесь в поддержку для уточнения причины.
-- **Нет подписки** — подписка ещё не оформлена. Перейдите в раздел «Тарифы», чтобы выбрать план.
-
-## Статусы трафика
-- **В норме** — использовано менее 80% лимита трафика.
-- **Заканчивается** — использовано более 80% лимита. Скорость будет снижена при достижении 100%.
-- **Исчерпан** — лимит трафика исчерпан. Подключение ограничено до следующего сброса или продления."""
-
-
-def _plain(text: Any) -> str:
-    """Текст без разметки — для ответов FAQ: кабинет рисует их как есть,
-    без markdown (cabinet/src/pages/InfoPage.tsx:210)."""
-    if not isinstance(text, str):
-        return ""
-    return html.unescape(_HTML_TAG.sub("", text)).strip()
-
-
-def _md(text: Any) -> str:
-    """Их тексты писались для Telegram (HTML bot API — на стенде правила приходят
-    с <b>…</b>), а вкладки «Информации» рендерит мини-markdown кабинета: он знает
-    только `## `, `### `, `- ` и `**жирный**` (InfoPage.tsx:41-108). Без перевода
-    пользователь увидит буквальные теги — React экранирует html, а не исполняет."""
-    if not isinstance(text, str) or not text:
-        return ""
-    out = re.sub(r"</?(b|strong)>", "**", text)
-    out = re.sub(r"</?(i|em)>", "*", out)
-    out = re.sub(r"</?(code|pre)>", "`", out)
-    out = re.sub(r'<a\s+href="([^"]+)"[^>]*>(.*?)</a>', r"\2 (\1)", out, flags=re.S)
-    out = re.sub(r"<br\s*/?>", "\n", out)
-    out = _HTML_TAG.sub("", out)
-    # Их markdown-дефолты начинаются с «# Заголовок», а мини-рендер такой уровень
-    # не разбирает — решётка осталась бы в тексте абзацем.
-    out = re.sub(r"^# (?!#)", "## ", out, flags=re.M)
-    return html.unescape(out).strip()
-
-
-def _pick_lang(value: Any, lang: str) -> str:
-    """Мультиязычное поле инфо-страницы ({'ru': '…', 'en': '…'},
-    app/cabinet/schemas/info_pages.py:12-13) в одну строку."""
-    if isinstance(value, str):
-        return value
-    if not isinstance(value, dict):
-        return ""
-    for key in (lang, "ru", "en"):
-        text = value.get(key)
-        if isinstance(text, str) and text.strip():
-            return text
-    return next((v for v in value.values() if isinstance(v, str) and v.strip()), "")
 
 
 @handler("POST", "/api/promocode/activate")
@@ -1597,7 +2126,7 @@ _nodes_cache: tuple[float, list[dict[str, Any]]] | None = None
 
 
 def _short_uuid(url: str) -> str:
-    """shortUuid из ссылки подписки: `https://sub.example.com/BMqCVzejpeRtH3fp` → хвост.
+    """shortUuid из ссылки подписки: `https://sub.example.com/XXXXXXXXXXXXXXXX` → хвост.
 
     Это единственный мост между ботом и панелью: свой `remnawave_uuid` «Бедолага» в
     кабинетное API не отдаёт ни одной ручкой, а ссылку подписки отдаёт всегда —
@@ -1732,7 +2261,15 @@ async def traffic_history(ctx: Ctx) -> dict[str, Any]:
 
 @handler("GET", "/api/subscription/service-status")
 async def service_status(ctx: Ctx) -> dict[str, Any]:
-    """Быстрая проверка «всё ли работает» для мастера диагностики."""
+    """Быстрая проверка «всё ли работает» для мастера диагностики.
+
+    Сессия обязательна. Ноды сюда приходят из панели по НАШЕМУ токену, то есть
+    без явной проверки ручка отдавала гостю имена, страны и состояние серверов —
+    ровно то, в чём соседняя `/api/status` гостю отказывает. Мастер диагностики
+    доступен только вошедшему, так что честный 401 ничего не ломает.
+    """
+    if not ctx.token:
+        raise UpstreamError(httpx.Response(401, json={"detail": "Нет сессии"}))
     nodes = await _panel_nodes(ctx)
     if nodes is None:
         # Панели нет. Живого здоровья нод у «Бедолаги» в кабинетном API не существует;
@@ -1817,6 +2354,17 @@ async def reissue(ctx: Ctx) -> dict[str, Any]:
 FREEZE_MAX_DAYS = 30
 _DAY = 86400
 
+# Сколько минимум длится пауза на этом бэкенде. Вернуть доступ можно только их
+# продлением, а оно считает ЦЕЛЫМИ сутками — значит паузу короче суток снять
+# нечем (округление вверх дарило бы по календарному дню за паузу в секунду).
+# Кабинету это число нужно ДО постановки на паузу: предупредить «раньше чем
+# через сутки не снять» честнее, чем показать отказ после нажатия.
+#
+# НАШ бэкенд поля `min_days` не отдаёт вовсе, и это правильное поведение по
+# умолчанию: там пауза снимается в любой момент, предупреждать не о чем. Кабинет
+# обязан читать отсутствие поля как «ограничения нет».
+FREEZE_MIN_DAYS = 1
+
 
 def _iso(value: Any) -> datetime | None:
     try:
@@ -1839,12 +2387,19 @@ async def freeze_status(ctx: Ctx) -> dict[str, Any]:
     record = ctx.state.get_freeze(user_key) if (enabled and user_key) else None
 
     if record:
+        frozen_at = _iso(record["frozen_at"])
         return {
             "enabled": True,
             "frozen": True,
             # Показываем остаток срока, сохранённый на момент паузы, — он и вернётся.
             "remaining_days": max(0, int(record["remaining_seconds"]) // _DAY),
             "max_days": FREEZE_MAX_DAYS,
+            "min_days": FREEZE_MIN_DAYS,
+            # Сверх контракта: когда паузу можно будет снять. Кабинет пока читает
+            # только min_days, но на экране уже стоящей паузы вопрос именно этот.
+            "can_unfreeze_at": (
+                (frozen_at + timedelta(days=FREEZE_MIN_DAYS)).isoformat() if frozen_at else None
+            ),
             "can_freeze": False,
         }
 
@@ -1856,6 +2411,8 @@ async def freeze_status(ctx: Ctx) -> dict[str, Any]:
         "frozen": False,
         "can_freeze": bool(enabled and active),
         "max_days": FREEZE_MAX_DAYS,
+        # Пауза здесь неделимая: меньше суток не снять (см. FREEZE_MIN_DAYS).
+        "min_days": FREEZE_MIN_DAYS,
         "days_left": max(0, int(left // _DAY)),
     }
 
@@ -1870,8 +2427,6 @@ async def freeze(ctx: Ctx) -> dict[str, Any]:
     user_key, sub = await _freeze_context(ctx)
     if not user_key or not sub:
         raise UpstreamError(httpx.Response(404, json={"detail": "Нет активной подписки"}))
-    if ctx.state.get_freeze(user_key):
-        raise UpstreamError(httpx.Response(409, json={"detail": "Подписка уже на паузе"}))
 
     end = _iso(sub.get("end_date"))
     left = (end - datetime.now(timezone.utc)).total_seconds() if end else 0
@@ -1880,13 +2435,22 @@ async def freeze(ctx: Ctx) -> dict[str, Any]:
             httpx.Response(409, json={"detail": "Подписка неактивна — заморозить нельзя"})
         )
 
+    # Место под паузу занимаем ДО обращения к боту: два параллельных запроса
+    # (двойной клик) иначе оба дошли бы до отключения подписки и перетёрли бы
+    # момент начала паузы — то есть остаток срока считался бы не от той точки.
+    if not ctx.state.claim_freeze(
+        user_key, int(sub.get("id") or 0), int(left), sub.get("end_date")
+    ):
+        raise UpstreamError(httpx.Response(409, json={"detail": "Подписка уже на паузе"}))
+
     resp = await ctx.admin("DELETE", f"/subscriptions/{sub.get('id')}")
     if resp is None or resp.status_code >= 400:
+        # У них не вышло — снимаем свою запись, иначе кабинет покажет паузу,
+        # которой нет, и снять её будет нечем.
+        ctx.state.drop_freeze(user_key)
         raise UpstreamError(
             httpx.Response(502, json={"detail": "Не удалось заморозить подписку"})
         )
-    # Пишем в свою память ПОСЛЕ успеха у них: иначе покажем паузу, которой нет.
-    ctx.state.add_freeze(user_key, int(sub.get("id") or 0), int(left), sub.get("end_date"))
     return {"frozen": True, "remaining_days": max(0, int(left // _DAY))}
 
 
@@ -1895,7 +2459,9 @@ async def unfreeze(ctx: Ctx) -> dict[str, Any]:
     if not (ctx.can_admin and ctx.state is not None and ctx.state.available):
         raise NotAvailable("Заморозка недоступна на этом бэкенде")
     user_key, _sub = await _freeze_context(ctx)
-    record = ctx.state.get_freeze(user_key) if user_key else None
+    # Запись забираем под себя: два параллельных снятия сделали бы ДВА продления
+    # целыми сутками каждое — ещё один способ получить лишний день.
+    record = ctx.state.claim_unfreeze(user_key) if user_key else None
     if not record:
         raise UpstreamError(httpx.Response(409, json={"detail": "Подписка не на паузе"}))
 
@@ -1905,9 +2471,12 @@ async def unfreeze(ctx: Ctx) -> dict[str, Any]:
     # Продление у них работает ЦЕЛЫМИ сутками, и другого способа вернуть доступ
     # нет — значит пауза короче суток технически невозможна: вернуть меньше дня
     # нечем, а округление вверх раньше дарило календарный день за паузу в секунду
-    # (и повторами — сколько угодно дней).
-    if paused < _DAY:
-        wait_h = max(1, (_DAY - paused + 3599) // 3600)
+    # (и повторами — сколько угодно дней). Тот же порог кабинет получает заранее
+    # в `min_days` от freeze-status — правило и предупреждение из одной константы.
+    minimum = FREEZE_MIN_DAYS * _DAY
+    if paused < minimum:
+        wait_h = max(1, (minimum - paused + 3599) // 3600)
+        ctx.state.release_claim(user_key)  # ничего не делали — отпускаем сразу
         raise UpstreamError(httpx.Response(409, json={
             "detail": f"Снять с паузы можно через {wait_h} ч: продление у этого "
                       f"бэкенда работает целыми сутками",
@@ -1923,7 +2492,18 @@ async def unfreeze(ctx: Ctx) -> dict[str, Any]:
     resp = await ctx.admin(
         "POST", f"/subscriptions/{record['subscription_id']}/extend", json={"days": int(days)}
     )
+    if resp is not None and resp.status_code == 404:
+        # Подписки, которую мы ставили на паузу, у них больше нет (куплен новый
+        # тариф, удалена вручную). Продлевать нечего, а держать запись дальше —
+        # значит навсегда оставить человека «на паузе» без способа выйти.
+        ctx.state.drop_freeze(user_key)
+        raise UpstreamError(httpx.Response(409, json={
+            "detail": "Подписки, поставленной на паузу, больше нет — пауза снята. "
+                      "Оформите подписку заново",
+        }))
     if resp is None or resp.status_code >= 400:
+        # Отпускаем захват: продление не прошло, человек сможет повторить.
+        ctx.state.release_claim(user_key)
         raise UpstreamError(
             httpx.Response(502, json={"detail": "Не удалось снять подписку с паузы"})
         )
@@ -1933,3 +2513,21 @@ async def unfreeze(ctx: Ctx) -> dict[str, Any]:
     ctx.state.drop_freeze(user_key)
     sub = (await ctx.json("/cabinet/subscription", {}) or {}).get("subscription") or {}
     return {"frozen": False, "expire_at": sub.get("end_date")}
+
+
+# --- админка ----------------------------------------------------------------
+#
+# Админские ручки живут отдельным модулем: их десятки, и держать их в одном
+# файле с пользовательскими — гарантированные конфликты при параллельной правке.
+# Импорт стоит в самом конце: модуль регистрирует обработчики тем же
+# декоратором `handler`, а к этому моменту и декоратор, и Ctx уже определены
+# (иначе его `from compose import ...` упрётся в недособранный модуль).
+#
+# Отсутствие файла — не поломка: без него адаптер просто работает без админки
+# (sections пуст, features.admin=false), а не падает при старте. Сообщение в лог
+# всё же печатаем: молчаливое «админки нет» из-за опечатки в импорте самого
+# модуля искать потом мучительно.
+try:  # noqa: E402 — импорт в конце файла осознан, см. комментарий выше
+    import admin  # noqa: F401
+except ImportError as exc:  # pragma: no cover — зависит от сборки образа
+    print(f"[adapter] админка не подключена: {exc}", flush=True)

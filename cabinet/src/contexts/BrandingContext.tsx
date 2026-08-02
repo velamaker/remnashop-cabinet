@@ -4,7 +4,6 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -139,16 +138,21 @@ async function cacheLogo(url: string | null | undefined): Promise<void> {
 export function BrandingProvider({ children }: { children: ReactNode }) {
   // Стартуем сразу с кэша: пока идёт запрос (или если он упадёт) бренд уже на месте.
   const [appearance, setAppearance] = useState<Appearance | null>(() => readCache());
-  const [offline, setOffline] = useState(false);
-  const failures = useRef(0);
+  // Счётчик неудач подряд: 0 — бэкенд отвечает.
+  const [failures, setFailures] = useState(0);
+  // Когда показывать заглушку. Порог зависит от того, есть ли чем рисовать кабинет:
+  // без кэша оформления показывать нечего (бренд, логотип, языки — всё пусто), и
+  // честнее сразу сказать «идут технические работы», чем рисовать пустой каркас.
+  // С кэшем кабинет остаётся узнаваемым, поэтому одиночный сбой сети переживаем
+  // молча и даём второй попытке случиться — заглушка только после двух неудач.
+  const offline = failures >= (appearance ? 2 : 1);
   const { resolved } = useTheme();  // "dark" | "light"
   const { lang, setLang } = useI18n();
 
   const refresh = useCallback(async () => {
     try {
       const a = await appearanceApi.get();
-      failures.current = 0;
-      setOffline(false);
+      setFailures(0);
       setAppearance(a);
       applyAccent(a.accent);
       if (a.brand_name) document.title = `${a.brand_name} — ${translate("common.personalCabinet")}`;
@@ -167,8 +171,7 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
         setAppearance((prev) => prev ?? cached);
         applyAccent(cached.accent);
       }
-      failures.current += 1;
-      if (failures.current >= 2) setOffline(true);
+      setFailures((n) => n + 1);
     }
   }, []);
 
@@ -177,11 +180,17 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   // Пока бэкенд молчит — тихо пробуем снова; как ответит, заглушка уйдёт сама.
+  // Условие завязано на счётчик, а НЕ на offline: иначе без кэша повтор не нужен
+  // (заглушка уже висит), а с кэшем не наступил бы вовсе — offline включается
+  // только со второй неудачи, а второй попытке взяться неоткуда. Счётчик растёт
+  // на каждой неудаче, поэтому эффект перезапускается сам и повторы идут по кругу.
+  // Первый повтор быстрый: одиночный сбой сети чинится за секунды; дальше реже,
+  // чтобы не долбить лежащий бэкенд.
   useEffect(() => {
-    if (!offline) return;
-    const id = setInterval(refresh, 15000);
-    return () => clearInterval(id);
-  }, [offline, refresh]);
+    if (failures === 0) return;
+    const id = setTimeout(refresh, failures === 1 ? 3000 : 15000);
+    return () => clearTimeout(id);
+  }, [failures, refresh]);
 
   // Если активный язык отключён в оформлении — возвращаемся к русскому.
   useEffect(() => {

@@ -657,7 +657,9 @@ export default function SettingsPage() {
       </Card>
 
       {can("email_verify") && <EmailVerificationBlock />}
-      <BackupAccessBlock />
+      {/* Резервный доступ по email — это код на почту + установка пароля: без
+          обеих ручек бэкенда мастер упирается в ошибку на первом же шаге. */}
+      {can("email_verify") && can("password_change") && <BackupAccessBlock />}
       {can("email_verify") && <ManageEmailBlock />}
 
       {can("sessions") && <SessionsCard />}

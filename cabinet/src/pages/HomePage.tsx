@@ -25,7 +25,7 @@ import { PromoBanner } from "@/components/PromoBanner";
 import { OnboardingWizard } from "@/components/OnboardingWizard";
 import { TrafficChart } from "@/components/TrafficChart";
 import { ServerStatusCard } from "@/components/ServerStatusCard";
-import { formatBytes, formatTrafficLimit, formatDate, daysUntil } from "@/lib/format";
+import { formatBytes, formatTrafficLimit, trafficLimitBytes, formatDate, daysUntil } from "@/lib/format";
 import { Flag } from "@/components/Flag";
 import { ApiError } from "@/types/api";
 
@@ -101,10 +101,13 @@ export default function HomePage() {
   };
 
   const isUnlimited = subscription?.traffic_limit === 0;
+  // Полные оставшиеся сутки — тем же счётом, что и бэкенд (см. daysUntil),
+  // иначе рядом с виджетом паузы выходили два разных числа для одной подписки.
   const remainingDays = subscription ? daysUntil(subscription.expire_at) : 0;
   const used = subscription?.used_traffic_bytes || 0;
+  // Лимит в ГБ, расход в байтах — сравнивать можно только после перевода.
   const usedPct = subscription && !isUnlimited && subscription.traffic_limit > 0
-    ? Math.min(100, (used / subscription.traffic_limit) * 100)
+    ? Math.min(100, (used / trafficLimitBytes(subscription.traffic_limit)) * 100)
     : 100;
 
   return (
@@ -117,8 +120,19 @@ export default function HomePage() {
         <div className="mt-1.5 flex items-center gap-2">
           <span className="text-sm text-fg-muted">{t("home.yourSubscription")}</span>
           {subscription && (
-            <span className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent-subtle px-2.5 py-0.5 text-xs font-medium text-accent">
-              ★ {subscription.is_trial ? t("home.trial") : t("home.active")}
+            /* Пауза важнее пробного периода: пока подписка стоит на паузе, чип
+               «Активная»/«Пробный» рядом с виджетом паузы читался как ошибка.
+               Бэкенды без паузы поля frozen не шлют — для них чип прежний. */
+            <span
+              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium ${
+                subscription.frozen
+                  ? "border-[var(--border)] bg-bg-raised text-fg-muted"
+                  : "border-accent/30 bg-accent-subtle text-accent"
+              }`}
+            >
+              {subscription.frozen
+                ? t("freeze.pausedTitle")
+                : `★ ${subscription.is_trial ? t("home.trial") : t("home.active")}`}
             </span>
           )}
         </div>
@@ -198,9 +212,20 @@ export default function HomePage() {
         <div className="card-hero p-6 sm:p-7">
           <div className="flex items-start justify-between">
             <div>
-              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-accent">
-                <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-                {isUnlimited ? t("home.unlimited") : t("home.active")}
+              {/* Подпись берём из состояния подписки: раньше здесь всегда стояло
+                  «Активная», и подписка на паузе выглядела активной рядом с
+                  баннером «истекла» — два взаимоисключающих сообщения на экране. */}
+              <span
+                className={`inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] ${
+                  subscription.frozen ? "text-fg-muted" : "text-accent"
+                }`}
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                {subscription.frozen
+                  ? t("freeze.pausedTitle")
+                  : isUnlimited
+                    ? t("home.unlimited")
+                    : t("home.active")}
               </span>
               <h2 className="mt-1.5 text-xl font-bold tracking-tight text-fg">{t("home.trafficUsage")}</h2>
             </div>

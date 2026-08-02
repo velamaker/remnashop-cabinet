@@ -16,6 +16,13 @@ services:
       context: ./adapter
     container_name: "${ADAPTER_CONTAINER:-remnashop-cabinet-adapter}"
     restart: unless-stopped
+    # Без ротации недоступный бот означает traceback на КАЖДЫЙ запрос в
+    # безразмерный json-file — диск кончится раньше, чем это заметят.
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "3"
     environment:
       # Адрес их бота (host:port со схемой). Пишется установщиком.
       BEDOLAGA_UPSTREAM: "${BEDOLAGA_UPSTREAM:-http://bedolaga:8080}"
@@ -29,6 +36,11 @@ services:
       # REMNAWAVE_API_URL/API_KEY), поэтому подхватываем оба варианта.
       REMNAWAVE_URL: "${REMNAWAVE_URL:-${REMNAWAVE_API_URL:-${REMNAWAVE_HOST:-}}}"
       REMNAWAVE_TOKEN: "${REMNAWAVE_TOKEN:-${REMNAWAVE_API_KEY:-}}"
+      # С каких адресов кабинету можно слать изменяющие запросы (защита от CSRF).
+      # Свой хост адаптеру не подходит: nginx кабинета подменяет Host на имя
+      # контейнера, поэтому сравнивать надо с публичным адресом кабинета. Пусто —
+      # адаптер опирается на Sec-Fetch-Site браузера, что слабее.
+      ADAPTER_ALLOWED_ORIGINS: "${ADAPTER_ALLOWED_ORIGINS:-${WEB_CABINET_URL:-}}"
     volumes:
       # Своя память адаптера (паузы подписок) — переживает пересборку образа.
       - adapter-state:/data

@@ -5,12 +5,16 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { ApiError } from "@/types/api";
 import { useT } from "@/i18n/I18nContext";
+import { useBranding } from "@/contexts/BrandingContext";
 
 /** Ввод и активация промокода прямо в кабинете (награда применяется на бэке).
  *  onActivated — если передан, вызывается после успеха (мягкая перезагрузка данных
  *  страницы); иначе делаем полный reload, чтобы обновить подписку/баланс везде. */
 export function PromocodeCard({ onActivated }: { onActivated?: () => void }) {
   const t = useT();
+  // Промокоды живут в базе бота: гасим карточку в одном месте — она стоит и на
+  // /billing, и на странице подписки.
+  const { can } = useBranding();
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +37,8 @@ export function PromocodeCard({ onActivated }: { onActivated?: () => void }) {
         return t("promo.applied");
     }
   }
+
+  if (!can("promocode")) return null;
 
   const apply = async () => {
     const trimmed = code.trim();

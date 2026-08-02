@@ -111,7 +111,8 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
               </p>
             )}
             <div className="flex gap-3 text-xs text-fg-muted">
-              <span>Трафик: {sub.traffic_limit === 0 ? "∞" : `${(sub.traffic_limit / 1024 ** 3).toFixed(0)} ГБ`}</span>
+              {/* traffic_limit приходит в ГБ (в байтах его хранит только панель). */}
+              <span>Трафик: {sub.traffic_limit === 0 ? "∞" : `${sub.traffic_limit} ГБ`}</span>
               <span>Устройств: {sub.device_limit === 0 ? "∞" : sub.device_limit}</span>
               {sub.is_trial && <Tag cls="bg-accent/8 text-accent border-accent/15">Пробная</Tag>}
             </div>

@@ -17,9 +17,24 @@ export function formatBytes(bytes: number | null | undefined): string {
   return `${mb.toFixed(0)} ${translate("fmt.mb")}`;
 }
 
-export function formatTrafficLimit(limitBytes: number): string {
-  if (limitBytes === 0) return translate("fmt.unlimited");
-  return formatBytes(limitBytes);
+/**
+ * Лимит трафика приходит из API в ГИГАБАЙТАХ, а расход (`used_traffic_bytes`) — в
+ * байтах. Так это устроено в самом бэкенде: `subscriptions.traffic_limit` и
+ * `plans.traffic_limit` хранятся в ГБ, в байты переводятся только на выходе в
+ * Remnawave. Сравнивать лимит с расходом и печатать его одной функцией можно лишь
+ * после перевода в байты — иначе 5 ГБ читаются как 5 байт («0 МБ», прогресс-бар
+ * всегда полный, «трафик исчерпан» у всех).
+ */
+export const GB = 1024 ** 3;
+
+export function trafficLimitBytes(limitGb: number | null | undefined): number {
+  return (limitGb ?? 0) * GB;
+}
+
+/** Лимит (в ГБ) человеческой строкой; 0 = безлимит. */
+export function formatTrafficLimit(limitGb: number): string {
+  if (limitGb === 0) return translate("fmt.unlimited");
+  return formatBytes(trafficLimitBytes(limitGb));
 }
 
 export function formatDate(iso: string): string {
@@ -30,9 +45,26 @@ export function formatDate(iso: string): string {
   });
 }
 
+/**
+ * Сколько ПОЛНЫХ суток осталось до даты. Округление вниз — не вкусовщина: оба
+ * бэкенда считают дни именно так (`(expire_at - now) // 86400` в freeze-status),
+ * и при округлении вверх на одном экране оказывались рядом «Осталось 8 дн.» от
+ * бэкенда (виджет паузы) и «9 дн. осталось» от кабинета — одна и та же подписка
+ * с двумя разными числами.
+ *
+ * ВАЖНО: 0 здесь значит «меньше суток», а НЕ «истекла» — до конца срока ещё
+ * есть время. Для проверки истечения есть isExpired(), который смотрит на саму
+ * дату; сравнивать `daysUntil(...) <= 0` нельзя, иначе живая подписка в
+ * последний день объявляется истёкшей.
+ */
 export function daysUntil(iso: string): number {
   const diff = new Date(iso).getTime() - Date.now();
-  return Math.ceil(diff / (1000 * 60 * 60 * 24));
+  return Math.floor(diff / (1000 * 60 * 60 * 24));
+}
+
+/** Срок уже прошёл. Отдельно от daysUntil: «0 полных суток» ≠ «истекла». */
+export function isExpired(iso: string): boolean {
+  return new Date(iso).getTime() <= Date.now();
 }
 
 export function formatRelativeOnline(iso: string | null): string {

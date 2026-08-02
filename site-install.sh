@@ -80,7 +80,7 @@ rm -f "$TARBALL"
 cd "$DEST"
 ok "Код в $DEST"
 
-# ── 4. Сборка кабинета (спросит 3 значения, поднимет контейнер на :5002) ────────
+# ── 4. Сборка кабинета (спросит 3 значения, поднимет контейнер на 127.0.0.1) ────
 say ""
 bash install.sh site
 
@@ -88,16 +88,20 @@ bash install.sh site
 CAB_URL="$(grep -E '^WEB_CABINET_URL=' .env | tail -1 | cut -d= -f2- || true)"
 CAB_DOM="${CAB_URL#http://}"; CAB_DOM="${CAB_DOM#https://}"; CAB_DOM="${CAB_DOM%%/*}"
 [ -n "$CAB_DOM" ] || die "Не нашёл WEB_CABINET_URL в .env."
+# Порт кабинета настраивается (CABINET_PORT в .env) — берём фактический, иначе
+# все блоки прокси ниже уводили бы трафик на чужой или пустой порт.
+CAB_PORT="$(grep -E '^CABINET_PORT=' .env | tail -1 | cut -d= -f2- | tr -d '"' || true)"
+CAB_PORT="${CAB_PORT:-5002}"
 
 # Блок, который пользователь добавит в СВОЙ reverse-proxy, если Caddy не ставим.
 proxy_hint() {
   say ""
-  say "  ${BOLD}Кабинет поднят на 127.0.0.1:5002 (без TLS).${RST} Опубликуйте его СВОИМ прокси —"
+  say "  ${BOLD}Кабинет поднят на 127.0.0.1:${CAB_PORT} (без TLS).${RST} Опубликуйте его СВОИМ прокси —"
   say "  возьмите блок под то, что у вас стоит:"
   say ""
   say "  ${BOLD}Caddy${RST} (сертификат выпустит сам):"
   say "    ${DIM}${CAB_DOM} {${RST}"
-  say "    ${DIM}    reverse_proxy 127.0.0.1:5002${RST}"
+  say "    ${DIM}    reverse_proxy 127.0.0.1:${CAB_PORT}${RST}"
   say "    ${DIM}}${RST}"
   say ""
   say "  ${BOLD}nginx${RST} (сертификат — через certbot):"
@@ -106,7 +110,7 @@ proxy_hint() {
   say "    ${DIM}    ssl_certificate     /etc/letsencrypt/live/${CAB_DOM}/fullchain.pem;${RST}"
   say "    ${DIM}    ssl_certificate_key /etc/letsencrypt/live/${CAB_DOM}/privkey.pem;${RST}"
   say "    ${DIM}    location / {${RST}"
-  say "    ${DIM}        proxy_pass http://127.0.0.1:5002;${RST}"
+  say "    ${DIM}        proxy_pass http://127.0.0.1:${CAB_PORT};${RST}"
   say "    ${DIM}        proxy_set_header Host \$host;${RST}"
   say "    ${DIM}        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;${RST}"
   say "    ${DIM}        proxy_set_header X-Forwarded-Proto \$scheme;${RST}"
@@ -129,12 +133,12 @@ setup_caddy() {
 
 # RemnaShop cabinet — добавлено site-install.sh
 ${CAB_DOM} {
-    reverse_proxy 127.0.0.1:5002
+    reverse_proxy 127.0.0.1:${CAB_PORT}
 }
 EOF
   fi
   systemctl reload caddy 2>/dev/null || systemctl restart caddy
-  ok "Кабинет вписан в Caddy: ${CAB_DOM} → 127.0.0.1:5002 (TLS авто-сертификат)"
+  ok "Кабинет вписан в Caddy: ${CAB_DOM} → 127.0.0.1:${CAB_PORT} (TLS авто-сертификат)"
 }
 
 # nginx + certbot: поставить, настроить vhost и ВЫПУСТИТЬ СЕРТИФИКАТ автоматически.
@@ -148,7 +152,7 @@ server {
     listen 80;
     server_name ${CAB_DOM};
     location / {
-        proxy_pass http://127.0.0.1:5002;
+        proxy_pass http://127.0.0.1:${CAB_PORT};
         proxy_set_header Host \$host;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
@@ -162,7 +166,7 @@ EOF
   # 443 в конфиг nginx и включит редирект.
   if certbot --nginx -d "${CAB_DOM}" --non-interactive --agree-tos \
        --register-unsafely-without-email --redirect >/dev/null 2>&1; then
-    ok "nginx + TLS настроены сами: ${CAB_DOM} → 127.0.0.1:5002"
+    ok "nginx + TLS настроены сами: ${CAB_DOM} → 127.0.0.1:${CAB_PORT}"
   else
     warn "nginx поднят на http, но сертификат пока не выпустился"
     warn "(обычно — A-запись ещё не указывает на сервер). После настройки DNS:"

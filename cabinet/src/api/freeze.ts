@@ -7,6 +7,10 @@ export interface FreezeStatus {
   remaining_days?: number;
   max_days?: number;
   days_left?: number;
+  /** Минимальный срок паузы в днях: раньше него бэкенд снять её не даст (у бэкендов,
+   *  которые продлевают подписку целыми сутками, вернуть меньше дня просто нечем).
+   *  Поле необязательное — наш бэкенд его не отдаёт, и тогда ограничения нет. */
+  min_days?: number;
 }
 
 export const freezeApi = {

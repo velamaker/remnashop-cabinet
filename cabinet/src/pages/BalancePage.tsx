@@ -469,6 +469,7 @@ export default function BalancePage() {
   // Блоки, которых бэкенд под кабинетом не умеет, не показываем: кнопка,
   // отвечающая ошибкой, для человека выглядит как сломанный сайт.
   const { can } = useBranding();
+  const canTransactions = can("transactions");
   const [balance, setBalance] = useState<BalanceResponse | null>(null);
   const [transactions, setTransactions] = useState<BalanceTransaction[]>([]);
   const [total, setTotal] = useState(0);
@@ -488,6 +489,9 @@ export default function BalancePage() {
   }, []);
 
   const loadTx = useCallback(() => {
+    // История платежей принадлежит бэкенду: если он её не отдаёт, не спрашиваем
+    // вовсе — иначе ошибка загрузки съела бы всю страницу баланса.
+    if (!canTransactions) return;
     setTxLoading(true);
     balanceApi
       .transactions({ limit: LIMIT, offset })
@@ -498,7 +502,7 @@ export default function BalancePage() {
       .catch((e) => setError(e instanceof ApiError ? e.detail : tr("balance.errLoad")))
       .finally(() => setTxLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [offset]);
+  }, [offset, canTransactions]);
 
   useEffect(() => {
     loadTx();
@@ -586,8 +590,9 @@ export default function BalancePage() {
         />
       )}
 
-      {/* Transactions */}
-      <div>
+      {/* История платежей — только если бэкенд её отдаёт: пустой список «операций
+          нет» на бэкенде без такой ручки читается как факт, а это неправда. */}
+      {canTransactions && <div>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-base font-semibold text-fg">{tr("balance.history")}</h2>
           <span className="text-sm text-fg-muted">{tr("balance.totalCount", { n: total })}</span>
@@ -630,7 +635,7 @@ export default function BalancePage() {
             </div>
           </div>
         )}
-      </div>
+      </div>}
     </div>
   );
 }

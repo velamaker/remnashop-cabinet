@@ -5,29 +5,47 @@ import { getActiveLang, translate } from "@/i18n/translate";
 // В деве vite.config.ts делает то же самое на localhost.
 const API_BASE = "/api";
 
-let refreshPromise: Promise<boolean> | null = null;
+// Итог попытки обновить токен. Три состояния, а не «получилось/нет», потому что
+// «сессия кончилась» и «бэкенд лежит» требуют от кабинета разного: в первом случае
+// пользователя надо увести на вход, во втором — оставить на месте и подождать.
+type RefreshResult = "ok" | "expired" | "unavailable";
 
-async function doRefresh(): Promise<boolean> {
+let refreshPromise: Promise<RefreshResult> | null = null;
+
+async function doRefresh(): Promise<RefreshResult> {
   try {
     const res = await fetch(`${API_BASE}/auth/refresh`, {
       method: "POST",
       credentials: "include",
     });
-    return res.ok;
+    if (res.ok) return "ok";
+    // Только 401/403 означают «refresh-токен протух или отозван». Всё остальное —
+    // 500 у бота, 502/504 от прокси, 503 «тех. работы» — это недоступный бэкенд,
+    // а не конец сессии: разлогинивать по нему нельзя (короткий сбой выбрасывал бы
+    // из кабинета всех разом, а повторный вход упирался бы в рейт-лимит бота).
+    return res.status === 401 || res.status === 403 ? "expired" : "unavailable";
   } catch {
-    return false;
+    return "unavailable"; // сеть/оффлайн — токен здесь ни при чём
   }
 }
 
 // Дедуплицируем одновременные refresh-запросы: если несколько вызовов API
 // словили 401 параллельно, рефрешим токен только один раз.
-function refreshOnce(): Promise<boolean> {
+function refreshOnce(): Promise<RefreshResult> {
   if (!refreshPromise) {
     refreshPromise = doRefresh().finally(() => {
       refreshPromise = null;
     });
   }
   return refreshPromise;
+}
+
+/** Текст «бэкенд недоступен». Как и 501, держим строки здесь: сообщение обязано
+ *  дойти до пользователя даже когда словари ещё не загрузились с того же сервера. */
+function unavailableText(): string {
+  return getActiveLang() === "en"
+    ? "Service is temporarily unavailable. Please try again in a minute."
+    : "Сервис временно недоступен. Попробуйте через минуту.";
 }
 
 interface RequestOptions extends Omit<RequestInit, "body"> {
@@ -85,8 +103,14 @@ export async function apiFetch<T>(
   // Access token истёк — пробуем один раз рефрешнуть и повторить запрос.
   if (res.status === 401 && !skipAuthRetry && path !== "/auth/refresh") {
     const refreshed = await refreshOnce();
-    if (refreshed) {
+    if (refreshed === "ok") {
       res = await fetch(`${API_BASE}${path}`, init);
+    } else if (refreshed === "unavailable") {
+      // Обновиться не удалось из-за сервера, а не из-за токена. Отдать наружу
+      // исходный 401 нельзя: по нему AuthContext чистит пользователя, то есть
+      // мгновенный сбой бэкенда выглядел бы как «вас разлогинили». Меняем на 503 —
+      // вызывающий код увидит недоступность сервиса и оставит сессию в покое.
+      throw new ApiError(503, unavailableText());
     }
   }
 

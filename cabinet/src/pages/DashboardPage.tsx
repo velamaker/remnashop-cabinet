@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useBranding } from "@/contexts/BrandingContext";
 import { useSubscription } from "@/hooks/useSubscription";
 import { subscriptionApi } from "@/api/subscription";
 import { useT } from "@/i18n/I18nContext";
@@ -33,9 +34,11 @@ import { SubscriptionFreeze } from "@/components/SubscriptionFreeze";
 import { SpeedtestWidget } from "@/components/SpeedtestWidget";
 import {
   formatTrafficLimit,
+  trafficLimitBytes,
   formatBytes,
   formatDate,
   daysUntil,
+  isExpired,
   formatRelativeOnline } from "@/lib/format";
 import { ApiError } from "@/types/api";
 
@@ -54,6 +57,8 @@ function SubscriptionSkeleton() {
 
 function EmptySubscription() {
   const t = useT();
+  // Пробный период раздаёт бот: там, где его нет, кнопка отвечала бы ошибкой.
+  const { can } = useBranding();
   const [isActivating, setIsActivating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -81,13 +86,15 @@ function EmptySubscription() {
       </p>
       {error && <p className="mt-3 text-sm text-danger">{error}</p>}
       <div className="mt-6 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
-        <button
-          onClick={handleTrial}
-          disabled={isActivating}
-          className="btn-gradient inline-flex h-10 items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold transition-all active:scale-[0.98] disabled:opacity-60"
-        >
-          {isActivating ? t("home.activating") : t("home.activateTrial")}
-        </button>
+        {can("trial") && (
+          <button
+            onClick={handleTrial}
+            disabled={isActivating}
+            className="btn-gradient inline-flex h-10 items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold transition-all active:scale-[0.98] disabled:opacity-60"
+          >
+            {isActivating ? t("home.activating") : t("home.activateTrial")}
+          </button>
+        )}
         <Link to="/billing">
           <Button variant="secondary" size="lg" className="rounded-xl">
             {t("home.choosePlan")} <ArrowRight className="h-4 w-4" />
@@ -155,7 +162,18 @@ export default function DashboardPage() {
       {/* Заголовок */}
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-fg">{t("nav.subscription")}</h1>
-        <StatusBadge status={subscription.status} />
+        {/* На паузе панель держит подписку выключенной (status DISABLED), поэтому
+            чип «Отключена» стоял на одном экране с карточкой «Подписка на паузе»
+            и читался как «вас отключили». Бэкенды без паузы поля frozen не шлют —
+            для них чип остаётся прежним. */}
+        {subscription.frozen ? (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-bg-raised px-2.5 py-1 text-xs font-medium text-fg-muted">
+            <span className="h-1.5 w-1.5 rounded-full bg-current" />
+            {t("freeze.pausedTitle")}
+          </span>
+        ) : (
+          <StatusBadge status={subscription.status} />
+        )}
       </div>
 
       {/* Заметные предупреждения: истечение подписки / окончание трафика */}
@@ -188,8 +206,12 @@ export default function DashboardPage() {
             <p className="tabular mt-1.5 text-[15px] font-semibold text-fg">
               {formatDate(subscription.expire_at)}
             </p>
+            {/* «Истекла» — только если срок реально прошёл: remainingDays = 0
+                означает «меньше суток», подписка ещё работает. */}
             <p className="tabular mt-0.5 text-xs text-fg-muted">
-              {remainingDays > 0 ? t("sub.daysLeft", { n: remainingDays }) : t("sub.expired")}
+              {isExpired(subscription.expire_at)
+                ? t("sub.expired")
+                : t("sub.daysLeft", { n: Math.max(0, remainingDays) })}
             </p>
           </div>
           <div className="sm:border-l sm:border-[var(--border)] sm:pl-4 sm:pr-4">
@@ -240,7 +262,7 @@ export default function DashboardPage() {
           ) : (
             <ProgressBar
               value={subscription.used_traffic_bytes || 0}
-              max={subscription.traffic_limit}
+              max={trafficLimitBytes(subscription.traffic_limit)}
             />
           )}
         </div>

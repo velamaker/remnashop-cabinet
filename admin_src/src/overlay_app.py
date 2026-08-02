@@ -160,7 +160,7 @@ def _wrap_lifespan_with_support_tables(app: FastAPI, container: AsyncContainer) 
         # FAIL-CLOSED: без security-critical таблиц (2FA-гейт и отзыв сессий) кабинет
         # работал бы небезопасно (2FA «выключена», logout-all не действует). Проверяем
         # их наличие и НЕ стартуем, если их нет — лучше явный отказ, чем тихий fail-open.
-        critical = ("admin_2fa", "session_invalidations")
+        critical = ("admin_2fa", "session_invalidations", "revoked_tokens")
         async with container(scope=Scope.REQUEST) as request_container:
             session = await request_container.get(AsyncSession)
             missing = [
@@ -338,10 +338,14 @@ def _add_csrf_protection_middleware(app: FastAPI) -> None:
 
 
 def _add_session_check_middleware(app: FastAPI, container: AsyncContainer) -> None:
-    """«Выйти со всех устройств»: отклоняет токены с iat раньше user.invalidated_at.
+    """Отзыв сессий: «выйти со всех устройств» (iat < invalidated_at) и обычный «Выйти».
 
     Проверяет только аутентифицированные /api-запросы (кроме /auth/* — чтобы можно
     было войти заново). Битый/истёкший токен пропускаем — с ним разберётся auth роута.
+
+    Обычный выход базовая роута закрывала наполовину: гасила refresh и куки, а выданный
+    access-JWT оставался годным ещё ~15 минут — куки, скопированные до выхода, работали.
+    Поэтому здесь же, на успешный /auth/logout, кладём токен в revoked_tokens.
     """
     import jwt as _jwt
     from fastapi.responses import JSONResponse
@@ -381,18 +385,47 @@ def _add_session_check_middleware(app: FastAPI, container: AsyncContainer) -> No
                     )
                     uid = int(payload["sub"])
                     iat = payload.get("iat")
-                    from src.infrastructure.services.overlay_sessions import token_invalidated
+                    from src.infrastructure.services.overlay_sessions import (
+                        token_invalidated,
+                        token_revoked,
+                    )
 
                     sm = await container.get(async_sessionmaker[AsyncSession])
                     async with sm() as s:
-                        if await token_invalidated(s, uid, iat):
+                        if await token_invalidated(s, uid, iat) or await token_revoked(s, token):
                             return JSONResponse(
                                 status_code=401,
                                 content={"detail": "Сессия завершена — войдите заново"},
                             )
             except Exception:  # noqa: BLE001 — не наша забота валидировать токен здесь
                 pass
-        return await call_next(request)
+
+        response = await call_next(request)
+
+        # Успешный выход — гасим и access-токен, иначе он живёт до конца срока.
+        if token and path.endswith("/auth/logout") and response.status_code < 400:
+            try:
+                cfg = AppConfig.get()
+                secret = (
+                    cfg.jwt_secret.get_secret_value() if getattr(cfg, "jwt_secret", None) else None
+                )
+                exp = None
+                if secret:
+                    exp = _jwt.decode(
+                        token,
+                        secret,
+                        algorithms=["HS256"],
+                        options={"verify_sub": False, "verify_exp": False},
+                    ).get("exp")
+                from src.infrastructure.services.overlay_sessions import revoke_token
+
+                sm = await container.get(async_sessionmaker[AsyncSession])
+                async with sm() as s:
+                    await revoke_token(s, token, exp)
+            except Exception:  # noqa: BLE001 — выход не должен падать из-за отзыва
+                pass
+
+        return response
 
 
 # Пути входа (по суффиксу полного пути). При успехе они выставляют access_token —

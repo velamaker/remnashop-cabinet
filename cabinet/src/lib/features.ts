@@ -37,6 +37,9 @@ export type FeatureKey =
   | "tickets"
   | "push"
   | "notifications"
+  // Очистка ленты уведомлений (DELETE /api/notifications) — отдельная от чтения
+  // возможность: ленту бэкенд может отдавать, а удалять всё сразу не уметь.
+  | "notifications_clear"
   | "sessions"
   | "info_pages"
   | "apps"

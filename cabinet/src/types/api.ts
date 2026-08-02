@@ -77,6 +77,11 @@ export interface SubscriptionInfoResponse {
   used_traffic_bytes: number | null;
   lifetime_used_traffic_bytes: number | null;
   online_at: string | null;
+  // Пауза, поставленная самим пользователем. В панели подписка при этом
+  // выключена (status DISABLED), и без этого признака кабинет показывал
+  // «истекла, продлите» человеку, который сам нажал «Пауза». Бэкенды, которые
+  // паузы не умеют, поля не присылают — считаем, что паузы нет.
+  frozen?: boolean;
 }
 
 export interface DeviceResponse {

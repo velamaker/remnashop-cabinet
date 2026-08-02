@@ -4,7 +4,7 @@ import { Stethoscope, CheckCircle2, AlertTriangle, XCircle, Loader2, RefreshCw, 
 import { subscriptionApi } from "@/api/subscription";
 import { supportApi } from "@/api/support";
 import { useT } from "@/i18n/I18nContext";
-import { formatDate } from "@/lib/format";
+import { formatDate, trafficLimitBytes } from "@/lib/format";
 
 // Автодиагностика «VPN не работает» — фронтовый визард поверх существующих
 // эндпоинтов (подписка / устройства / статус нод). Снижает нагрузку на поддержку:
@@ -58,8 +58,11 @@ export function DiagnosticWizard() {
         out.push({ key: "sub", status: "ok", label: t("diag.sub.active", { date: formatDate(sub.expire_at) }) });
       }
       if (sub.traffic_limit > 0) {
+        // Лимит из API в ГБ, расход в байтах — без перевода чек «трафик исчерпан»
+        // срабатывал бы у каждого, у кого лимит вообще задан.
+        const limit = trafficLimitBytes(sub.traffic_limit);
         const used = sub.used_traffic_bytes ?? 0;
-        if (used >= sub.traffic_limit) out.push({ key: "traffic", status: "fail", label: t("diag.traffic.out"), hint: t("diag.traffic.out.hint"), cta: { label: t("diag.cta.changePlan"), to: "/billing" } });
+        if (used >= limit) out.push({ key: "traffic", status: "fail", label: t("diag.traffic.out"), hint: t("diag.traffic.out.hint"), cta: { label: t("diag.cta.changePlan"), to: "/billing" } });
         else out.push({ key: "traffic", status: "ok", label: t("diag.traffic.ok") });
       } else {
         out.push({ key: "traffic", status: "ok", label: t("diag.traffic.unlimited") });

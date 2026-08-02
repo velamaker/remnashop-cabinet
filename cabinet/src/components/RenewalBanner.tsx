@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { AlertTriangle, ArrowRight, X, Gauge } from "lucide-react";
 import type { SubscriptionInfoResponse } from "@/types/api";
-import { daysUntil, formatBytes, formatTrafficLimit } from "@/lib/format";
+import { daysUntil, isExpired, formatBytes, formatTrafficLimit, trafficLimitBytes } from "@/lib/format";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { useT } from "@/i18n/I18nContext";
 
@@ -26,9 +26,11 @@ function ExpiryBanner({
   onDismiss: () => void;
 }) {
   const t = useT();
+  // days = 0 — это «меньше суток», то есть заканчивается уже завтра (раньше при
+  // округлении вверх тот же случай давал 1).
   const title = expired
     ? t("renewal.expired")
-    : days <= 1
+    : days <= 0
       ? t("renewal.tomorrow")
       : t("renewal.inDays", { days });
   const text = expired ? t("renewal.expiredText") : t("renewal.soonText");
@@ -72,7 +74,7 @@ function ExpiryBanner({
   );
 }
 
-/** Предупреждение о трафике: прогресс-бар «использовано / лимит». */
+/** Предупреждение о трафике: прогресс-бар «использовано / лимит» (оба в байтах). */
 function TrafficBanner({
   out,
   used,
@@ -104,7 +106,7 @@ function TrafficBanner({
             {out ? t("renewal.trafficOut") : t("renewal.trafficWarn")}
           </p>
           <p className="mt-0.5 text-xs text-fg-muted sm:text-sm tabular">
-            {formatBytes(used)} / {formatTrafficLimit(limit)}
+            {formatBytes(used)} / {formatBytes(limit)}
           </p>
         </div>
         {!out && (
@@ -151,16 +153,28 @@ export function RenewalBanner({
 
   if (!subscription) return null;
 
-  // Истечение
+  // Истечение. Пауза — не истечение: подписка на паузе тоже DISABLED, но звать
+  // человека «продлить» здесь нельзя — он сам её остановил и вернёт кнопкой.
+  // days — ПОЛНЫЕ оставшиеся сутки (см. daysUntil): 0 = «меньше суток», а не
+  // «истекла». Поэтому истечение проверяем по самой дате, иначе последний день
+  // подписки объявлялся бы просроченным.
+  // Поля frozen может не быть вовсе (бэкенды без паузы) — тогда всё как раньше.
+  const paused = subscription.frozen === true;
   const days = daysUntil(subscription.expire_at);
   const expired =
-    subscription.status === "EXPIRED" ||
-    subscription.status === "DISABLED" ||
-    days <= 0;
-  const soon = !expired && days <= WARN_DAYS;
+    !paused &&
+    (subscription.status === "EXPIRED" ||
+      subscription.status === "DISABLED" ||
+      isExpired(subscription.expire_at));
+  // `< WARN_DAYS` при округлении вниз — ровно тот же порог, что раньше давал
+  // `<= WARN_DAYS` при округлении вверх: баннер по-прежнему за 3 суток до конца.
+  // На паузе срок не идёт (при снятии дни возвращаются), поэтому «заканчивается
+  // через N дней» здесь тоже неправда — мягкое предупреждение молчит.
+  const soon = !paused && !expired && days < WARN_DAYS;
 
-  // Трафик (traffic_limit в байтах, 0 = безлимит)
-  const limit = subscription.traffic_limit;
+  // Трафик: лимит из API в ГБ (0 = безлимит), расход в байтах — переводим лимит,
+  // иначе «трафик исчерпан» показывается всем, у кого лимит вообще задан.
+  const limit = trafficLimitBytes(subscription.traffic_limit);
   const used = subscription.used_traffic_bytes || 0;
   const isUnlimited = limit === 0;
   const pct = !isUnlimited && limit > 0 ? (used / limit) * 100 : 0;
