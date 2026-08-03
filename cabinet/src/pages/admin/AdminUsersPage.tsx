@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import {
   Search, ChevronLeft, ChevronRight, AlertCircle, X, Download,
@@ -14,8 +14,79 @@ import {
 import { ApiError } from "@/types/api";
 import { formatDate } from "@/lib/format";
 import { useAuth } from "@/contexts/AuthContext";
+import { useBranding } from "@/contexts/BrandingContext";
 
 const LIMIT = 25;
+
+// ─── Что этот бэкенд умеет на самом деле ───────────────────────────────────
+//
+// Кабинет один, а бэкенд под ним может быть разный: наш RemnaShop умеет всё, а
+// поверх чужого бота («Бедолага» и дальше) работает адаптер, у которого
+// переведена только часть админских ручек. Кнопка, за которой нет ручки, —
+// худший вид интерфейса: человек жмёт, ждёт и получает «Этот раздел недоступен».
+// Поэтому такие органы управления надо ПРЯТАТЬ, а не показывать.
+//
+// Источников три, и все они уже приходят в кабинет:
+//   1) whoami.can_write (AuthContext.isReadonlyAdmin) — можно ли вообще менять
+//      данные. Нельзя — не рисуем ни одной кнопки действия;
+//   2) whoami.sections (AuthContext.canSection) — какие разделы бэкенд отдаёт
+//      целиком. Отсюда вкладка «Подписка» (раздел subscriptions) и карточка
+//      «Выдать подписку» (ей нужен список тарифов, раздел plans);
+//   3) appearance.features (BrandingContext.can) — какие механики есть у бота
+//      вообще. Баллов лояльности, например, у «Бедолаги» нет как понятия.
+//
+// ГЛАВНОЕ ПРАВИЛО СОВМЕСТИМОСТИ. На нашем бэкенде `features` нет вовсе,
+// full_access=true, can_write=true — и все три проверки отвечают «можно», то
+// есть страница остаётся ровно такой, как была. Ни одна проверка ниже не
+// написана как «=== true»: отсутствие сведений всегда читается как «умеет».
+//
+// ЧЕГО ЭТИ ТРИ ИСТОЧНИКА НЕ ЗНАЮТ. Права нарезаны разделами, а не отдельными
+// ручками: раздел «users» бэкенд объявляет целиком, хотя внутри у него может не
+// быть, скажем, сброса трафика. Единственный, кто знает правду про конкретную
+// ручку, — сам бэкенд, и он её честно говорит: 501 «не умею». Этот ответ мы
+// запоминаем (см. `UNSUPPORTED`) и после него орган управления убираем — и в
+// этой карточке, и во всех следующих. Наш бэкенд 501 не отвечает никогда,
+// поэтому у нас реестр остаётся пустым.
+
+/** Ручки, про которые бэкенд уже ответил «не умею» (HTTP 501).
+ *
+ *  Модульный, а не в состоянии компонента: карточка пользователя открывается и
+ *  закрывается десятки раз за сессию, и заново натыкаться на ту же мёртвую
+ *  кнопку в каждой — ровно то, от чего мы уходим. Сбрасывается перезагрузкой
+ *  страницы: если раздел на бэкенде появится, админ увидит его после F5. */
+const UNSUPPORTED = new Set<string>();
+
+/** Тот самый честный отказ «такой ручки тут нет». Всё остальное (403, 500,
+ *  обрыв сети) — не повод прятать кнопку: это временная беда, а не отсутствие
+ *  возможности. */
+function isUnsupported(e: unknown): boolean {
+  return e instanceof ApiError && e.status === 501;
+}
+
+/** Доступ к реестру возможностей с перерисовкой при новой находке.
+ *
+ *  `note` возвращает true, если ошибка означала «бэкенд так не умеет» — по нему
+ *  вызывающий код решает, показывать ли текст ошибки (уже незачем: орган
+ *  управления исчезнет) или откатывать фильтр. */
+function useCapabilities() {
+  const [, bump] = useState(0);
+  const disable = useCallback((key: string) => { UNSUPPORTED.add(key); bump(n => n + 1); }, []);
+  const note = useCallback((key: string, e: unknown) => {
+    if (!isUnsupported(e)) return false;
+    disable(key);
+    return true;
+  }, [disable]);
+  return { can: (key: string) => !UNSUPPORTED.has(key), note, disable };
+}
+
+/** Экспорт качается сырым fetch (нужен файл, а не JSON), поэтому ApiError до
+ *  страницы не доезжает — статус приходит только текстом сообщения. Разбираем
+ *  его, чтобы отличить «такого пути на этом бэкенде нет» от временной поломки:
+ *  501 — прямой отказ адаптера, а 404/405/415/422 означают, что бэкенд про этот
+ *  адрес не знает (у адаптера `/users/export.xlsx` попадает в маршрут карточки
+ *  `/users/{id}` и отвечает 422 «это не число»). 5xx кнопку не прячет: сервер
+ *  мог просто споткнуться. */
+const NO_EXPORT_ROUTE = /\(HTTP (?:404|405|415|422|501)\)/;
 
 // Значения совпадают с серверным enum Role: USER=1, PREVIEW=2 (read-only админ),
 // ADMIN=3, DEV=4, OWNER=5, SYSTEM=6.
@@ -59,22 +130,33 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
   const [balanceDelta, setBalanceDelta] = useState("0");
   const [showHistory, setShowHistory] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const { isReadonlyAdmin, canSection } = useAuth();
+  const { can: hasFeature } = useBranding();
+  const { can, note } = useCapabilities();
+
+  // Тарифы нужны ровно одной карточке — «Выдать подписку». Раздел «plans»
+  // бэкенд объявляет сам, и спрашивать список, когда раздела нет, нельзя: он
+  // грузится тем же Promise.all, и его 501 показал бы ошибку вместо ВСЕЙ
+  // вкладки, хотя сама подписка читается прекрасно.
+  const canPlans = canSection("plans");
 
   const load = useCallback(() => {
     setLoading(true);
     Promise.all([
       subscriptionsAdminApi.getUser(userId),
-      plansAdminApi.list(),
+      canPlans ? plansAdminApi.list() : Promise.resolve({ items: [] as AdminPlan[], total: 0 }),
     ]).then(([sub, p]) => {
       setData(sub);
       setPlans(p.items);
       if (p.items[0]) setGrantPlanId(String(p.items[0].id));
     }).catch(e => setErr(e instanceof ApiError ? e.detail : "Ошибка")).finally(() => setLoading(false));
-  }, [userId]);
+  }, [userId, canPlans]);
 
   useEffect(() => { load(); }, [load]);
 
-  const run = async (fn: () => Promise<unknown>, label: string) => {
+  // `cap` — ключ возможности этого действия. Бэкенд ответил «не умею» — кнопка
+  // исчезает, и текст ошибки не показываем: он объяснял бы уже пустое место.
+  const run = async (fn: () => Promise<unknown>, label: string, cap?: string) => {
     setAction(label);
     setErr(null);
     try {
@@ -82,6 +164,7 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
       load();
       onUpdated();
     } catch (e) {
+      if (cap && note(cap, e)) return;
       setErr(e instanceof ApiError ? e.detail : "Ошибка");
     } finally {
       setAction(null);
@@ -89,6 +172,17 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
   };
 
   const sub = data?.current;
+  // Баллы лояльности — механика бота, а не кабинета: нет её у бэкенда, и
+  // начислять нечего (в карточке они всегда 0).
+  const canPoints = hasFeature("points") && can("sub.points");
+  // Карточки обслуживания и опасных действий: рисуем только те кнопки, за
+  // которыми есть ручка, а сами карточки — только если хоть одна кнопка жива.
+  const upkeep = ["sub.reset-traffic", "sub.reissue", "sub.referral-reset", "sub.sync"].filter(can);
+  const danger = ["sub.reset-trial", "sub.disable", "sub.delete"].filter(can);
+  const actionCards = [
+    can("sub.extend"), canPlans && can("sub.grant"), canPoints, can("sub.balance"),
+    upkeep.length > 0, danger.length > 0,
+  ].filter(Boolean).length;
 
   if (loading) return <div className="flex justify-center py-6"><div className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-accent" /></div>;
 
@@ -122,9 +216,12 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
         )}
       </div>
 
-      {/* Actions */}
+      {/* Actions. Read-only админу их не рисуем вовсе (флаг can_write), а из
+          остальных показываем только те, под которыми у бэкенда есть ручка. */}
+      {!isReadonlyAdmin && actionCards > 0 && (
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {/* Extend */}
+        {can("sub.extend") && (
         <div className="rounded-xl border border-[var(--border)] p-4">
           <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-fg"><CalendarPlus className="h-3.5 w-3.5 text-success" />Изменить срок</p>
           <div className="flex gap-2">
@@ -133,7 +230,7 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
               className="h-8 w-20 rounded-lg border border-[var(--border)] bg-bg px-2 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent" />
             <span className="self-center text-xs text-fg-muted">дней</span>
             <button
-              onClick={() => run(() => subscriptionsAdminApi.extend(userId, Number(extendDays)), "extend")}
+              onClick={() => run(() => subscriptionsAdminApi.extend(userId, Number(extendDays)), "extend", "sub.extend")}
               disabled={action !== null || !sub || !extendDays || Number(extendDays) === 0}
               className="ml-auto rounded-lg bg-success/10 px-3 py-1.5 text-xs font-medium text-success hover:bg-success/20 disabled:opacity-40 transition-colors"
             >
@@ -142,8 +239,11 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
           </div>
           <p className="mt-1.5 text-[11px] text-fg-subtle">Плюс — продлить, минус — убавить.</p>
         </div>
+        )}
 
-        {/* Grant */}
+        {/* Grant. Без списка тарифов выдавать нечего — карточка живёт вместе с
+            разделом «Тарифы». */}
+        {canPlans && can("sub.grant") && (
         <div className="rounded-xl border border-[var(--border)] p-4">
           <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-fg"><Gift className="h-3.5 w-3.5 text-accent" />Выдать подписку</p>
           <div className="flex flex-col gap-2">
@@ -156,7 +256,7 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
                 className="h-8 w-20 rounded-lg border border-[var(--border)] bg-bg px-2 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent" />
               <span className="self-center text-xs text-fg-muted">дней</span>
               <button
-                onClick={() => run(() => subscriptionsAdminApi.grant(userId, Number(grantPlanId), Number(grantDays)), "grant")}
+                onClick={() => run(() => subscriptionsAdminApi.grant(userId, Number(grantPlanId), Number(grantDays)), "grant", "sub.grant")}
                 disabled={action !== null || !grantPlanId}
                 className="ml-auto rounded-lg bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/20 disabled:opacity-40 transition-colors"
               >
@@ -165,8 +265,10 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
             </div>
           </div>
         </div>
+        )}
 
         {/* Points */}
+        {canPoints && (
         <div className="rounded-xl border border-[var(--border)] p-4">
           <div className="mb-2 flex items-center justify-between gap-2">
             <p className="flex items-center gap-1.5 text-xs font-semibold text-fg"><Star className="h-3.5 w-3.5 text-warning" />Баллы (рефералка)</p>
@@ -182,7 +284,7 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
               className="h-8 w-24 rounded-lg border border-[var(--border)] bg-bg px-2 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent"
               placeholder="+100 или -50" />
             <button
-              onClick={() => run(() => subscriptionsAdminApi.addPoints(userId, Number(pointsDelta)), "points")}
+              onClick={() => run(() => subscriptionsAdminApi.addPoints(userId, Number(pointsDelta)), "points", "sub.points")}
               disabled={action !== null || !pointsDelta || Number(pointsDelta) === 0}
               className="ml-auto rounded-lg bg-warning/10 px-3 py-1.5 text-xs font-medium text-warning hover:bg-warning/20 disabled:opacity-40 transition-colors"
             >
@@ -190,8 +292,10 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
             </button>
           </div>
         </div>
+        )}
 
         {/* Balance (₽) */}
+        {can("sub.balance") && (
         <div className="rounded-xl border border-[var(--border)] p-4">
           <div className="mb-2 flex items-center justify-between gap-2">
             <p className="flex items-center gap-1.5 text-xs font-semibold text-fg"><Wallet className="h-3.5 w-3.5 text-accent" />Баланс ₽</p>
@@ -207,7 +311,7 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
               className="h-8 w-24 rounded-lg border border-[var(--border)] bg-bg px-2 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent"
               placeholder="+500 или -100" />
             <button
-              onClick={() => run(() => subscriptionsAdminApi.adjustBalance(userId, Number(balanceDelta)), "balance")}
+              onClick={() => run(() => subscriptionsAdminApi.adjustBalance(userId, Number(balanceDelta)), "balance", "sub.balance")}
               disabled={action !== null || !balanceDelta || Number(balanceDelta) === 0}
               className="ml-auto rounded-lg bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/20 disabled:opacity-40 transition-colors"
             >
@@ -216,71 +320,91 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
           </div>
           <p className="mt-1.5 text-[11px] text-fg-subtle">В рублях. Положительное — начислить, отрицательное — списать (ниже 0 не уходит).</p>
         </div>
+        )}
 
         {/* Обслуживание подписки (паритет с ботом) */}
+        {upkeep.length > 0 && (
         <div className="rounded-xl border border-[var(--border)] p-4">
           <p className="mb-2 text-xs font-semibold text-fg-subtle">Действия</p>
           <div className="flex flex-wrap gap-2">
+            {can("sub.reset-traffic") && (
             <button
-              onClick={() => run(() => subscriptionsAdminApi.resetTraffic(userId), "traffic")}
+              onClick={() => run(() => subscriptionsAdminApi.resetTraffic(userId), "traffic", "sub.reset-traffic")}
               disabled={action !== null || !sub}
               className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-fg-muted hover:text-fg hover:bg-bg-raised disabled:opacity-40 transition-colors"
             >
               <Gauge className="h-3 w-3" />{action === "traffic" ? "…" : "Сбросить трафик"}
             </button>
+            )}
+            {can("sub.reissue") && (
             <button
-              onClick={() => { if (confirm("Переиздать ссылку подписки? Старая ссылка перестанет работать — клиенты придётся переподключить.")) run(() => subscriptionsAdminApi.reissue(userId), "reissue"); }}
+              onClick={() => { if (confirm("Переиздать ссылку подписки? Старая ссылка перестанет работать — клиенты придётся переподключить.")) run(() => subscriptionsAdminApi.reissue(userId), "reissue", "sub.reissue"); }}
               disabled={action !== null || !sub}
               className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-fg-muted hover:text-fg hover:bg-bg-raised disabled:opacity-40 transition-colors"
             >
               <Link2 className="h-3 w-3" />{action === "reissue" ? "…" : "Переиздать ссылку"}
             </button>
+            )}
+            {can("sub.referral-reset") && (
             <button
-              onClick={() => { if (confirm("Сбросить реферальный код пользователя? Старая реф-ссылка перестанет работать.")) run(() => subscriptionsAdminApi.referralReset(userId), "refreset"); }}
+              onClick={() => { if (confirm("Сбросить реферальный код пользователя? Старая реф-ссылка перестанет работать.")) run(() => subscriptionsAdminApi.referralReset(userId), "refreset", "sub.referral-reset"); }}
               disabled={action !== null}
               className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-fg-muted hover:text-fg hover:bg-bg-raised disabled:opacity-40 transition-colors"
             >
               <Gift className="h-3 w-3" />{action === "refreset" ? "…" : "Сбросить реф-код"}
             </button>
+            )}
+            {can("sub.sync") && (
             <button
-              onClick={() => run(() => subscriptionsAdminApi.sync(userId, "from_remnawave"), "sync")}
+              onClick={() => run(() => subscriptionsAdminApi.sync(userId, "from_remnawave"), "sync", "sub.sync")}
               disabled={action !== null || !sub}
               title="Подтянуть данные подписки из панели Remnawave"
               className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-fg-muted hover:text-fg hover:bg-bg-raised disabled:opacity-40 transition-colors"
             >
               <RefreshCw className="h-3 w-3" />{action === "sync" ? "…" : "Синхронизировать"}
             </button>
+            )}
           </div>
         </div>
+        )}
 
         {/* Danger actions */}
+        {danger.length > 0 && (
         <div className="rounded-xl border border-[var(--border)] p-4">
           <p className="mb-2 text-xs font-semibold text-fg-subtle">Опасные действия</p>
           <div className="flex flex-wrap gap-2">
+            {can("sub.reset-trial") && (
             <button
-              onClick={() => run(() => subscriptionsAdminApi.resetTrial(userId), "trial")}
+              onClick={() => run(() => subscriptionsAdminApi.resetTrial(userId), "trial", "sub.reset-trial")}
               disabled={action !== null}
               className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-fg-muted hover:text-fg hover:bg-bg-raised disabled:opacity-40 transition-colors"
             >
               <RefreshCw className="h-3 w-3" />{action === "trial" ? "…" : "Сброс триала"}
             </button>
+            )}
+            {can("sub.disable") && (
             <button
-              onClick={() => run(() => subscriptionsAdminApi.disable(userId), "disable")}
+              onClick={() => run(() => subscriptionsAdminApi.disable(userId), "disable", "sub.disable")}
               disabled={action !== null || !sub}
               className="flex items-center gap-1 rounded-lg border border-warning/20 bg-warning/8 px-2.5 py-1.5 text-xs text-warning hover:bg-warning/15 disabled:opacity-40 transition-colors"
             >
               <Ban className="h-3 w-3" />{action === "disable" ? "…" : "Отключить"}
             </button>
+            )}
+            {can("sub.delete") && (
             <button
-              onClick={() => { if (confirm("Удалить подписку? Это действие нельзя отменить.")) run(() => subscriptionsAdminApi.delete(userId), "delete"); }}
+              onClick={() => { if (confirm("Удалить подписку? Это действие нельзя отменить.")) run(() => subscriptionsAdminApi.delete(userId), "delete", "sub.delete"); }}
               disabled={action !== null || !sub}
               className="flex items-center gap-1 rounded-lg border border-danger/20 bg-danger/8 px-2.5 py-1.5 text-xs text-danger hover:bg-danger/15 disabled:opacity-40 transition-colors"
             >
               <Trash2 className="h-3 w-3" />{action === "delete" ? "…" : "Удалить"}
             </button>
+            )}
           </div>
         </div>
+        )}
       </div>
+      )}
 
       {/* History */}
       {(data?.history?.length ?? 0) > 0 && (
@@ -303,8 +427,9 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
         </div>
       )}
 
-      {/* Limits & squads */}
-      {sub && <LimitsAndSquadsBlock userId={userId} sub={sub} onUpdated={() => { load(); onUpdated(); }} />}
+      {/* Limits & squads. Блок целиком состоит из изменений — read-only админу
+          показывать нечего. */}
+      {sub && !isReadonlyAdmin && <LimitsAndSquadsBlock userId={userId} sub={sub} onUpdated={() => { load(); onUpdated(); }} />}
 
       {/* Devices */}
       <DevicesBlock userId={userId} />
@@ -324,17 +449,26 @@ function DevicesBlock({ userId }: { userId: number }) {
   const [open, setOpen] = useState(false);
   const [devices, setDevices] = useState<AdminDevice[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const { isReadonlyAdmin } = useAuth();
+  const { can, note } = useCapabilities();
 
+  // Раньше любая ошибка превращалась в пустой список, и блок писал «Устройств
+  // нет» — на бэкенде, который про устройства не знает вовсе, это выдуманный
+  // факт: админ читал его как «человек не подключался».
   const load = () =>
-    subscriptionsAdminApi.devices(userId).then((r) => setDevices(r.devices)).catch(() => setDevices([]));
+    subscriptionsAdminApi.devices(userId)
+      .then((r) => setDevices(r.devices))
+      .catch((e) => { note("sub.devices", e); setDevices([]); });
   const toggle = () => { const n = !open; setOpen(n); if (n && devices === null) load(); };
   const del = async (hwid: string) => {
     if (!confirm("Удалить это устройство пользователя?")) return;
     setBusy(hwid);
     try { await subscriptionsAdminApi.deleteDevice(userId, hwid); await load(); }
-    catch { /* backend вернёт 403 для readonly */ }
+    catch (e) { note("sub.devices.delete", e); /* 403 у read-only — не наш случай */ }
     finally { setBusy(null); }
   };
+
+  if (!can("sub.devices")) return null;
 
   return (
     <div>
@@ -354,6 +488,7 @@ function DevicesBlock({ userId }: { userId: number }) {
                 <p className="truncate text-fg">{d.platform || "—"}{d.device_model ? ` · ${d.device_model}` : ""}</p>
                 <p className="truncate text-fg-subtle">{d.os_version || d.user_agent || d.hwid}</p>
               </div>
+              {!isReadonlyAdmin && can("sub.devices.delete") && (
               <button
                 onClick={() => del(d.hwid)}
                 disabled={busy !== null}
@@ -361,6 +496,7 @@ function DevicesBlock({ userId }: { userId: number }) {
               >
                 <Trash2 className="h-3 w-3" />{busy === d.hwid ? "…" : "Удалить"}
               </button>
+              )}
             </div>
           ))}
         </div>
@@ -374,14 +510,21 @@ function DevicesBlock({ userId }: { userId: number }) {
 function UserTxBlock({ userId }: { userId: number }) {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<AdminUserTx[] | null>(null);
+  const { can, note } = useCapabilities();
 
   const toggle = () => {
     const n = !open;
     setOpen(n);
     if (n && items === null) {
-      subscriptionsAdminApi.transactions(userId).then((r) => setItems(r.items)).catch(() => setItems([]));
+      // Как и с устройствами: «Платежей нет» на бэкенде без такой ручки — не
+      // пустой результат, а неправда.
+      subscriptionsAdminApi.transactions(userId)
+        .then((r) => setItems(r.items))
+        .catch((e) => { note("sub.transactions", e); setItems([]); });
     }
   };
+
+  if (!can("sub.transactions")) return null;
 
   return (
     <div>
@@ -422,6 +565,7 @@ function LimitsAndSquadsBlock({ userId, sub, onUpdated }: { userId: number; sub:
   const [squads, setSquads] = useState<AdminSquadsResponse | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const { can, note } = useCapabilities();
 
   const toggle = () => {
     const n = !open;
@@ -431,11 +575,15 @@ function LimitsAndSquadsBlock({ userId, sub, onUpdated }: { userId: number; sub:
     }
   };
 
-  const act = async (key: string, fn: () => Promise<unknown>) => {
+  // `cap` — ключ возможности: бэкенд ответил «не умею», и строка (или чипы
+  // серверов) уходит с экрана вместе с сообщением об ошибке.
+  const act = async (key: string, fn: () => Promise<unknown>, cap: string) => {
     setBusy(key);
     setMsg(null);
     try { await fn(); setMsg("Сохранено"); onUpdated(); }
-    catch (e) { setMsg(e instanceof ApiError ? e.detail : "Ошибка"); }
+    catch (e) {
+      if (!note(cap, e)) setMsg(e instanceof ApiError ? e.detail : "Ошибка");
+    }
     finally { setBusy(null); }
   };
 
@@ -443,12 +591,19 @@ function LimitsAndSquadsBlock({ userId, sub, onUpdated }: { userId: number; sub:
     <button
       key={uuid}
       disabled={busy !== null}
-      onClick={() => act((external ? "ex-" : "sq-") + uuid, () => subscriptionsAdminApi.squadToggle(userId, uuid, external))}
+      onClick={() => act((external ? "ex-" : "sq-") + uuid, () => subscriptionsAdminApi.squadToggle(userId, uuid, external), "sub.squad-toggle")}
       className={`rounded-lg border px-2 py-1 text-xs transition-colors disabled:opacity-40 ${on ? "border-accent/40 bg-accent/10 text-accent" : "border-[var(--border)] text-fg-muted hover:text-fg"}`}
     >
       {on ? "✓ " : ""}{name}
     </button>
   );
+
+  // Блок — это три изменяющие ручки и больше ничего. Не осталось ни одной живой
+  // — заголовок «Лимиты и серверы» открывал бы пустую коробку.
+  const canTraffic = can("sub.traffic-limit");
+  const canDevices = can("sub.device-limit");
+  const canSquads = can("sub.squad-toggle");
+  if (!canTraffic && !canDevices && !canSquads) return null;
 
   return (
     <div>
@@ -459,29 +614,33 @@ function LimitsAndSquadsBlock({ userId, sub, onUpdated }: { userId: number; sub:
       {open && (
         <div className="mt-2 space-y-3 rounded-xl border border-[var(--border)] p-3">
           {msg && <p className="text-xs text-fg-subtle">{msg}</p>}
+          {canTraffic && (
           <div className="flex items-center gap-2">
             <label className="w-24 text-xs text-fg-muted">Трафик, ГБ</label>
             <input type="number" min={0} value={traffic} onChange={(e) => setTraffic(e.target.value)}
               className="w-24 rounded-lg border border-[var(--border)] bg-bg px-2 py-1 text-xs text-fg" />
             <span className="text-[10px] text-fg-subtle">0 = ∞</span>
-            <button onClick={() => act("traffic", () => subscriptionsAdminApi.setTrafficLimit(userId, Math.max(0, parseInt(traffic, 10) || 0)))}
+            <button onClick={() => act("traffic", () => subscriptionsAdminApi.setTrafficLimit(userId, Math.max(0, parseInt(traffic, 10) || 0)), "sub.traffic-limit")}
               disabled={busy !== null}
               className="ml-auto rounded-lg bg-accent/10 px-3 py-1 text-xs text-accent hover:bg-accent/20 disabled:opacity-40">
               {busy === "traffic" ? "…" : "OK"}
             </button>
           </div>
+          )}
+          {canDevices && (
           <div className="flex items-center gap-2">
             <label className="w-24 text-xs text-fg-muted">Устройства</label>
             <input type="number" min={0} value={devices} onChange={(e) => setDevices(e.target.value)}
               className="w-24 rounded-lg border border-[var(--border)] bg-bg px-2 py-1 text-xs text-fg" />
             <span className="text-[10px] text-fg-subtle">0 = ∞</span>
-            <button onClick={() => act("devices", () => subscriptionsAdminApi.setDeviceLimit(userId, Math.max(0, parseInt(devices, 10) || 0)))}
+            <button onClick={() => act("devices", () => subscriptionsAdminApi.setDeviceLimit(userId, Math.max(0, parseInt(devices, 10) || 0)), "sub.device-limit")}
               disabled={busy !== null}
               className="ml-auto rounded-lg bg-accent/10 px-3 py-1 text-xs text-accent hover:bg-accent/20 disabled:opacity-40">
               {busy === "devices" ? "…" : "OK"}
             </button>
           </div>
-          {squads && squads.internal.length > 0 && (
+          )}
+          {canSquads && squads && squads.internal.length > 0 && (
             <div>
               <p className="mb-1 text-xs text-fg-muted">Внутренние сквады</p>
               <div className="flex flex-wrap gap-1.5">
@@ -489,7 +648,7 @@ function LimitsAndSquadsBlock({ userId, sub, onUpdated }: { userId: number; sub:
               </div>
             </div>
           )}
-          {squads && squads.external.length > 0 && (
+          {canSquads && squads && squads.external.length > 0 && (
             <div>
               <p className="mb-1 text-xs text-fg-muted">Внешние сквады</p>
               <div className="flex flex-wrap gap-1.5">
@@ -510,6 +669,8 @@ function SendMessageBlock({ userId }: { userId: number }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const { isReadonlyAdmin } = useAuth();
+  const { can, note } = useCapabilities();
 
   const send = async () => {
     const t = text.trim();
@@ -529,11 +690,15 @@ function SendMessageBlock({ userId }: { userId: number }) {
       );
       if (r.delivered) setText("");
     } catch (e) {
-      setMsg(e instanceof ApiError ? e.detail : "Ошибка");
+      if (!note("sub.message", e)) setMsg(e instanceof ApiError ? e.detail : "Ошибка");
     } finally {
       setBusy(false);
     }
   };
+
+  // Отправка — единственное, что здесь есть: нет ручки (или админ только
+  // смотрит) — нет и блока.
+  if (isReadonlyAdmin || !can("sub.message")) return null;
 
   return (
     <div>
@@ -686,16 +851,22 @@ function fmtBytesRu(n: number): string {
 
 function TrafficByNodeBlock({ userId }: { userId: number }) {
   const [data, setData] = useState<TrafficByNode | null>(null);
+  const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState(false);
   const [days, setDays] = useState(30);
 
   useEffect(() => {
     setData(null);
-    usersAdminApi.trafficByNode(userId, days).then(setData).catch(() => setData(null));
+    setFailed(false);
+    usersAdminApi.trafficByNode(userId, days).then(setData).catch(() => setFailed(true));
   }, [userId, days]);
 
   // Прячем блок только если панель явно вернула "нет данных о нодах".
   if (data && (!data.available || data.nodes.length === 0)) return null;
+  // …либо если запрос не удался вовсе. Раньше состояние ошибки было
+  // неотличимо от загрузки (оба — data === null), и на бэкенде без этой ручки
+  // блок навсегда застревал на «загрузка…».
+  if (failed) return null;
 
   return (
     <div className="rounded-xl border border-[var(--border)] p-4">
@@ -882,11 +1053,19 @@ function UserDetailModal({ userId, onClose, onUpdated, onOpenUser }: { userId: n
   const [detail, setDetail] = useState<AdminUserDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"info" | "sub" | "tx">("sub");
   const [saving, setSaving] = useState(false);
   const [discountPersonal, setDiscountPersonal] = useState("");
   const [discountPurchase, setDiscountPurchase] = useState("");
-  const { isOwner } = useAuth();
+  const { isOwner, isReadonlyAdmin, canSection } = useAuth();
+  const { can: hasFeature } = useBranding();
+  const { can, note } = useCapabilities();
+
+  // Вкладка «Подписка» целиком живёт на разделе subscriptions: бэкенд, который
+  // его не объявил, ответит на неё ошибкой. Раз вкладки может не быть — и
+  // открываться первой она может не всегда.
+  const canSub = canSection("subscriptions");
+  const tabs = (["sub", "info", "tx"] as const).filter(t => t !== "sub" || canSub);
+  const [tab, setTab] = useState<"info" | "sub" | "tx">(canSub ? "sub" : "info");
 
   const load = useCallback(() => {
     setLoading(true);
@@ -928,7 +1107,7 @@ function UserDetailModal({ userId, onClose, onUpdated, onOpenUser }: { userId: n
     try {
       await usersAdminApi.block(userId, willBlock);
       load(); onUpdated();
-    } catch (e) { alert(e instanceof ApiError ? e.detail : "Ошибка"); }
+    } catch (e) { if (!note("users.block", e)) alert(e instanceof ApiError ? e.detail : "Ошибка"); }
     finally { setSaving(false); }
   };
 
@@ -938,7 +1117,7 @@ function UserDetailModal({ userId, onClose, onUpdated, onOpenUser }: { userId: n
     try {
       await usersAdminApi.setDiscount(userId, Number(discountPersonal), Number(discountPurchase));
       load(); onUpdated();
-    } catch (e) { alert(e instanceof ApiError ? e.detail : "Ошибка"); }
+    } catch (e) { if (!note("users.discount", e)) alert(e instanceof ApiError ? e.detail : "Ошибка"); }
     finally { setSaving(false); }
   };
 
@@ -977,7 +1156,7 @@ function UserDetailModal({ userId, onClose, onUpdated, onOpenUser }: { userId: n
           <>
             {/* Tabs */}
             <div className="flex border-b border-[var(--border)] px-5">
-              {(["sub", "info", "tx"] as const).map(t => (
+              {tabs.map(t => (
                 <button key={t} onClick={() => setTab(t)}
                   className={`mr-4 border-b-2 pb-2.5 pt-3 text-xs font-medium transition-colors ${tab === t ? "border-accent text-fg" : "border-transparent text-fg-muted hover:text-fg"}`}>
                   {t === "sub" ? "Подписка" : t === "info" ? "Профиль" : "Транзакции"}
@@ -1001,7 +1180,10 @@ function UserDetailModal({ userId, onClose, onUpdated, onOpenUser }: { userId: n
                       ["Роль", roleInfo?.label ?? "—"],
                       ["Язык", u.language],
                       ["Реф. код", u.referral_code],
-                      ["Баллы", String(u.points)],
+                      // Баллы — механика бота, а не кабинета. Там, где её нет,
+                      // «0» читается как «человек ничего не накопил», хотя
+                      // копить нечего в принципе.
+                      ...(hasFeature("points") ? [["Баллы", String(u.points)]] : []),
                       ["Зарегистрирован", u.created_at ? formatDate(u.created_at) : "—"],
                       ["Пробный доступен", u.is_trial_available ? "Да" : "Нет"],
                       ["Последний вход", detail.logins?.last_login_at ? formatDate(detail.logins.last_login_at) : "—"],
@@ -1023,7 +1205,9 @@ function UserDetailModal({ userId, onClose, onUpdated, onOpenUser }: { userId: n
                   {/* Трафик по нодам (живьём из панели) */}
                   <TrafficByNodeBlock userId={userId} />
 
-                  {/* Discounts */}
+                  {/* Discounts. Карточка существует ради кнопки «Сохранить»:
+                      менять нечем — показывать два поля незачем. */}
+                  {!isReadonlyAdmin && can("users.discount") && (
                   <div className="rounded-xl border border-[var(--border)] p-4">
                     <p className="mb-3 text-xs font-semibold text-fg">Скидки</p>
                     <div className="grid grid-cols-2 gap-3">
@@ -1045,6 +1229,7 @@ function UserDetailModal({ userId, onClose, onUpdated, onOpenUser }: { userId: n
                       {saving ? "Сохранение…" : "Сохранить скидки"}
                     </button>
                   </div>
+                  )}
 
                   {/* Доступ к админке (гранулярные роли) — только владелец, не для владельцев/системных */}
                   {isOwner && u.role != null && u.role < 5 && (
@@ -1052,10 +1237,12 @@ function UserDetailModal({ userId, onClose, onUpdated, onOpenUser }: { userId: n
                   )}
 
                   {/* Block */}
+                  {!isReadonlyAdmin && can("users.block") && (
                   <button onClick={toggleBlock} disabled={saving}
                     className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${u.is_blocked ? "border-success/20 bg-success/8 text-success hover:bg-success/15" : "border-danger/20 bg-danger/8 text-danger hover:bg-danger/15"}`}>
                     {u.is_blocked ? <><CheckCircle className="h-4 w-4" />Разблокировать</> : <><Ban className="h-4 w-4" />Заблокировать</>}
                   </button>
+                  )}
                 </div>
               )}
 
@@ -1105,6 +1292,23 @@ export default function AdminUsersPage() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkMsg, setBulkMsg] = useState<string | null>(null);
   const { isReadonlyAdmin } = useAuth();
+  const { can: hasFeature } = useBranding();
+  const { can, note, disable } = useCapabilities();
+
+  // Фильтры и сортировка — единственные органы управления, чью доступность
+  // бэкенд объявляет не заранее, а прямо в ответ на запрос списка (501 «так не
+  // умею»). Чтобы понять, ИЗ-ЗА ЧЕГО пришёл отказ, запоминаем, что админ
+  // поменял последним: одним движением меняется ровно один фильтр.
+  const pendingFilter = useRef<string | null>(null);
+
+  // Возврат фильтра к тому виду, который бэкенд отдаёт. Без него список так и
+  // остался бы пустым с красной плашкой, хотя данные прекрасно читаются.
+  const resetFilter = useCallback((key: string) => {
+    if (key === "users.filter.role") setRoleFilter("");
+    else if (key === "users.filter.expiring") setExpiring("");
+    else if (key === "users.sort") setSortBy("created_at");
+    else if (key === "users.order") setSortOrder("desc");
+  }, []);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -1116,15 +1320,23 @@ export default function AdminUsersPage() {
       sort: sortBy, order: sortOrder,
       expiring: expiring ? Number(expiring) : undefined,
     })
-      .then(r => { setUsers(r.items); setTotal(r.total); })
-      .catch(e => setError(e instanceof ApiError ? e.detail : "Ошибка"))
+      .then(r => { setUsers(r.items); setTotal(r.total); setError(null); pendingFilter.current = null; })
+      .catch(e => {
+        const key = pendingFilter.current;
+        pendingFilter.current = null;
+        // «Не умею» про только что выбранный фильтр — не ошибка экрана: убираем
+        // сам фильтр и перезапрашиваем список без него.
+        if (key && note(key, e)) { resetFilter(key); return; }
+        setError(e instanceof ApiError ? e.detail : "Ошибка");
+      })
       .finally(() => setLoading(false));
-  }, [offset, search, roleFilter, statusFilter, sortBy, sortOrder, expiring]);
+  }, [offset, search, roleFilter, statusFilter, sortBy, sortOrder, expiring, note, resetFilter]);
 
   useEffect(() => { load(); }, [load]);
 
-  const handleSearch = (v: string) => { setSearch(v); setOffset(0); };
-  const setFilter = (fn: () => void) => { fn(); setOffset(0); };
+  const handleSearch = (v: string) => { pendingFilter.current = null; setSearch(v); setOffset(0); };
+  // `key` — какой именно фильтр трогают: по нему разбираем отказ бэкенда выше.
+  const setFilter = (key: string | null, fn: () => void) => { pendingFilter.current = key; fn(); setOffset(0); };
 
   const [exporting, setExporting] = useState(false);
   const handleExport = async () => {
@@ -1138,7 +1350,9 @@ export default function AdminUsersPage() {
         sort: sortBy, order: sortOrder,
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Экспорт не удался");
+      const msg = e instanceof Error ? e.message : "Экспорт не удался";
+      if (NO_EXPORT_ROUTE.test(msg)) { disable("users.export"); return; }
+      setError(msg);
     } finally {
       setExporting(false);
     }
@@ -1167,7 +1381,7 @@ export default function AdminUsersPage() {
       setBulkMsg(`Применено к ${r.applied} из ${r.matched}`);
       load();
     } catch (e) {
-      setBulkMsg(e instanceof ApiError ? e.detail : "Ошибка");
+      if (!note("users.bulk", e)) setBulkMsg(e instanceof ApiError ? e.detail : "Ошибка");
     } finally {
       setBulkBusy(false);
     }
@@ -1182,6 +1396,7 @@ export default function AdminUsersPage() {
         <h1 className="text-2xl font-bold tracking-tight text-fg">Пользователи</h1>
         <div className="flex items-center gap-3">
           <span className="hidden text-sm text-fg-muted sm:inline">{total} всего</span>
+          {can("users.export") && (
           <button
             onClick={handleExport}
             disabled={exporting || total === 0}
@@ -1191,6 +1406,7 @@ export default function AdminUsersPage() {
             <Download className="h-4 w-4" />
             {exporting ? "Готовим…" : "Экспорт Excel"}
           </button>
+          )}
         </div>
       </div>
 
@@ -1206,9 +1422,10 @@ export default function AdminUsersPage() {
 
       {/* Фильтры и сортировка */}
       <div className="flex flex-wrap items-center gap-2">
+        {can("users.filter.role") && (
         <select
           value={roleFilter}
-          onChange={e => setFilter(() => setRoleFilter(e.target.value))}
+          onChange={e => setFilter("users.filter.role", () => setRoleFilter(e.target.value))}
           className="h-9 rounded-lg border border-[var(--border)] bg-bg px-2.5 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent"
         >
           <option value="">Все роли</option>
@@ -1217,18 +1434,22 @@ export default function AdminUsersPage() {
           <option value="3">Администратор</option>
           <option value="5">Владелец</option>
         </select>
+        )}
+        {/* Статус (активен/заблокирован) отдельного ключа не имеет: это тот же
+            список, и бэкенд, умеющий список, умеет и его. */}
         <select
           value={statusFilter}
-          onChange={e => setFilter(() => setStatusFilter(e.target.value))}
+          onChange={e => setFilter(null, () => setStatusFilter(e.target.value))}
           className="h-9 rounded-lg border border-[var(--border)] bg-bg px-2.5 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent"
         >
           <option value="">Все статусы</option>
           <option value="active">Активные</option>
           <option value="blocked">Заблокированные</option>
         </select>
+        {can("users.filter.expiring") && (
         <select
           value={expiring}
-          onChange={e => setFilter(() => setExpiring(e.target.value))}
+          onChange={e => setFilter("users.filter.expiring", () => setExpiring(e.target.value))}
           title="Подписка истекает в ближайшие N дней"
           className="h-9 rounded-lg border border-[var(--border)] bg-bg px-2.5 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent"
         >
@@ -1238,30 +1459,37 @@ export default function AdminUsersPage() {
           <option value="14">Истекают ≤ 14 дн</option>
           <option value="30">Истекают ≤ 30 дн</option>
         </select>
+        )}
+        {(can("users.sort") || can("users.order")) && (
         <div className="ml-auto flex items-center gap-2">
           <span className="text-xs text-fg-subtle">Сортировка:</span>
+          {can("users.sort") && (
           <select
             value={sortBy}
-            onChange={e => setFilter(() => setSortBy(e.target.value))}
+            onChange={e => setFilter("users.sort", () => setSortBy(e.target.value))}
             className="h-9 rounded-lg border border-[var(--border)] bg-bg px-2.5 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent"
           >
             <option value="created_at">Дата регистрации</option>
             <option value="last_login">Последний вход</option>
             <option value="name">Имя</option>
           </select>
+          )}
+          {can("users.order") && (
           <button
             type="button"
-            onClick={() => setFilter(() => setSortOrder(o => o === "asc" ? "desc" : "asc"))}
+            onClick={() => setFilter("users.order", () => setSortOrder(o => o === "asc" ? "desc" : "asc"))}
             title={sortOrder === "asc" ? "По возрастанию" : "По убыванию"}
             className="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] bg-bg text-fg-muted hover:text-fg"
           >
             {sortOrder === "asc" ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
           </button>
+          )}
         </div>
+        )}
       </div>
 
       {/* Массовые действия над текущей выборкой (только обычные пользователи) */}
-      {!isReadonlyAdmin && (
+      {!isReadonlyAdmin && can("users.bulk") && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-bg-subtle px-3 py-2.5">
           <span className="text-xs font-medium text-fg-muted">Массово по фильтру:</span>
           <select
@@ -1270,7 +1498,9 @@ export default function AdminUsersPage() {
             className="h-8 rounded-lg border border-[var(--border)] bg-bg px-2 text-xs text-fg focus:outline-none focus:ring-1 focus:ring-accent"
           >
             <option value="">— выбрать действие —</option>
-            <option value="points">Начислить баллы</option>
+            {/* Баллы и персональные скидки — механики бота: там, где их нет,
+                пункт списка обещал бы несуществующее. */}
+            {hasFeature("points") && <option value="points">Начислить баллы</option>}
             <option value="discount">Персональная скидка %</option>
             <option value="block">Заблокировать</option>
             <option value="unblock">Разблокировать</option>

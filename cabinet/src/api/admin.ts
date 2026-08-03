@@ -448,6 +448,8 @@ export interface UpdatesInfo {
 export const updatesAdminApi = {
   // force=true (кнопка «Проверить») — обходит серверный кэш для моментальной проверки.
   get: (force = false) => adminApi.get<UpdatesInfo>(`/updates${force ? "?force=1" : ""}`),
+  // Только установленная версия — без похода на GitHub (для бейджа в шапке).
+  version: () => adminApi.get<{ version: string }>("/updates/version"),
 };
 
 export const grantsAdminApi = {
@@ -964,6 +966,9 @@ export interface AdminAdLink {
   code: string;
   is_active: boolean;
   created_at: string | null;
+  /** Готовая ссылка от бэкенда, если он её знает: у разных ботов формат свой
+   *  (наш сайт — `?ref=`, Telegram-боты — deep-link). Пусто — показываем код. */
+  url?: string;
   stats?: {
     registrations: number;
     trials: number;

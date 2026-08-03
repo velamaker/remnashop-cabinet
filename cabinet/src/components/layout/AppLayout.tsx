@@ -141,6 +141,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
               Админ панель
             </NavLink>
           )}
+          {/* «Информация» — редактируемые страницы бэкенда (FAQ, правила, оферта).
+              Нет их у бэкенда — нет и пункта, иначе раздел открывается пустым. */}
+          {can("info_pages") && (
           <NavLink
             to="/info"
             className={({ isActive }) =>
@@ -155,6 +158,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
             <Info className="h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
             {t("nav.info")}
           </NavLink>
+          )}
 
           <div className="mt-2 px-2.5">
             <span className="block break-all text-xs leading-snug text-fg-subtle">{displayName}</span>

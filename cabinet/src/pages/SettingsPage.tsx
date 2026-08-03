@@ -78,16 +78,18 @@ function EmailVerificationBlock() {
           {t("set.sendConfirmCode")}
         </Button>
       ) : (
-        <form onSubmit={handleConfirm} className="flex gap-2">
-          <Input
-            name="code"
-            placeholder="123456"
-            maxLength={6}
-            value={code}
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-            className="flex-1"
-          />
-          <Button type="submit" size="sm" isLoading={isConfirming}>
+        <form onSubmit={handleConfirm} className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="min-w-0 flex-1">
+            <Input
+              name="code"
+              placeholder="123456"
+              maxLength={6}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+              className="w-full"
+            />
+          </div>
+          <Button type="submit" size="sm" isLoading={isConfirming} className="whitespace-nowrap">
             {t("set.confirm")}
           </Button>
         </form>
@@ -205,28 +207,32 @@ function BackupAccessBlock() {
             {emailVerified ? (
               <p className="pl-7 text-sm text-fg-muted">{user.email}</p>
             ) : !codeSent ? (
-              <div className="flex gap-2 pl-7">
-                <Input
-                  type="email"
-                  placeholder="you@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="flex-1"
-                />
-                <Button size="sm" variant="secondary" onClick={handleSendCode} isLoading={busy} disabled={!email}>
+              <div className="flex flex-col gap-2 pl-7 sm:flex-row sm:items-center">
+                <div className="min-w-0 flex-1">
+                  <Input
+                    type="email"
+                    placeholder="you@example.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full"
+                  />
+                </div>
+                <Button size="sm" variant="secondary" onClick={handleSendCode} isLoading={busy} disabled={!email} className="whitespace-nowrap">
                   {t("set.sendCode")}
                 </Button>
               </div>
             ) : (
-              <form onSubmit={handleConfirm} className="flex gap-2 pl-7">
-                <Input
-                  placeholder="123456"
-                  maxLength={6}
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-                  className="flex-1"
-                />
-                <Button type="submit" size="sm" isLoading={busy}>
+              <form onSubmit={handleConfirm} className="flex flex-col gap-2 pl-7 sm:flex-row sm:items-center">
+                <div className="min-w-0 flex-1">
+                  <Input
+                    placeholder="123456"
+                    maxLength={6}
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                    className="w-full"
+                  />
+                </div>
+                <Button type="submit" size="sm" isLoading={busy} className="whitespace-nowrap">
                   {t("set.confirm")}
                 </Button>
               </form>
@@ -250,17 +256,19 @@ function BackupAccessBlock() {
             {hasPassword ? (
               <p className="pl-7 text-sm text-fg-muted">{t("set.passwordSet")}</p>
             ) : emailVerified ? (
-              <form onSubmit={handleSetPassword} className="flex gap-2 pl-7">
-                <Input
-                  type="password"
-                  placeholder={t("set.min8")}
-                  autoComplete="new-password"
-                  minLength={8}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="flex-1"
-                />
-                <Button type="submit" size="sm" isLoading={busy} disabled={password.length < 8}>
+              <form onSubmit={handleSetPassword} className="flex flex-col gap-2 pl-7 sm:flex-row sm:items-center">
+                <div className="min-w-0 flex-1">
+                  <Input
+                    type="password"
+                    placeholder={t("set.min8")}
+                    autoComplete="new-password"
+                    minLength={8}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full"
+                  />
+                </div>
+                <Button type="submit" size="sm" isLoading={busy} disabled={password.length < 8} className="whitespace-nowrap">
                   {t("common.save")}
                 </Button>
               </form>
@@ -371,36 +379,44 @@ function ManageEmailBlock() {
           )}
         </div>
       ) : !codeSent ? (
-        <div className="flex gap-2">
-          <Input
-            type="email"
-            placeholder="new@example.com"
-            value={newEmail}
-            onChange={(e) => setNewEmail(e.target.value)}
-            className="flex-1"
-          />
-          <Button size="sm" variant="secondary" onClick={handleSendCode} isLoading={busy} disabled={!newEmail}>
-            {t("set.sendCode")}
-          </Button>
-          <Button size="sm" variant="ghost" onClick={reset}>
-            {t("common.cancel")}
-          </Button>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="min-w-0 flex-1">
+            <Input
+              type="email"
+              placeholder="new@example.com"
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+              className="w-full"
+            />
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="secondary" onClick={handleSendCode} isLoading={busy} disabled={!newEmail} className="whitespace-nowrap">
+              {t("set.sendCode")}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={reset} className="whitespace-nowrap">
+              {t("common.cancel")}
+            </Button>
+          </div>
         </div>
       ) : (
-        <form onSubmit={handleConfirm} className="flex gap-2">
-          <Input
-            placeholder="123456"
-            maxLength={6}
-            value={code}
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-            className="flex-1"
-          />
-          <Button type="submit" size="sm" isLoading={busy}>
-            {t("set.confirm")}
-          </Button>
-          <Button size="sm" variant="ghost" onClick={reset}>
-            {t("common.cancel")}
-          </Button>
+        <form onSubmit={handleConfirm} className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="min-w-0 flex-1">
+            <Input
+              placeholder="123456"
+              maxLength={6}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+              className="w-full"
+            />
+          </div>
+          <div className="flex gap-2">
+            <Button type="submit" size="sm" isLoading={busy} className="whitespace-nowrap">
+              {t("set.confirm")}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={reset} className="whitespace-nowrap">
+              {t("common.cancel")}
+            </Button>
+          </div>
         </form>
       )}
 

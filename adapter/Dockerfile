@@ -40,7 +40,10 @@ RUN pip install --no-cache-dir \
       watchfiles==1.2.0 \
       websockets==17.0
 
-COPY main.py compose.py admin.py state.py route_map.json selfcheck.py ./
+COPY main.py compose.py state.py route_map.json selfcheck.py ./
+# Модули админки — по маске, а не поимённо: список растёт, и забытый в этой
+# строке файл означает молча пропавший раздел (наступали трижды).
+COPY admin*.py ./
 
 # Своё состояние (паузы подписок) — в томе: слой образа не переживёт обновления.
 ENV ADAPTER_STATE=/data/state.db

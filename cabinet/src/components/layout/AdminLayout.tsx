@@ -52,6 +52,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
 import { Admin2FAUnlock } from "@/components/admin/Admin2FA";
 import { AdminNotifBell } from "@/components/admin/AdminNotifBell";
+import { updatesAdminApi } from "@/api/admin";
 
 // section — ключ раздела прав (см. backend permissions.py). Пункт показывается,
 // только если у пользователя есть доступ к разделу (fullAccess или в списке).
@@ -194,6 +195,16 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  // Установленная версия — чтобы при разборе «а что у тебя стоит» не лазить в
+  // консоль сервера. Ручка лёгкая (читает файл VERSION), без похода на GitHub.
+  // Не ответила — бейджа просто нет: на чужом бэкенде такой ручки может не быть.
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    updatesAdminApi
+      .version()
+      .then((r) => setVersion(r.version))
+      .catch(() => setVersion(null));
+  }, []);
   const drawerNavRef = useRef<HTMLElement>(null);
   // При открытии меню — скролл к активному пункту (а не всегда наверх).
   useEffect(() => {
@@ -325,6 +336,15 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             <ChevronLeft className="h-4 w-4" strokeWidth={1.75} />
             <span className="text-sm font-medium">Кабинет</span>
           </NavLink>
+          {version && (
+            <NavLink
+              to="/admin/updates"
+              title="Версия бэкенда (бота)"
+              className="font-mono text-[10px] text-fg-subtle transition-colors hover:text-accent"
+            >
+              v{version}
+            </NavLink>
+          )}
           <ThemeSwitcher />
         </div>
       </div>
@@ -381,7 +401,16 @@ export function AdminLayout({ children }: { children: ReactNode }) {
       {/* Main — единственный скролл-контейнер страницы (app-scroll) */}
       <main className="app-scroll flex-1 min-w-0 px-5 pb-8 pt-[calc(5rem+env(safe-area-inset-top))] md:px-8 md:pt-8">
         {/* Переключатель темы — вверху справа области контента (в потоке: прокручивается со страницей, не парит). Десктоп; на мобиле он в верхней панели. */}
-        <div className="mb-3 hidden justify-end md:flex">
+        <div className="mb-3 hidden items-center justify-end gap-2 md:flex">
+          {version && (
+            <NavLink
+              to="/admin/updates"
+              title="Версия бэкенда (бота) — открыть «Обновления»"
+              className="rounded-lg border border-[var(--border)] px-2 py-1 font-mono text-[11px] text-fg-subtle transition-colors hover:border-accent hover:text-accent"
+            >
+              v{version}
+            </NavLink>
+          )}
           <ThemeSwitcher />
         </div>
         <div key={location.pathname} className="mx-auto max-w-6xl animate-fade-in">

@@ -1,4 +1,7 @@
+from urllib.parse import urlsplit
+
 from aiogram.enums import ButtonStyle
+from loguru import logger
 from aiogram_dialog import Dialog, StartMode
 from aiogram_dialog.widgets.input import MessageInput
 from aiogram_dialog.widgets.style import BaseStyle, Style
@@ -37,7 +40,7 @@ from .getters import (
     invite_getter,
     menu_getter as _base_menu_getter,
 )
-from .menu_config import DEFAULT_TEXTS, NAV_KEYS, load_menu_config
+from .menu_config import DEFAULT_TEXTS, NAV_KEYS, load_menu_config, validate_custom_url
 from .handlers import (
     on_device_delete_all_confirm,
     on_device_delete_confirm,
@@ -58,8 +61,11 @@ try:
     from src.telegram.routers.overlay_gift import open_gift_from_menu
 
     _GIFT_AVAILABLE = True
-except Exception:  # noqa: BLE001
+except Exception as _gift_exc:  # noqa: BLE001
     _GIFT_AVAILABLE = False
+    # Без этой строки кнопка «Подарить подписку» просто не появлялась в меню, и
+    # понять почему было нечем: в админке галочка стоит, а в боте кнопки нет.
+    logger.warning(f"Overlay gift menu button disabled: {_gift_exc}")
 
     async def open_gift_from_menu(callback, widget, dialog_manager) -> None:  # type: ignore[misc]
         await callback.answer()
@@ -80,7 +86,24 @@ _ACCESS_DEFS: dict[str, dict] = {
     "connect_miniapp": {"kind": "webapp", "i18n": "btn-menu.connect", "path": "/devices", "needs_connect": True},
     "connect_url":     {"kind": "url", "i18n": "btn-menu.connect-reserve", "path": "/devices", "needs_connect": True},
     "remna_sub":       {"kind": "url", "text": "📲 Подписка (резерв)", "sub": True, "needs_connect": True},
+    # OVERLAY: своя мини-аппа (страница подписки, чужое мини-приложение). Ссылку
+    # берём не из кабинета, а из настройки custom_url — см. menu_config.
+    "custom_miniapp":  {"kind": "webapp", "text": "🚀 Мини-приложение", "custom": True, "needs_connect": False},
 }
+
+
+def _safe_custom_url(value) -> str | None:
+    """Адрес своей мини-аппы, если он пригоден для кнопки. Иначе None."""
+    try:
+        url = validate_custom_url(value)
+    except ValueError:
+        return None
+    return url or None
+
+
+def _is_telegram_link(url: str | None) -> bool:
+    host = (urlsplit(url or "").hostname or "").lower()
+    return host in ("t.me", "telegram.me", "telegram.dog")
 
 
 # ── Геттер меню с флагами и ПОРЯДКОМ кнопок ───────────────────────────────────
@@ -123,14 +146,22 @@ async def menu_getter(i18n: FromDishka[TranslatorRunner], **kwargs):
     data["gift_color"] = colors_cfg.get("gift")
 
     items: list[dict] = []
-    if web_enabled:
-        for key in cfg.get("order", []):
+    for key in cfg.get("order", []):
             defn = _ACCESS_DEFS.get(key)
             if not defn or not cfg.get(key):
                 continue
+            # Все кнопки, кроме своей мини-аппы, ведут в кабинет — без него их нет.
+            if not defn.get("custom") and not web_enabled:
+                continue
             if defn["needs_connect"] and not connectable:
                 continue
-            if defn.get("sub"):
+            if defn.get("custom"):
+                # Своя мини-аппа: адрес из админки (или из BOT_MINI_APP). Проверяем
+                # ЕЩЁ РАЗ здесь: Telegram отвергает сообщение целиком, если хоть
+                # одна кнопка с плохим адресом, — то есть кривая ссылка убрала бы
+                # у людей всё меню, а не одну кнопку.
+                url = _safe_custom_url(cfg.get("custom_url"))
+            elif defn.get("sub"):
                 url = sub_url
             else:
                 url = (base_url + defn.get("path", "")) if base_url else None
@@ -142,8 +173,14 @@ async def menu_getter(i18n: FromDishka[TranslatorRunner], **kwargs):
             # Цвет: кастомный из админки → иначе дефолт (webapp синяя, ссылка обычная).
             default_color = "primary" if defn["kind"] == "webapp" else None
             color = colors_cfg.get(key) or default_color
+            kind = defn["kind"]
+            if defn.get("custom") and _is_telegram_link(url):
+                # Ссылка на t.me (мини-аппа чужого бота, канал, приглашение):
+                # web_app такие адреса не принимает — отдаём обычной ссылкой,
+                # Telegram сам откроет мини-аппу внутри себя.
+                kind = "url"
             items.append(
-                {"id": key, "kind": defn["kind"], "text": text, "url": url, "color": color}
+                {"id": key, "kind": kind, "text": text, "url": url, "color": color}
             )
     data["menu_access_items"] = items
     return data

@@ -4,7 +4,13 @@ import { Save, CheckCircle2, SquareMenu, ChevronUp, ChevronDown, Smile } from "l
 import { menuAdminApi, type MenuConfig, type BotButton } from "@/api/menu";
 import { ApiError } from "@/types/api";
 
-type Key = "cabinet_miniapp" | "cabinet_url" | "connect_miniapp" | "connect_url" | "remna_sub";
+type Key =
+  | "cabinet_miniapp"
+  | "cabinet_url"
+  | "connect_miniapp"
+  | "connect_url"
+  | "remna_sub"
+  | "custom_miniapp";
 
 const META: Record<Key, { title: string; desc: string }> = {
   cabinet_miniapp: {
@@ -27,6 +33,10 @@ const META: Record<Key, { title: string; desc: string }> = {
     title: "Подписка (резерв)",
     desc: "Стандартная страница подписки Remnawave — на случай, если кабинет недоступен.",
   },
+  custom_miniapp: {
+    title: "Своё мини-приложение",
+    desc: "Ваша страница подписки или чужая мини-аппа. Ссылку укажите ниже — она открывается внутри Telegram.",
+  },
 };
 
 const ORDER_FALLBACK: Key[] = [
@@ -35,6 +45,7 @@ const ORDER_FALLBACK: Key[] = [
   "connect_miniapp",
   "connect_url",
   "remna_sub",
+  "custom_miniapp",
 ];
 
 // Базовые кнопки навигации (состав фиксирован в боте; ключи совпадают с NAV_KEYS).
@@ -404,6 +415,25 @@ export default function AdminMenuPage() {
 
                 {on && isOpen && (
                   <div className="border-t border-border-subtle px-3 pb-3 pt-3">
+                    {key === "custom_miniapp" && (
+                      <div className="mb-3">
+                        <label className="mb-1 block text-[11px] font-semibold text-fg-muted">
+                          Ссылка на мини-приложение
+                        </label>
+                        <input
+                          value={cfg.custom_url ?? ""}
+                          onChange={(e) => setCfg({ ...cfg, custom_url: e.target.value })}
+                          placeholder="https://sub.example.com/app"
+                          className="w-full rounded-lg border border-[var(--border)] bg-bg px-2.5 py-1.5 text-sm text-fg outline-none focus:border-accent"
+                        />
+                        <p className="mt-1 text-[10px] leading-snug text-fg-subtle">
+                          Только https. Ссылка <b>общая для всех пользователей</b> — не вставляйте
+                          сюда свою личную ссылку подписки. Пустое поле = кнопки не будет, даже
+                          если галочка стоит. Адрес на t.me откроется обычной ссылкой (Telegram
+                          не пускает мини-приложения по t.me).
+                        </p>
+                      </div>
+                    )}
                     {renderStyleEditor(key)}
                   </div>
                 )}

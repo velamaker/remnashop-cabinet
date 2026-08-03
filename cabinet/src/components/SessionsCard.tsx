@@ -88,7 +88,10 @@ export function SessionsCard() {
 
   return (
     <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
-      <div className="flex items-center justify-between gap-3">
+      {/* На узком экране заголовок и кнопка в одну строку не помещаются: подпись
+          «Выйти со всех» ломалась на две строки и распирала карточку (Android,
+          360px). Ниже sm — ставим их друг под другом. */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
         <div className="flex items-center gap-2">
           <Monitor className="h-5 w-5 text-accent" />
           <h3 className="text-base font-bold text-fg">{t("sessions.title")}</h3>
@@ -97,7 +100,7 @@ export function SessionsCard() {
           type="button"
           onClick={logoutAll}
           disabled={busy}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-sm font-medium text-danger hover:bg-danger/15 disabled:opacity-50"
+          className="inline-flex shrink-0 items-center justify-center gap-1.5 self-start whitespace-nowrap rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-sm font-medium text-danger hover:bg-danger/15 disabled:opacity-50 sm:self-auto"
         >
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
           {t("sessions.logoutAll")}

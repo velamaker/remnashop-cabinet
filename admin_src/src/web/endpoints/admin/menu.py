@@ -30,6 +30,10 @@ class MenuConfigUpdate(BaseModel):
     connect_miniapp: Optional[bool] = None
     connect_url: Optional[bool] = None
     remna_sub: Optional[bool] = None
+    # OVERLAY: своя мини-аппа (чужое мини-приложение или своя страница подписки).
+    custom_miniapp: Optional[bool] = None
+    # Её адрес: только https — Telegram открывает Mini App лишь по нему.
+    custom_url: Optional[str] = None
     # OVERLAY: кнопка «Подарить подписку» (не кнопка доступа — вне порядка).
     gift: Optional[bool] = None
     # Порядок кнопок (список ключей). Нормализуется в menu_config (чужие ключи и
@@ -49,7 +53,12 @@ async def get_menu(_admin: AdminUser) -> dict[str, Any]:
 
 @router.put("")
 async def update_menu(body: MenuConfigUpdate, _admin: AdminUser) -> dict[str, Any]:
-    return save_menu_config(body.model_dump(exclude_none=True))
+    try:
+        return save_menu_config(body.model_dump(exclude_none=True))
+    except ValueError as exc:
+        # Плохой адрес мини-аппы. Молча превращать его в пустоту нельзя: админ
+        # увидел бы «Сохранено» и пустое поле без объяснения, а кнопка бы пропала.
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
 
 
 # ── Цвета кнопок бота (settings.menu.buttons[].color) — авторская фича ──────────

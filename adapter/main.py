@@ -91,6 +91,10 @@ ADMIN_TOKEN = os.environ.get("BEDOLAGA_ADMIN_TOKEN", "")
 STATE_PATH = os.environ.get("ADAPTER_STATE", "/data/state.db")
 ROUTE_MAP_PATH = Path(__file__).with_name("route_map.json")
 TIMEOUT = httpx.Timeout(connect=5.0, read=25.0, write=10.0, pool=5.0)
+# Покупка и продление у них синхронно ходят в панель Remnawave: 25 секунд им не
+# хватает, запрос обрывается, а деньги списываются. Двойное списание мы теперь
+# ловим сверкой, но лучше не доводить — денежным вызовам даём отдельный срок.
+MONEY_TIMEOUT = httpx.Timeout(connect=5.0, read=90.0, write=10.0, pool=5.0)
 # Общий дедлайн на СОБСТВЕННЫЙ обработчик. TIMEOUT выше — это лимит одного вызова
 # бота, а наши ручки собирают экран из нескольких подряд (`/api/info` — до десятка),
 # и на медленном боте вкладка кабинета висела бы минутами вместо честного отказа.
@@ -327,6 +331,80 @@ def _session_deadlines(data: dict[str, Any]) -> dict[str, str | None]:
             "refresh_expires_at", "refresh_expires_in", refresh, 30 * 24 * 3600
         ),
     }
+
+
+# Коды рекламных кампаний бота. Наш кабинет знает один параметр `?ref=`, а у
+# «Бедолаги» это ДВА разных мира: код пригласившего (referral_code) и метка
+# рекламной кампании (campaign_slug). Отправишь не туда — переход не засчитается
+# ни там, ни там. Поэтому спрашиваем у бота список кампаний и решаем по факту.
+_CAMPAIGNS: dict[str, Any] = {"codes": set(), "until": 0.0}
+
+
+async def _campaign_codes() -> set[str]:
+    now = time.time()
+    if now < _CAMPAIGNS["until"]:
+        return _CAMPAIGNS["codes"]
+    codes: set[str] = set()
+    if admin is not None:
+        try:
+            resp = await admin.request("GET", "/campaigns", params={"limit": 100})
+            if resp.status_code < 400:
+                data = resp.json() or {}
+                rows = data.get("campaigns") or data.get("items") or []
+                codes = {
+                    str(c.get("start_parameter") or "") for c in rows if isinstance(c, dict)
+                } - {""}
+        except (httpx.HTTPError, ValueError):
+            codes = _CAMPAIGNS["codes"]  # не смогли спросить — держим прежнее
+    _CAMPAIGNS.update({"codes": codes, "until": now + 300})
+    return codes
+
+
+async def _register_body(body: bytes) -> bytes:
+    """Приводит тело регистрации к тому, что понимает «Бедолага».
+
+    Два расхождения, каждое молча теряло данные: имя человека они ждут в
+    `first_name` (наше `name` просто отбрасывалось), а рекламный код — в
+    `campaign_slug`, если это метка кампании, а не приглашение от друга.
+    """
+    try:
+        data = json.loads(body or b"{}")
+    except ValueError:
+        return body
+    if not isinstance(data, dict):
+        return body
+    name = data.pop("name", None)
+    if name and not data.get("first_name"):
+        data["first_name"] = str(name)[:64]
+    code = str(data.get("referral_code") or "").strip()
+    if code and code in await _campaign_codes():
+        data.pop("referral_code", None)
+        data["campaign_slug"] = code
+    return json.dumps(data, ensure_ascii=False).encode()
+
+
+async def _login_after_register(body: bytes, data: dict[str, Any]) -> dict[str, Any]:
+    """Пробует войти сразу после регистрации теми же email и паролем."""
+    try:
+        creds = json.loads(body or b"{}")
+    except ValueError:
+        return data
+    email, password = creds.get("email"), creds.get("password")
+    if not email or not password:
+        return data
+    try:
+        resp = await _call(
+            "POST", LOGIN_ROUTES["/api/auth/login"],
+            json={"email": email, "password": password},
+        )
+    except Unreachable:
+        return data
+    if resp.status_code >= 400 or not resp.content:
+        return data
+    try:
+        return resp.json() or data
+    except ValueError:
+        return data
 
 
 def _set_session(resp: Response, data: dict[str, Any]) -> None:
@@ -574,7 +652,10 @@ async def health() -> dict[str, Any]:
         "state": state.available,
         "mapped": len(ROUTES.get("routes", {})),
         "composed": len(HANDLERS),
+        # Сколько путей кабинета мы НЕ переводим (у бота их нет). Отдельно
+        # пользовательские и админские: первые видит человек, вторые — только владелец.
         "todo": len(ROUTES.get("todo", [])),
+        "todo_admin": len(ROUTES.get("todo_admin", [])),
     }
 
 
@@ -651,12 +732,39 @@ async def _auth_bridge(kind: str, request: Request) -> Response:
     if not target:
         # Не вход и не выход (смена почты, сброс пароля) — обычный путь через карту.
         return await proxy("api/v1/public/auth/" + kind, request)
+    # Регистрация у них отправляет письмо с подтверждением прямо в этом запросе.
+    # На медленной почте обычного срока не хватает: аккаунт создан, а человек
+    # видит «сервис недоступен» и регистрируется снова — в упор в «email уже
+    # занят». Ждём дольше именно здесь. (timeout=None у httpx означает «ждать
+    # вечно», поэтому ключ добавляем, а не подставляем пустое значение.)
+    extra: dict[str, Any] = {}
+    if "register" in target:
+        extra["timeout"] = MONEY_TIMEOUT
+        body = await _register_body(body)
     up = await _call("POST", target, content=body or None,
                      headers={"content-type": request.headers.get("content-type", "application/json"),
-                              **_forwarded(request)})
+                              **_forwarded(request)},
+                     **extra)
     if up.status_code >= 400:
         return Response(up.content, up.status_code, media_type="application/json")
     data = up.json() if up.content else {}
+    if "register" in target and not any(_tokens(data)):
+        # Их регистрация сессии не открывает: сперва подтверждение почты. Наш
+        # кабинет после регистрации ждёт готовую сессию, и раньше получал пустые
+        # «сроки жизни» — то есть считал человека вошедшим, а он молча вылетал на
+        # витрину. Сначала честно пробуем войти теми же данными (в сборках без
+        # обязательного подтверждения это срабатывает), и только если вход
+        # закрыт — говорим прямо, что делать дальше.
+        data = await _login_after_register(body, data)
+        if not any(_tokens(data)):
+            return Response(
+                json.dumps(
+                    {"detail": "Аккаунт создан. Подтвердите почту по ссылке из письма "
+                               "и войдите."},
+                    ensure_ascii=False,
+                ),
+                403, media_type="application/json",
+            )
     # Кабинет ждёт только сроки жизни сессии — сами токены он не хранит.
     out = Response(json.dumps(_session_deadlines(data), ensure_ascii=False), 200,
                    media_type="application/json")
@@ -714,7 +822,10 @@ async def proxy(full_path: str, request: Request) -> Response:
             params=path_params, body=await request.body(),
         )
         try:
-            result = await asyncio.wait_for(own(ctx), OWN_DEADLINE)
+            # У денежных ручек предел свой: см. compose.handler(deadline=...).
+            result = await asyncio.wait_for(
+                own(ctx), getattr(own, "deadline", OWN_DEADLINE)
+            )
         except TimeoutError:
             # Обработчик ходит к боту несколько раз подряд, и на каждый вызов свой
             # 25-секундный таймаут: без общего дедлайна запрос кабинета висит минутами,
@@ -750,7 +861,14 @@ async def proxy(full_path: str, request: Request) -> Response:
             # Сырой ответ (например, байты логотипа) — отдаём как есть.
             return Response(result.content, result.status_code,
                             media_type=result.headers.get("content-type"))
-        return Response(json.dumps(result, ensure_ascii=False), 200, media_type="application/json")
+        out = Response(json.dumps(result, ensure_ascii=False), 200, media_type="application/json")
+        if ours == "/api/account/delete":
+            # Аккаунта больше нет — гасим сессию здесь же, как делает наш бэкенд.
+            if access:
+                _revoke(access)
+            out.delete_cookie(ACCESS_COOKIE, path="/")
+            out.delete_cookie(REFRESH_COOKIE, path="/")
+        return out
 
     # 2. Простая трансляция пути по карте.
     target = _resolve(ours)

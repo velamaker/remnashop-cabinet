@@ -108,6 +108,8 @@ function EmptySubscription() {
 export default function DashboardPage() {
   const t = useT();
   const { user } = useAuth();
+  // Что умеет бэкенд: пауза подписки есть не у каждого бота (см. features).
+  const { can } = useBranding();
   const { subscription, isLoading, reload } = useSubscription();
   const [isReissuing, setIsReissuing] = useState(false);
   const [reissueError, setReissueError] = useState<string | null>(null);
@@ -180,7 +182,10 @@ export default function DashboardPage() {
       <PromoBanner />
       <RenewalBanner subscription={subscription} />
       <TrialDiscountBanner />
-      <SubscriptionFreeze />
+      {/* Пауза подписки — фича кабинета, но держится на бэкенде: он должен уметь
+          и снять доступ, и вернуть остаток дней. Не умеет — кнопку не показываем,
+          иначе человек жмёт её и получает «раздел недоступен». */}
+      {can("freeze") && <SubscriptionFreeze />}
       <SpeedtestWidget />
 
       <div className="card-hero p-6 sm:p-7">

@@ -10,6 +10,7 @@ import { I18nProvider } from "@/i18n/I18nContext";
 import LoginPage from "@/pages/LoginPage";
 import RegisterPage from "@/pages/RegisterPage";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
+import VerifyEmailPage from "@/pages/VerifyEmailPage";
 import StatusPage from "@/pages/StatusPage";
 import PricingPage from "@/pages/PricingPage";
 import DashboardPage from "@/pages/DashboardPage";
@@ -99,6 +100,9 @@ export default function App() {
                 </PublicOnlyRoute>
               }
             />
+            {/* Подтверждение почты по ссылке из письма. Открыто и вошедшим, и
+                гостям: письмо могли открыть на другом устройстве. */}
+            <Route path="/verify-email" element={<VerifyEmailPage />} />
 
             <Route path="/" element={<RootPage />} />
             <Route

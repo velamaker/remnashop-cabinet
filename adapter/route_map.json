@@ -1,126 +1,178 @@
 {
-  "backend": "bedolaga",
-  "prefix": "/cabinet",
-  "routes": {
-    "/api/auth/refresh": {
-      "target": "/cabinet/auth/refresh",
-      "kind": "direct",
-      "methods": [
-        "POST"
-      ]
-    },
-    "/api/auth/login": {
-      "target": "/cabinet/auth/email/login",
-      "kind": "renamed",
-      "methods": [
-        "POST"
-      ]
-    },
-    "/api/auth/register": {
-      "target": "/cabinet/auth/email/register/standalone",
-      "kind": "renamed",
-      "methods": [
-        "POST"
-      ]
-    },
-    "/api/auth/logout": {
-      "target": "/cabinet/auth/logout",
-      "kind": "direct",
-      "methods": [
-        "POST"
-      ]
-    },
-    "/api/auth/telegram": {
-      "target": "/cabinet/auth/telegram",
-      "kind": "direct",
-      "methods": [
-        "POST"
-      ]
-    },
-    "/api/auth/password/reset/request": {
-      "target": "/cabinet/auth/password/forgot",
-      "kind": "renamed",
-      "methods": [
-        "POST"
-      ]
-    },
-    "/api/subscription/trial": {
-      "target": "/cabinet/subscription/trial",
-      "kind": "direct",
-      "methods": [
-        "GET",
-        "POST"
-      ]
-    },
-    "/api/subscription/devices": {
-      "target": "/cabinet/subscription/devices",
-      "kind": "direct",
-      "methods": [
-        "DELETE",
-        "GET",
-        "POST"
-      ]
-    },
-    "/api/subscription/devices/{hwid}": {
-      "target": "/cabinet/subscription/devices/{hwid}",
-      "kind": "direct",
-      "methods": [
-        "DELETE"
-      ]
-    }
+ "backend": "bedolaga",
+ "prefix": "/cabinet",
+ "routes": {
+  "/api/auth/refresh": {
+   "target": "/cabinet/auth/refresh",
+   "kind": "direct",
+   "methods": [
+    "POST"
+   ]
   },
-  "todo": [
-    "/api/auth/telegram/webapp",
-    "/api/auth/telegram/link",
-    "/api/auth/change-password",
-    "/api/auth/password/set",
-    "/api/auth/password/reset/confirm",
-    "/api/auth/email/request-verification",
-    "/api/auth/email/confirm",
-    "/api/auth/email",
-    "/api/subscription/extend",
-    "/api/subscription/reissue",
-    "/api/subscription/server-stats",
-    "/api/subscription/traffic-history",
-    "/api/subscription/service-status",
-    "/api/subscription/freeze-status",
-    "/api/subscription/freeze",
-    "/api/subscription/unfreeze",
-    "/api/apps",
-    "/api/balance/convert-points",
-    "/api/gift/my",
-    "/api/notifications/read",
-    "/api/push/vapid-key",
-    "/api/push/status",
-    "/api/push/subscribe",
-    "/api/push/unsubscribe",
-    "/api/push/test",
-    "/api/sessions",
-    "/api/sessions/logout-all",
-    "/api/support/tickets/{id}",
-    "/api/support/tickets/{id}/close",
-    "/api/account/delete",
-    "/api/gift/create",
-    "/api/account/export",
-    "/api/subscription/purchase",
-    "/api/promocode/activate",
-    "/api/support/tickets/{id}/messages",
-    "/api/auth/email/change"
-  ],
-  "mismatched": {
-    "/api/gift/create": "их /referral/withdrawal/create — это заявка на ВЫВОД денег, а не подарок (у них подарки: /cabinet/gift/purchase, другая форма тела)",
-    "/api/account/export": "их /admin/rbac/audit-log/export — админский аудит-лог, а не выгрузка своих данных",
-    "/api/info": "их /subscription/info — про подписку, а наша «Информация» это FAQ/правила (у них /cabinet/info-pages)",
-    "/api/subscription/offers": "их /promo/offers — персональные промо-скидки, а нам нужны тарифы с ценами (/cabinet/subscription/purchase-options, нужна трансляция формы)",
-    "/api/subscription/purchase": "ОТКАЗ НАМЕРЕННЫЙ (501): покупки подписки картой у них нет вовсе, есть только списание с баланса. Связка «пополнил → дождались зачисления → купили» упирается в три ловушки docs/BEDOLAGA-MONEY.md §3 (безусловное автопродление истёкшей на каждое зачисление, порог баланса перешагивают чужие деньги, их check реально зачисляет). Оплата с баланса закрыта обработчиком /api/subscription/pay-with-balance",
-    "/api/subscription/extend": "то же самое, что /api/subscription/purchase: это оплата картой. Продление с баланса закрыто обработчиками pay-with-balance и /api/balance/spend-on-renewal",
-    "/api/balance/convert-points": "ОТКАЗ НАМЕРЕННЫЙ (501): баллов у них не существует — рефералка начисляет сразу рублями, менять не на что",
-    "/api/balance/topup": "тело другое: у нас рубли+gateway_type, у них amount_kopeks+payment_method(+payment_option) — переводит обработчик compose.topup",
-    "/api/balance/autopay": "у нас POST, у них PATCH — прямой проброс даёт 405; переводит обработчик compose.autopay",
-    "/api/referral/earnings": "форма ответа другая (рубли/копейки, свои поля) — нужен переводчик",
-    "/api/promocode/activate": "форма ответа другая — нужен переводчик",
-    "/api/notifications": "их /cabinet/notifications — это НАСТРОЙКИ рассылок, а не лента; кабинет от такого ответа роняет колокольчик. Лента собирается обработчиком из тикетных уведомлений",
-    "/api/support/tickets/{id}/messages": "нужен свой обработчик: у них другое тело и осмысленные 400/403, которые нельзя глотать",
-    "/api/auth/email/change": "нужен свой обработчик: смена почты у них подтверждается отдельным шагом"
+  "/api/auth/login": {
+   "target": "/cabinet/auth/email/login",
+   "kind": "renamed",
+   "methods": [
+    "POST"
+   ]
+  },
+  "/api/auth/register": {
+   "target": "/cabinet/auth/email/register/standalone",
+   "kind": "renamed",
+   "methods": [
+    "POST"
+   ]
+  },
+  "/api/auth/logout": {
+   "target": "/cabinet/auth/logout",
+   "kind": "direct",
+   "methods": [
+    "POST"
+   ]
+  },
+  "/api/auth/telegram": {
+   "target": "/cabinet/auth/telegram",
+   "kind": "direct",
+   "methods": [
+    "POST"
+   ]
+  },
+  "/api/auth/password/reset/request": {
+   "target": "/cabinet/auth/password/forgot",
+   "kind": "renamed",
+   "methods": [
+    "POST"
+   ]
+  },
+  "/api/subscription/trial": {
+   "target": "/cabinet/subscription/trial",
+   "kind": "direct",
+   "methods": [
+    "GET",
+    "POST"
+   ]
+  },
+  "/api/subscription/devices": {
+   "target": "/cabinet/subscription/devices",
+   "kind": "direct",
+   "methods": [
+    "DELETE",
+    "GET",
+    "POST"
+   ]
+  },
+  "/api/subscription/devices/{hwid}": {
+   "target": "/cabinet/subscription/devices/{hwid}",
+   "kind": "direct",
+   "methods": [
+    "DELETE"
+   ]
   }
+ },
+ "todo": [
+  "DELETE /api/auth/email",
+  "DELETE /api/notifications",
+  "GET /api/push/status",
+  "GET /api/push/vapid-key",
+  "GET /api/sessions",
+  "POST /api/auth/change-password",
+  "POST /api/auth/password/set",
+  "POST /api/balance/convert-points",
+  "POST /api/push/subscribe",
+  "POST /api/push/test",
+  "POST /api/push/unsubscribe",
+  "POST /api/sessions/logout-all"
+ ],
+ "mismatched": {
+  "/api/gift/create": "их /referral/withdrawal/create — это заявка на ВЫВОД денег, а не подарок (у них подарки: /cabinet/gift/purchase, другая форма тела)",
+  "/api/account/export": "их /admin/rbac/audit-log/export — админский аудит-лог, а не выгрузка своих данных",
+  "/api/info": "их /subscription/info — про подписку, а наша «Информация» это FAQ/правила (у них /cabinet/info-pages)",
+  "/api/subscription/offers": "их /promo/offers — персональные промо-скидки, а нам нужны тарифы с ценами (/cabinet/subscription/purchase-options, нужна трансляция формы)",
+  "/api/subscription/purchase": "ОТКАЗ НАМЕРЕННЫЙ (501): покупки подписки картой у них нет вовсе, есть только списание с баланса. Связка «пополнил → дождались зачисления → купили» упирается в три ловушки docs/BEDOLAGA-MONEY.md §3 (безусловное автопродление истёкшей на каждое зачисление, порог баланса перешагивают чужие деньги, их check реально зачисляет). Оплата с баланса закрыта обработчиком /api/subscription/pay-with-balance",
+  "/api/subscription/extend": "то же самое, что /api/subscription/purchase: это оплата картой. Продление с баланса закрыто обработчиками pay-with-balance и /api/balance/spend-on-renewal",
+  "/api/balance/convert-points": "ОТКАЗ НАМЕРЕННЫЙ (501): баллов у них не существует — рефералка начисляет сразу рублями, менять не на что",
+  "/api/balance/topup": "тело другое: у нас рубли+gateway_type, у них amount_kopeks+payment_method(+payment_option) — переводит обработчик compose.topup",
+  "/api/balance/autopay": "у нас POST, у них PATCH — прямой проброс даёт 405; переводит обработчик compose.autopay",
+  "/api/referral/earnings": "форма ответа другая (рубли/копейки, свои поля) — нужен переводчик",
+  "/api/promocode/activate": "форма ответа другая — нужен переводчик",
+  "/api/notifications": "их /cabinet/notifications — это НАСТРОЙКИ рассылок, а не лента; кабинет от такого ответа роняет колокольчик. Лента собирается обработчиком из тикетных уведомлений",
+  "/api/support/tickets/{id}/messages": "нужен свой обработчик: у них другое тело и осмысленные 400/403, которые нельзя глотать",
+  "/api/auth/email/change": "нужен свой обработчик: смена почты у них подтверждается отдельным шагом"
+ },
+ "todo_admin": [
+  "DELETE /api/admin/ad-links",
+  "DELETE /api/admin/grants/catalog",
+  "DELETE /api/admin/notifications",
+  "DELETE /api/admin/plans",
+  "DELETE /api/admin/promocodes",
+  "GET /api/admin/2fa/status",
+  "GET /api/admin/abuse/trials",
+  "GET /api/admin/admin-ip",
+  "GET /api/admin/cashback",
+  "GET /api/admin/digest",
+  "GET /api/admin/email-gate",
+  "GET /api/admin/email-settings",
+  "GET /api/admin/email-template",
+  "GET /api/admin/freeze",
+  "GET /api/admin/grants/catalog",
+  "GET /api/admin/login-alert",
+  "GET /api/admin/morning-summary",
+  "GET /api/admin/new-device",
+  "GET /api/admin/promo-banner",
+  "GET /api/admin/reserve",
+  "GET /api/admin/settings-io/export",
+  "GET /api/admin/statistics/sales",
+  "GET /api/admin/subscription-app",
+  "GET /api/admin/subscriptions/user/{id}/devices | /transactions",
+  "GET /api/admin/traffic-alert",
+  "GET /api/admin/trial-discount",
+  "GET /api/admin/users/{id}/logins | /referrals | /traffic-by-node",
+  "GET /api/admin/winback",
+  "POST /api/admin/2fa/status",
+  "POST /api/admin/apps",
+  "POST /api/admin/email-settings",
+  "POST /api/admin/email-template",
+  "POST /api/admin/gateways",
+  "POST /api/admin/settings-io/export",
+  "POST /api/admin/subscription-app",
+  "POST /api/admin/subscriptions/user/{id}/delete",
+  "POST /api/admin/subscriptions/user/{id}/device-limit",
+  "POST /api/admin/subscriptions/user/{id}/devices/delete",
+  "POST /api/admin/subscriptions/user/{id}/disable",
+  "POST /api/admin/subscriptions/user/{id}/message",
+  "POST /api/admin/subscriptions/user/{id}/points",
+  "POST /api/admin/subscriptions/user/{id}/referral-reset",
+  "POST /api/admin/subscriptions/user/{id}/reissue",
+  "POST /api/admin/subscriptions/user/{id}/reset-traffic",
+  "POST /api/admin/subscriptions/user/{id}/reset-trial",
+  "POST /api/admin/subscriptions/user/{id}/squad-toggle",
+  "POST /api/admin/subscriptions/user/{id}/sync",
+  "POST /api/admin/subscriptions/user/{id}/traffic-limit",
+  "POST /api/admin/users/bulk-action",
+  "PUT /api/admin/ad-links",
+  "PUT /api/admin/admin-ip",
+  "PUT /api/admin/cashback",
+  "PUT /api/admin/digest",
+  "PUT /api/admin/email-gate",
+  "PUT /api/admin/email-settings",
+  "PUT /api/admin/email-template",
+  "PUT /api/admin/freeze",
+  "PUT /api/admin/gateways",
+  "PUT /api/admin/grants/catalog",
+  "PUT /api/admin/login-alert",
+  "PUT /api/admin/morning-summary",
+  "PUT /api/admin/new-device",
+  "PUT /api/admin/notifications",
+  "PUT /api/admin/plans",
+  "PUT /api/admin/promo-banner",
+  "PUT /api/admin/promocodes",
+  "PUT /api/admin/reserve",
+  "PUT /api/admin/subscription-app",
+  "PUT /api/admin/topup",
+  "PUT /api/admin/traffic-alert",
+  "PUT /api/admin/trial-discount",
+  "PUT /api/admin/users/{id}/block | /trial | /role | /discount",
+  "PUT /api/admin/winback"
+ ],
+ "todo_note": "Пути кабинета, которые адаптер НЕ переводит: у «Бедолаги» такого просто нет. Кабинет узнаёт о них заранее из списка возможностей (/api/appearance → features) и не рисует кнопки; прямой запрос получает честный 501 с причиной. Список считается по docs/CABINET-API-CONTRACT.md — обновлять после каждой новой ручки."
 }

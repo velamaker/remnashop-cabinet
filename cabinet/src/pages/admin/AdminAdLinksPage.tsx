@@ -40,7 +40,10 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
           <div>
             <label className="mb-1 block text-xs font-medium text-fg-muted">Код ссылки *</label>
             <input value={code} onChange={e => setCode(e.target.value)} required className="input w-full" placeholder="insta_story_june" />
-            <p className="mt-1 text-xs text-fg-muted">Используется в URL: ?ref=<span className="font-mono">{code || "код"}</span></p>
+            {/* Готовую ссылку покажем после создания — её формат зависит от
+                бэкенда (у нас `?ref=` на сайте, у других ботов deep-link в
+                Telegram), и придумывать его здесь нельзя. */}
+            <p className="mt-1 text-xs text-fg-muted">Метка перехода: <span className="font-mono">{code || "код"}</span></p>
           </div>
           {error && <p className="rounded-xl bg-danger/10 px-4 py-2 text-sm text-danger">{error}</p>}
           <div className="flex gap-3">
@@ -155,7 +158,9 @@ export default function AdminAdLinksPage() {
   };
 
   const copyCode = (link: AdminAdLink) => {
-    navigator.clipboard.writeText(link.code);
+    // Копируем готовую ссылку, если бэкенд её дал: именно её владелец вставляет
+    // в рекламу. Голый код без адреса никуда не ведёт.
+    navigator.clipboard.writeText(link.url || link.code);
     setCopied(link.id);
     setTimeout(() => setCopied(null), 1500);
   };
@@ -185,12 +190,12 @@ export default function AdminAdLinksPage() {
                   {!link.is_active && <span className="rounded-full bg-fg-subtle/20 px-2 py-0.5 text-xs text-fg-muted">Выключена</span>}
                 </div>
                 <div className="mt-0.5 flex items-center gap-2">
-                  <span className="font-mono text-xs text-fg-muted">{link.code}</span>
+                  <span className="font-mono text-xs text-fg-muted truncate">{link.url || link.code}</span>
                   {link.created_at && <span className="text-xs text-fg-subtle">· {formatDate(link.created_at)}</span>}
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={() => copyCode(link)} className="rounded-lg p-1.5 text-fg-muted hover:text-accent transition-colors" title="Копировать код">
+                <button onClick={() => copyCode(link)} className="rounded-lg p-1.5 text-fg-muted hover:text-accent transition-colors" title="Копировать ссылку">
                   {copied === link.id ? <Check className="h-4 w-4 text-success" /> : <Copy className="h-4 w-4" />}
                 </button>
                 <button onClick={() => setStatsLink(link)} className="rounded-lg p-1.5 text-fg-muted hover:text-accent transition-colors" title="Статистика">

@@ -149,6 +149,17 @@ async def _fetch_items() -> list[dict[str, Any]]:
     return items
 
 
+@router.get("/version")
+async def get_version(_admin: AdminUser) -> dict[str, str]:
+    """Только установленная версия — без похода на GitHub.
+
+    Отдельно от `/updates`: та ручка ходит за списком релизов и кэшируется на
+    15 минут, а версию шапка админки спрашивает на каждом заходе — ей нужен
+    мгновенный ответ, который не зависит от доступности GitHub.
+    """
+    return {"version": _local_version()}
+
+
 @router.get("")
 async def get_updates(_admin: AdminUser, force: bool = False) -> dict[str, Any]:
     now = time.time()

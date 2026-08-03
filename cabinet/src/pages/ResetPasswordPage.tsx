@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { authApi } from "@/api/auth";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -12,9 +12,15 @@ import { ApiError } from "@/types/api";
 export default function ResetPasswordPage() {
   const t = useT();
   const navigate = useNavigate();
-  const [step, setStep] = useState<"request" | "confirm">("request");
+  // Ссылка из письма. Наш бэкенд присылает код, но кабинет умеет работать и
+  // поверх чужого бота, который вместо кода шлёт ссылку сюда же с длинным
+  // токеном (`/reset-password?token=…`). Тогда вводить нечего: токен уже здесь,
+  // остаётся спросить новый пароль.
+  const [params] = useSearchParams();
+  const linkToken = (params.get("token") ?? "").trim();
+  const [step, setStep] = useState<"request" | "confirm">(linkToken ? "confirm" : "request");
   const [email, setEmail] = useState("");
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState(linkToken);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -73,7 +79,9 @@ export default function ResetPasswordPage() {
           <p className="mt-1 text-sm text-fg-subtle">
             {step === "request"
               ? t("reset.stepRequest")
-              : t("reset.stepConfirm")}
+              : linkToken
+                ? t("reset.stepLink")
+                : t("reset.stepConfirm")}
           </p>
         </div>
 
@@ -99,15 +107,17 @@ export default function ResetPasswordPage() {
           </form>
         ) : (
           <form onSubmit={confirmReset} className="flex flex-col gap-4">
-            <Input
-              label={t("reset.codeLabel")}
-              name="code"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              required
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-            />
+            {!linkToken && (
+              <Input
+                label={t("reset.codeLabel")}
+                name="code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                required
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+              />
+            )}
             <Input
               label={t("reset.newPassword")}
               type="password"
@@ -132,6 +142,7 @@ export default function ResetPasswordPage() {
             <Button type="submit" isLoading={isLoading} className="mt-1 w-full">
               {t("reset.changePassword")}
             </Button>
+            {!linkToken && (
             <button
               type="button"
               onClick={() => { setStep("request"); setError(null); setNotice(null); }}
@@ -139,6 +150,7 @@ export default function ResetPasswordPage() {
             >
               {t("reset.resendCode")}
             </button>
+            )}
           </form>
         )}
 

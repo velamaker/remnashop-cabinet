@@ -16,9 +16,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import html
+import importlib
 import json
 import re
 import time
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 from urllib.parse import quote
@@ -30,12 +32,24 @@ import httpx
 HANDLERS: dict[tuple[str, str], Callable[["Ctx"], Awaitable[Any]]] = {}
 
 
-def handler(method: str, path: str) -> Callable[..., Any]:
+def handler(method: str, path: str, deadline: float | None = None) -> Callable[..., Any]:
+    """Регистрирует обработчик. `deadline` — свой предел вместо общего.
+
+    Общий предел (main.OWN_DEADLINE) бережёт человека от вечной крутилки, но
+    денежным ручкам он вреден: их покупка синхронно ходит в панель, не успевает
+    за 30 секунд — и запрос обрывался ПОСРЕДИ списания. Деньги при этом уходили.
+    """
     def deco(fn: Callable[["Ctx"], Awaitable[Any]]) -> Callable[["Ctx"], Awaitable[Any]]:
+        if deadline:
+            fn.deadline = deadline  # type: ignore[attr-defined]
         HANDLERS[(method.upper(), path)] = fn
         return fn
 
     return deco
+
+
+# Предел для ручек, за которыми стоит списание денег.
+MONEY_DEADLINE = 150.0
 
 
 class Ctx:
@@ -244,8 +258,13 @@ FEATURE_REQUIREMENTS: dict[str, list[tuple[str, str]]] = {
 #     API панели (adapter → Remnawave), см. docs/BEDOLAGA-MAPPING.md;
 #   • собственные фишки кабинета — каталог приложений, диагностика, замер
 #     скорости, онбординг, темы и языки: им бэкенд не нужен вовсе;
-#   • push и список сессий — механика самого кабинета, хранилище может держать
-#     адаптер.
+#
+# Пограничный случай — список активных сессий и push: механика кабинета, но обе
+# опираются на хранилище бэкенда. У «Бедолаги» сессии живут в её таблице
+# `cabinet_refresh_tokens` (там есть и устройство, и дата), однако наружу она их
+# не отдаёт и «выйти со всех устройств» не умеет. Показать список, который не
+# может завершить чужой вход, — это ложное чувство безопасности, поэтому раздел
+# честно выключен, а не подделан. Появится у них ручка — включится сам.
 # Эти ключи в список возможностей НЕ попадают: отсутствие ключа = «доступно».
 NOT_BOT_OWNED = (
     "status_page", "servers", "service_status", "server_stats", "traffic_history",
@@ -335,7 +354,9 @@ def features() -> dict[str, bool] | None:
 # из-за одной переведённой ручки, мы показали бы пять пунктов, четыре из
 # которых сломаны. Раздел честен только целиком.
 #
-# Методы только читающие: пока can_write=false, менять всё равно нечего.
+# Методы здесь только читающие, и это не забывчивость: раздел решает, можно ли
+# ОТКРЫТЬ экран, а можно ли на нём что-то менять — отдельный вопрос, на него
+# отвечает `admin_can_write` по изменяющим обработчикам внутри этих же путей.
 ADMIN_SECTION_REQUIREMENTS: dict[str, list[tuple[str, str]]] = {
     "dashboard": [("GET", "/api/admin/statistics/overview")],
     # Список без карточки бесполезен: клик по строке — это весь смысл экрана.
@@ -343,7 +364,19 @@ ADMIN_SECTION_REQUIREMENTS: dict[str, list[tuple[str, str]]] = {
     # Отдельного пункта меню нет — это вкладки внутри карточки пользователя.
     "subscriptions": [("GET", "/api/admin/subscriptions/user/{id}")],
     "transactions": [("GET", "/api/admin/transactions")],
-    "plans": [("GET", "/api/admin/plans")],
+    # Тарифы — это список плюс редактор в одном экране, поэтому мало отдать
+    # список: редактор открывает карточку тарифа и справочник сквадов (в наших
+    # терминах — «серверы тарифа»). Без справочника админ сохранит цену и молча
+    # оставит тариф без доступа к серверам, а это хуже спрятанного раздела.
+    "plans": [
+        ("GET", "/api/admin/plans"),
+        ("GET", "/api/admin/plans/{id}"),
+        ("GET", "/api/admin/plans/meta/squads"),
+    ],
+    # Промокоды — только список: статистика по коду (`/promocodes/{id}/stats`)
+    # в клиенте кабинета объявлена, но ни один экран её не открывает. Требовать
+    # её значило бы спрятать работающий раздел из-за ручки, которую никто не
+    # зовёт.
     "promocodes": [("GET", "/api/admin/promocodes")],
     "gateways": [("GET", "/api/admin/gateways")],
     "broadcasts": [("GET", "/api/admin/broadcasts")],
@@ -404,6 +437,17 @@ ADMIN_SECTION_REQUIREMENTS: dict[str, list[tuple[str, str]]] = {
 # Методы, которые ничего не меняют. Всё остальное под /api/admin/ — мутация.
 _READ_METHODS = ("GET", "HEAD", "OPTIONS")
 
+# «Владелец» в кабинете — не звание, а конкретные ручки: раздача доступа к
+# админке и снятие его (AdminUsersPage → AccessGrantBlock). У «Бедолаги» своя
+# система ролей, наших грантов там нет, поэтому флаг тоже считается, а не
+# ставится по уровню роли: иначе в карточке человека открылся бы блок доступа,
+# который ничего не покажет и ничего не сохранит.
+OWNER_REQUIREMENTS: list[tuple[str, str]] = [
+    ("GET", "/api/admin/grants/catalog"),
+    ("GET", "/api/admin/grants/{id}"),
+    ("PUT", "/api/admin/grants/{id}"),
+]
+
 
 def admin_sections() -> list[str]:
     """Разделы админки, которые адаптер отдаёт целиком.
@@ -419,15 +463,46 @@ def admin_sections() -> list[str]:
     ]
 
 
-def admin_can_write() -> bool:
-    """Есть ли у адаптера хоть одна ИЗМЕНЯЮЩАЯ админская ручка.
+def _section_prefix(path: str) -> str:
+    """Начало пути раздела: `/api/admin/users/{id}` → `/api/admin/users`.
 
-    Кабинет по этому флагу решает, рисовать ли кнопки сохранения и действий.
-    Пока переведены только чтения, честный ответ — «нет»: иначе админ жмёт
-    «Сохранить» и получает 501 вместо результата.
+    Раздел кабинета — это ветка путей, а не список конкретных ручек: действия
+    висят на тех же адресах, что и чтение, только глубже (`.../{id}/block`,
+    `.../{id}/toggle`). Отрезаем всё от первого параметра — дальше сравнение
+    идёт по ветке.
     """
+    return path.split("{", 1)[0].rstrip("/")
+
+
+def admin_can_write(sections: list[str] | None = None) -> bool:
+    """Есть ли хоть одно РАБОТАЮЩЕЕ действие в разделах, которые админ видит.
+
+    Кабинет по этому флагу решает, рисовать ли кнопки сохранения и действий, и
+    флаг у него ОДИН на всю админку (AuthContext → isReadonlyAdmin), отдельного
+    «можно писать вот здесь» нет. Поэтому считаем не «есть ли у адаптера хоть
+    какая-нибудь изменяющая ручка», а «есть ли она в разделе, который админ
+    открывает»: мутация в спрятанном разделе включила бы кнопки везде, в том
+    числе там, где менять нечем, и человек жал бы «Сохранить» ради 501.
+    Пока переведены только чтения, честный ответ — «нет».
+
+    Считаем по реестру обработчиков, как sections и features, а не по карте
+    маршрутов: админские пути карта не проксирует вовсе (у «Бедолаги» другие
+    формы тел и своя проверка прав — такое нельзя прокидывать напрямую),
+    поэтому единственный источник правды здесь — HANDLERS.
+    """
+    if sections is None:
+        sections = admin_sections()
+    branches = {
+        _section_prefix(path)
+        for name in sections
+        for _method, path in ADMIN_SECTION_REQUIREMENTS.get(name, [])
+    }
     return any(
-        method not in _READ_METHODS and path.startswith("/api/admin/")
+        method not in _READ_METHODS
+        and path.startswith("/api/admin/")
+        # Граница по «/»: иначе `/api/admin/users` считался бы началом
+        # какого-нибудь `/api/admin/users-import` из соседнего раздела.
+        and any(path == branch or path.startswith(branch + "/") for branch in branches)
         for method, path in HANDLERS
     )
 
@@ -523,6 +598,15 @@ async def appearance(ctx: Ctx) -> dict[str, Any]:
     # собственный бэкенд), поэтому при неизвестном ответе поле не добавляем.
     known = features()
     if known is not None:
+        # Подарки у них выключаются тумблером в настройках бота. Наличия ручек
+        # мало: с выключенным тумблером блок в кабинете показал бы кнопку,
+        # которая отвечает отказом. Спрашиваем их конфигурацию — но только когда
+        # ручки есть, чтобы не ходить лишний раз, и мягко: гостю она отвечает
+        # отказом, и это не повод прятать подарки у вошедших.
+        if known.get("gift"):
+            gift_config = await ctx.json("/cabinet/gift/config", {}, soft=True) or {}
+            if gift_config.get("is_enabled") is False:
+                known["gift"] = False
         data["features"] = known
     _appearance_cache = (now - _APPEARANCE_TTL + _MAINTENANCE_TTL if maintenance else now, data)
     return data
@@ -545,7 +629,14 @@ def _display_name(user: dict[str, Any]) -> str:
 
 @handler("GET", "/api/auth/me")
 async def me(ctx: Ctx) -> dict[str, Any]:
-    resp = await ctx.call("GET", "/cabinet/auth/me")
+    # Адрес «в ожидании подтверждения» они держат отдельной ручкой. Спрашиваем её
+    # вместе с профилем, а не после: экран профиля грузится на каждом заходе, и
+    # лишний круг ожидания тут заметен. Мягко — раздел смены почты есть не в
+    # каждой их сборке, а профиль показать надо в любом случае.
+    resp, change = await asyncio.gather(
+        ctx.call("GET", "/cabinet/auth/me"),
+        ctx.json("/cabinet/auth/email/change/status", {}, soft=True),
+    )
     if resp.status_code >= 400:
         raise UpstreamError(resp)
     u = resp.json()
@@ -554,9 +645,7 @@ async def me(ctx: Ctx) -> dict[str, Any]:
         "auth_type": (u.get("auth_type") or "email").lower(),
         "email": u.get("email"),
         "is_email_verified": bool(u.get("email_verified")),
-        # Смена почты у них подтверждается отдельной ручкой; текущий адрес в
-        # ожидании она не возвращает — оставляем пусто, пока не смапим статус.
-        "pending_email": None,
+        "pending_email": (change or {}).get("new_email"),
         "name": _display_name(u),
         "username": u.get("username"),
         "language": u.get("language") or "ru",
@@ -581,9 +670,18 @@ async def whoami(ctx: Ctx) -> dict[str, Any]:
     # «весь», а ровно по тому, что адаптер умеет перевести: full_access никогда,
     # sections — посчитанный список. Появится новая ручка — раздел придёт сам.
     sections = admin_sections() if is_admin else []
-    # Мутации разрешаем только когда переведена хоть одна изменяющая ручка,
-    # иначе кабинет рисует кнопки, за которыми 501.
-    can_write = bool(sections) and admin_can_write()
+    # Мутации разрешаем только когда в ЭТИХ разделах переведена хоть одна
+    # изменяющая ручка, иначе кабинет рисует кнопки, за которыми 501.
+    can_write = bool(sections) and admin_can_write(sections)
+    # Владельца выдаём не по уровню роли: их «суперадмин» — это про их бота, а
+    # наш владелец раздаёт доступ к нашей админке нашими же ручками грантов.
+    # Нет их у адаптера — нет и владельца, каким бы старшим человек ни был.
+    is_owner = (
+        is_admin
+        and can_write
+        and role_level >= 90
+        and all(_implemented(m, p) for m, p in OWNER_REQUIREMENTS)
+    )
     return {
         "role": role_level or None,
         "is_admin": is_admin,
@@ -593,7 +691,7 @@ async def whoami(ctx: Ctx) -> dict[str, Any]:
         "can_access_admin": is_admin,
         # Владелец в кабинете — это право раздавать доступы и менять роли, то
         # есть сплошные мутации. Без них флаг только показал бы неработающее.
-        "is_owner": is_admin and can_write and role_level >= 90,
+        "is_owner": is_owner,
         # Никогда: «полный доступ» = все разделы, включая непереведённые.
         "full_access": False,
         "can_write": can_write,
@@ -616,8 +714,14 @@ def _bytes(gb: Any) -> int | None:
         return None
 
 
-@handler("GET", "/api/subscription/current")
+@handler("GET", "/api/subscription/current", deadline=MONEY_DEADLINE)
 async def subscription_current(ctx: Ctx) -> Any:
+    # Человек вернулся со шлюза — самое время дожать оплаченную покупку.
+    # Ошибку дожима глотаем: экран подписки должен открыться в любом случае.
+    try:
+        await settle_intents(ctx)
+    except Exception:  # noqa: BLE001 — дожим не должен ломать просмотр подписки
+        pass
     """Подписка. У них гигабайты и «дней осталось», у нас — байты и срок."""
     data = await ctx.json("/cabinet/subscription", {}) or {}
     sub = data.get("subscription")
@@ -759,8 +863,12 @@ async def status(ctx: Ctx) -> dict[str, Any]:
 # --- деньги: баланс и лента операций -----------------------------------------
 
 
-@handler("GET", "/api/balance")
+@handler("GET", "/api/balance", deadline=MONEY_DEADLINE)
 async def balance(ctx: Ctx) -> dict[str, Any]:
+    try:
+        await settle_intents(ctx)
+    except Exception:  # noqa: BLE001 — то же самое: баланс показать обязаны
+        pass
     b = await ctx.json("/cabinet/balance", {}) or {}
     sub = (await ctx.json("/cabinet/subscription", {}) or {}).get("subscription") or {}
     # Сумма трат есть готовая — её считает их же программа лояльности; перебирать
@@ -2451,6 +2559,24 @@ async def freeze(ctx: Ctx) -> dict[str, Any]:
         raise UpstreamError(
             httpx.Response(502, json={"detail": "Не удалось заморозить подписку"})
         )
+
+    # Их ручка отвечает успехом, даже если снять доступ в панели не удалось:
+    # ошибку панели они пишут в свой лог и идут дальше (замечено по их отчёту
+    # «Ошибка отключения RemnaWave пользователя: User not found»). Для человека
+    # это худший исход — он видит «на паузе», а трафик продолжает идти. Если
+    # доступ к панели у нас есть, проверяем факт, а не обещание.
+    short = _short_uuid(sub.get("subscription_url") or "")
+    if ctx.has_panel and short:
+        panel_user = await ctx.panel_json(f"/api/users/by-short-uuid/{short}", {}) or {}
+        status = str(panel_user.get("status") or "").upper()
+        if status and status not in ("DISABLED", "EXPIRED", "LIMITED"):
+            # Откатываем свою запись: пауза, при которой доступ остался, — обман.
+            ctx.state.drop_freeze(user_key)
+            raise UpstreamError(httpx.Response(502, json={
+                "detail": "Подписка отмечена на паузе у бота, но доступ в панели "
+                          "снять не удалось — пауза отменена, попробуйте позже",
+            }))
+
     return {"frozen": True, "remaining_days": max(0, int(left // _DAY))}
 
 
@@ -2517,17 +2643,674 @@ async def unfreeze(ctx: Ctx) -> dict[str, Any]:
 
 # --- админка ----------------------------------------------------------------
 #
-# Админские ручки живут отдельным модулем: их десятки, и держать их в одном
+# Админские ручки живут отдельными модулями: их десятки, и держать их в одном
 # файле с пользовательскими — гарантированные конфликты при параллельной правке.
-# Импорт стоит в самом конце: модуль регистрирует обработчики тем же
-# декоратором `handler`, а к этому моменту и декоратор, и Ctx уже определены
-# (иначе его `from compose import ...` упрётся в недособранный модуль).
+# Разделены по смыслу: `admin` только читает (список людей, карточка, сводка,
+# лента платежей), `admin_users` меняет пользователя и его подписку,
+# `admin_catalog` — витрину (тарифы с ценами и промокоды).
 #
-# Отсутствие файла — не поломка: без него адаптер просто работает без админки
-# (sections пуст, features.admin=false), а не падает при старте. Сообщение в лог
-# всё же печатаем: молчаливое «админки нет» из-за опечатки в импорте самого
-# модуля искать потом мучительно.
-try:  # noqa: E402 — импорт в конце файла осознан, см. комментарий выше
-    import admin  # noqa: F401
-except ImportError as exc:  # pragma: no cover — зависит от сборки образа
-    print(f"[adapter] админка не подключена: {exc}", flush=True)
+# Импорт стоит в самом конце: модули регистрируют обработчики тем же декоратором
+# `handler`, а к этому моменту и декоратор, и Ctx уже определены (иначе их
+# `from compose import ...` упрётся в недособранный модуль). Здесь же он обязан
+# успеть до `main.py`: тот собирает таблицу шаблонных путей из HANDLERS один раз
+# при импорте compose, и опоздавший модуль остался бы без маршрутов с `{id}`.
+#
+# Каждый модуль подключается ОТДЕЛЬНО и молча переживает своё отсутствие: файл
+# может не попасть в образ (COPY в adapter/Dockerfile) или собираться другим
+# человеком прямо сейчас. Без него адаптер просто работает без этого куска
+# админки — раздел не попадёт в `sections`, кнопки не появятся (can_write), а
+# сами пути честно ответят 501. Общего try на всех было бы мало: сломанный
+# первый модуль утащил бы за собой остальные. Сообщение в лог печатаем всегда —
+# молчаливое «админки нет» из-за опечатки искать потом мучительно.
+# Список не ведём руками: любой файл `adapter/admin_*.py` подхватывается сам —
+# иначе каждый новый кусок админки требовал бы правки этого файла, а его в это
+# время может править кто-то другой.
+_admin_modules = ["admin"] + sorted(
+    p.stem for p in Path(__file__).parent.glob("admin_*.py")
+)
+for _admin_module in _admin_modules:
+    try:
+        # Через importlib, а не `import admin`: имя модуля здесь — данные списка,
+        # и «нет файла» надо ловить у каждого своим except, а не общим на всех.
+        importlib.import_module(_admin_module)
+    except ImportError as exc:  # pragma: no cover — зависит от сборки образа
+        print(f"[adapter] админка: модуль {_admin_module} не подключён: {exc}", flush=True)
+
+
+# --- подарочные подписки ------------------------------------------------------
+#
+# У них подарок устроен так же, как у нас: покупаешь тариф на срок и получаешь
+# токен, который получатель вводит сам. Получатель в их запросе НЕ обязателен
+# (`recipient_type`/`recipient_value` опциональны) — именно поэтому наш сценарий
+# «купил → отдал код кому хочешь» ложится на их ручку без выдумок.
+#
+# Что не переносится: их подарок умеет адресную доставку (сразу на почту или
+# телеграм получателя) и сообщение к подарку. У нашего экрана таких полей нет,
+# и придумывать их за пользователя нельзя — отправляем без адресата.
+
+
+# Их отказы при покупке подарка — английские строки (routes/gift.py). Кабинет
+# показывает detail пользователю дословно, поэтому переводим известные, а
+# незнакомые оставляем как есть: чужой английский текст лучше, чем «ошибка».
+_GIFT_ERRORS = {
+    "Insufficient balance": "Недостаточно средств на балансе",
+    "Gifts are disabled": "Подарки выключены в настройках бота",
+    "Tariff not found": "Тариф подарка не найден",
+    "Period not available": "Такой срок для подарка недоступен",
+    "payment_method is required for gateway mode": "Не выбран способ оплаты",
+    "Payment method not available": "Способ оплаты недоступен",
+}
+
+
+def _gift_error(resp: httpx.Response) -> httpx.Response:
+    try:
+        detail = (resp.json() or {}).get("detail")
+    except ValueError:
+        return resp
+    if not isinstance(detail, str):
+        return resp
+    return httpx.Response(
+        resp.status_code, json={"detail": _GIFT_ERRORS.get(detail.strip(), detail)}
+    )
+
+
+def _gift_price(config: dict[str, Any], tariff_id: int, days: int) -> int:
+    """Цена подарка в копейках из их конфигурации подарков (там она уже со
+    скидкой промогруппы). Не нашли — 0, и тогда цену покажет их же ответ."""
+    for t in config.get("tariffs") or []:
+        if int(t.get("id") or 0) != tariff_id:
+            continue
+        for p in t.get("periods") or []:
+            if int(p.get("days") or 0) == days:
+                return int(p.get("price_kopeks") or 0)
+    return 0
+
+
+@handler("POST", "/api/gift/create")
+async def gift_create(ctx: Ctx) -> dict[str, Any]:
+    body = ctx.payload()
+    code = str(body.get("plan_code") or "").strip()
+    try:
+        tariff_id = int(code)
+    except ValueError:
+        raise UpstreamError(
+            httpx.Response(400, json={"detail": "Не разобрать тариф подарка"})
+        ) from None
+    try:
+        days = int(body.get("duration_days") or 0)
+    except (TypeError, ValueError):
+        days = 0
+    if days <= 0:
+        raise UpstreamError(httpx.Response(400, json={"detail": "Не указан срок подарка"}))
+
+    gateway = str(body.get("gateway_type") or "").strip()
+    config = await ctx.json("/cabinet/gift/config", {}, soft=True) or {}
+    if not config.get("is_enabled", True):
+        raise NotAvailable("Подарки выключены в настройках бота")
+
+    payload: dict[str, Any] = {
+        "tariff_id": tariff_id,
+        "period_days": days,
+        # Без шлюза — списание с баланса: у нас это отдельная кнопка «с баланса».
+        "payment_mode": "gateway" if gateway else "balance",
+    }
+    if gateway:
+        # Наш кабинет шлёт шлюз в верхнем регистре, их API ждёт свой идентификатор.
+        payload["payment_method"] = gateway.lower().split(":")[0]
+
+    resp = await ctx.call("POST", "/cabinet/gift/purchase", json=payload)
+    if resp.status_code >= 400:
+        # Их отказы приходят по-английски, а кабинет печатает detail как есть.
+        raise UpstreamError(_gift_error(resp))
+    data = resp.json() or {}
+
+    price = _gift_price(config, tariff_id, days)
+    plan_name = next(
+        (str(t.get("name") or "") for t in (config.get("tariffs") or [])
+         if int(t.get("id") or 0) == tariff_id),
+        "",
+    )
+    paid_by = "gateway" if gateway else "balance"
+    return {
+        "paid_by": paid_by,
+        # При оплате с баланса код готов сразу; при оплате картой он выпустится
+        # после оплаты, и кабинет заберёт его из истории подарков.
+        "code": data.get("purchase_token") if paid_by == "balance" else None,
+        "payment_id": data.get("purchase_token"),
+        "payment_url": data.get("payment_url"),
+        "plan_name": plan_name,
+        "duration_days": days,
+        "price": f"{price / 100:.2f}",
+    }
+
+
+@handler("GET", "/api/gift/my")
+async def gift_my(ctx: Ctx) -> dict[str, Any]:
+    """Купленные подарки. У них статусы строчные, у нас булев признак «выдан»."""
+    rows = await ctx.json("/cabinet/gift/sent", [], soft=True) or []
+    items = []
+    for g in rows if isinstance(rows, list) else []:
+        status = str(g.get("status") or "").lower()
+        token = g.get("purchase_token") or g.get("token")
+        items.append({
+            "payment_id": str(token or g.get("id") or ""),
+            "plan_name": str(g.get("tariff_name") or g.get("plan_name") or ""),
+            "duration_days": int(g.get("period_days") or 0),
+            # Суммы в их списке нет вовсе (проверено: token, tariff_name,
+            # period_days, status, created_at — и всё; в карточке покупки её тоже
+            # нет). Подставлять сегодняшнюю цену тарифа нельзя: она могла
+            # измениться после покупки, и человек увидел бы неверную сумму
+            # рядом со своим подарком. Пустая строка — кабинет просто не
+            # напечатает цену.
+            "price": "",
+            # Код показываем только когда он уже действителен: до оплаты его
+            # показывать нельзя — человек решит, что подарок готов.
+            "code": str(token) if status in ("paid", "delivered", "pending_activation") else None,
+            "issued": status in ("paid", "delivered", "pending_activation"),
+            "created_at": g.get("created_at"),
+        })
+    return {"items": items}
+
+
+# --- покупка тарифа: пополнение под конкретную покупку -------------------------
+#
+# У «Бедолаги» покупки картой нет вовсе: их ручки списывают с баланса, а карта
+# есть только у пополнения. Поэтому наша кнопка «купить» — это два их шага:
+# пополнить ровно на недостающее и потом списать. Между шагами человек уходит на
+# шлюз, поэтому «за что он платил» помнит адаптер (таблица intents).
+#
+# Три правила, без которых это теряет деньги (подробности — docs/BEDOLAGA-MONEY.md):
+#   • дожимать покупку по условию «баланса стало достаточно» НЕЛЬЗЯ: порог
+#     перешагнут чужие деньги — реферальная выплата, промокод, начисление
+#     админом. Ждём именно ЗАЧИСЛЕНИЕ нужного размера в их ленте транзакций;
+#   • их продление истёкшей подписки после пополнения может сработать раньше нас
+#     и съесть часть денег — поэтому покупку дожимаем сразу, как увидели платёж;
+#   • таймаут при списании не значит «не списалось»: их ручка ходит в панель и
+#     может не уложиться в наш срок. Такой исход помечаем отдельно и перед
+#     повтором сверяемся с их лентой, а не списываем вслепую.
+
+_INTENT_TTL_HOURS = 24
+# Столько ждём их денежные ручки: обычный срок в 25 секунд они не выдерживают.
+_MONEY_TIMEOUT = httpx.Timeout(connect=5.0, read=90.0, write=10.0, pool=5.0)
+
+
+def _kopeks(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _tariff_price(ctx: Ctx, tariff_id: int, days: int) -> tuple[int, str]:
+    """Цена тарифа на срок в копейках и его имя — из их витрины."""
+    options = await ctx.json("/cabinet/subscription/purchase-options", {}) or {}
+    for t in options.get("tariffs") or []:
+        if int(t.get("id") or 0) != tariff_id:
+            continue
+        for p in t.get("periods") or []:
+            if int(p.get("days") or 0) == days:
+                return _kopeks(p.get("price_kopeks")), str(t.get("name") or "")
+        break
+    return 0, ""
+
+
+async def _deposit_seen(ctx: Ctx, intent: dict[str, Any]) -> bool:
+    """Пришло ли зачисление под эту покупку.
+
+    Смотрим их ленту пополнений, а не баланс: баланс могли поднять чужие деньги
+    (рефералка, промокод, начисление админом), и покупка списалась бы за то, чего
+    человек не оплачивал.
+    """
+    data = await ctx.json(
+        "/cabinet/balance/transactions", {},
+        params={"type": "deposit", "per_page": 20},
+    ) or {}
+    for row in data.get("items") or []:
+        if not row.get("is_completed"):
+            continue
+        created = _iso(row.get("created_at"))
+        started = _iso(intent["created_at"])
+        if not created or not started or created < started:
+            continue
+        if _kopeks(row.get("amount_kopeks")) >= int(intent["topup_kopeks"]):
+            return True
+    return False
+
+
+async def _already_charged(ctx: Ctx, intent: dict[str, Any]) -> bool:
+    """Не списали ли уже за эту покупку.
+
+    Их покупка синхронно ходит в панель Remnawave и легко не укладывается в наш
+    срок ожидания: запрос обрывается, а списание на их стороне ПРОХОДИТ. Ловушка
+    не теоретическая — на стенде так дважды списалось по 70 ₽ подряд. Поэтому
+    перед каждым списанием смотрим их ленту: есть ли оплата подписки, появившаяся
+    после того, как человек нажал «купить».
+    """
+    data = await ctx.json(
+        "/cabinet/balance/transactions", {},
+        params={"type": "subscription_payment", "per_page": 10},
+    ) or {}
+    started = _iso(intent["created_at"])
+    price = int(intent["price_kopeks"] or 0)
+    for row in data.get("items") or []:
+        created = _iso(row.get("created_at"))
+        if not created or not started or created < started:
+            continue
+        # Сумму сверяем: у человека может идти вторая покупка одновременно, и
+        # чужое списание нельзя засчитать за это. Если сумма совпала — это оно.
+        if price and abs(_kopeks(row.get("amount_kopeks"))) != price:
+            continue
+        return True
+    return False
+
+
+async def _charge_intent(ctx: Ctx, intent: dict[str, Any]) -> bool:
+    """Списывает с баланса за ожидаемую покупку. True — получилось."""
+    path = (
+        "/cabinet/subscription/renew" if intent["kind"] == "extend"
+        else "/cabinet/subscription/purchase-tariff"
+    )
+    body = (
+        {"period_days": int(intent["period_days"])} if intent["kind"] == "extend"
+        else {"tariff_id": int(intent["tariff_id"]), "period_days": int(intent["period_days"])}
+    )
+    # Перед списанием — сверка: вдруг прошлая попытка оборвалась по таймауту,
+    # а деньги у них уже ушли. Второй раз платить человек не должен.
+    if await _already_charged(ctx, intent):
+        ctx.state.set_intent_state(intent["id"], "done")
+        return True
+    try:
+        # Отдельный срок ожидания: их покупка ходит в панель и бывает долгой.
+        resp = await ctx.call("POST", path, json=body, timeout=_MONEY_TIMEOUT)
+    except httpx.HTTPError:
+        # Неизвестный исход: запрос мог дойти и списать. Повторять вслепую нельзя.
+        ctx.state.set_intent_state(intent["id"], "reconcile")
+        return False
+    if resp.status_code < 400:
+        ctx.state.set_intent_state(intent["id"], "done")
+        return True
+    # Их отказ (не хватило, тариф исчез) — возвращаем в ожидание: деньги остались
+    # на балансе, человек увидит их в кабинете и сможет потратить сам.
+    ctx.state.set_intent_state(intent["id"], "awaiting")
+    return False
+
+
+async def settle_intents(ctx: Ctx) -> None:
+    """Дожимает оплаченные покупки. Зовётся на тех экранах, куда человек
+    возвращается со шлюза: своего расписания у адаптера нет."""
+    if ctx.state is None or not ctx.state.available:
+        return
+    if not ctx.state.any_open_intents():
+        return
+    me = await ctx.json("/cabinet/auth/me", {}, soft=True) or {}
+    user_key = str(me.get("id") or "")
+    if not user_key:
+        return
+    for intent in ctx.state.open_intents(user_key):
+        # Неизвестный исход прошлой попытки (обрыв связи или отменённый запрос):
+        # сначала выясняем, не списали ли уже.
+        if intent["state"] in ("reconcile", "charging") and await _already_charged(ctx, intent):
+            ctx.state.set_intent_state(intent["id"], "done")
+            continue
+        if not await _deposit_seen(ctx, intent):
+            continue
+        if not ctx.state.claim_intent(intent["id"]):
+            continue
+        # Списание доводим до конца, даже если человек закрыл вкладку и запрос
+        # отменили: оборванная посередине покупка — это ушедшие деньги без следа.
+        await asyncio.shield(asyncio.ensure_future(_charge_intent(ctx, intent)))
+
+
+async def _start_purchase(ctx: Ctx, kind: str) -> dict[str, Any]:
+    """Пробуем купить сразу; не хватило — пополняем ровно на их недостачу.
+
+    Цену НЕ считаем сами: их витрина показывает одно, а списывают они другое
+    (персональные промо-скидки применяются в момент оплаты, проверено живьём:
+    витрина 70 ₽, списание 210 ₽). Точную нехватку знает только их отказ 402 —
+    его и спрашиваем. Побочный, но полезный эффект: этот же отказ сохраняет у них
+    «корзину», а она мешает их автопродлению съесть деньги раньше нас.
+    """
+    body = ctx.payload()
+    code = str(body.get("plan_code") or "").strip()
+    try:
+        tariff_id = int(code) if code else 0
+    except ValueError:
+        raise UpstreamError(
+            httpx.Response(400, json={"detail": "Не разобрать тариф"})
+        ) from None
+    try:
+        days = int(body.get("duration_days") or 0)
+    except (TypeError, ValueError):
+        days = 0
+    if days <= 0:
+        raise UpstreamError(httpx.Response(400, json={"detail": "Не указан срок"}))
+
+    me = await ctx.json("/cabinet/auth/me", {}) or {}
+    user_key = str(me.get("id") or "")
+    balance = _kopeks((await ctx.json("/cabinet/balance", {}) or {}).get("balance_kopeks"))
+    intent = {
+        "id": f"{user_key}-{int(time.time())}", "user_key": user_key, "kind": kind,
+        "tariff_id": tariff_id, "period_days": days, "price_kopeks": 0,
+        "topup_kopeks": 0, "state": "awaiting",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "balance_before": balance,
+    }
+
+    path = (
+        "/cabinet/subscription/renew" if kind == "extend"
+        else "/cabinet/subscription/purchase-tariff"
+    )
+    payload = (
+        {"period_days": days} if kind == "extend"
+        else {"tariff_id": tariff_id, "period_days": days}
+    )
+    resp = await ctx.call("POST", path, json=payload, timeout=_MONEY_TIMEOUT)
+
+    if resp.status_code < 400:
+        return {
+            "payment_id": intent["id"], "payment_url": "/subscription",
+            "status": "COMPLETED", "purchase_type": "RENEW" if kind == "extend" else "NEW",
+            "is_free": False, "final_amount": "", "currency": "₽",
+        }
+
+    detail = {}
+    try:
+        detail = (resp.json() or {}).get("detail") or {}
+    except ValueError:
+        detail = {}
+    missing = _kopeks(detail.get("missing_amount")) if isinstance(detail, dict) else 0
+    if resp.status_code != 402 or missing <= 0:
+        # Не «не хватило денег», а что-то другое — отдаём их причину как есть.
+        raise UpstreamError(resp)
+
+    gateway = str(body.get("gateway_type") or "").strip()
+    if not gateway:
+        raise UpstreamError(httpx.Response(400, json={"detail": "Не выбран способ оплаты"}))
+    methods = await ctx.json("/cabinet/balance/payment-methods", []) or []
+    method = next(
+        (m for m in methods if str(m.get("id") or "").upper() == gateway.split(":")[0].upper()),
+        None,
+    )
+    if not method:
+        raise UpstreamError(httpx.Response(400, json={"detail": "Способ оплаты недоступен"}))
+    # Минимум способа оплаты может быть больше недостачи — тогда просим минимум,
+    # а сдача останется на балансе человека: это его деньги, они не пропадут.
+    amount = max(missing, _kopeks(method.get("min_amount_kopeks")))
+
+    topup = {"amount_kopeks": amount, "payment_method": str(method.get("id"))}
+    option = gateway.split(":")[1] if ":" in gateway else ""
+    if option:
+        topup["payment_option"] = option
+    pay = await ctx.call("POST", "/cabinet/balance/topup", json=topup)
+    if pay.status_code >= 400:
+        raise UpstreamError(pay)
+    data = pay.json() or {}
+    if not data.get("payment_url"):
+        raise UpstreamError(
+            httpx.Response(502, json={"detail": "Платёжная система не выдала ссылку на оплату"})
+        )
+
+    intent["topup_kopeks"] = amount
+    intent["price_kopeks"] = balance + missing
+    # Человек начал новую покупку — прежняя неоплаченная больше не ждёт денег.
+    ctx.state.cancel_awaiting(user_key)
+    ctx.state.add_intent(intent)
+    return {
+        "payment_id": intent["id"],
+        "payment_url": data.get("payment_url"),
+        "status": "PENDING",
+        "purchase_type": "RENEW" if kind == "extend" else "NEW",
+        "is_free": False,
+        "final_amount": f"{(balance + missing) / 100:.2f}",
+        "currency": "₽",
+    }
+
+
+@handler("POST", "/api/subscription/purchase", deadline=MONEY_DEADLINE)
+async def subscription_purchase(ctx: Ctx) -> dict[str, Any]:
+    if ctx.state is None or not ctx.state.available:
+        raise NotAvailable(
+            "Покупка недоступна: адаптеру негде запомнить, за что человек платит"
+        )
+    return await _start_purchase(ctx, "purchase")
+
+
+@handler("POST", "/api/subscription/extend", deadline=MONEY_DEADLINE)
+async def subscription_extend(ctx: Ctx) -> dict[str, Any]:
+    if ctx.state is None or not ctx.state.available:
+        raise NotAvailable("Продление недоступно: адаптеру негде запомнить оплату")
+    return await _start_purchase(ctx, "extend")
+
+
+# --- аккаунт: пароль, почта, привязка Telegram ---------------------------------
+#
+# Фоновая отправка: ссылку на задачу держим до её конца, иначе сборщик мусора
+# может убить её на полпути (обычная ловушка asyncio.create_task).
+_BACKGROUND: set[Any] = set()
+
+
+def _detach(coro: Any) -> None:
+    task = asyncio.ensure_future(coro)
+    _BACKGROUND.add(task)
+    task.add_done_callback(_BACKGROUND.discard)
+
+#
+# Эти ручки у «Бедолаги» есть, но названы иначе, поэтому раньше считались
+# «отсутствующими» и кабинет прятал восстановление пароля и работу с почтой.
+# Прятать было нечего: всё это у них работает, просто под другими именами.
+#
+# Одно расхождение принципиальное. Наш бэкенд шлёт на почту КОД, их — ССЫЛКУ с
+# длинным токеном на `{CABINET_URL}/reset-password?token=…` и `/verify-email?token=…`.
+# Адреса совпадают с нашими страницами, поэтому связка работает целиком: человек
+# жмёт ссылку в письме и попадает на страницу кабинета, а она отдаёт токен сюда
+# вместо кода. Оператору достаточно указать боту адрес кабинета (CABINET_URL).
+
+
+@handler("POST", "/api/auth/password/reset/request")
+async def password_reset_request(ctx: Ctx) -> dict[str, Any]:
+    """«Забыл пароль»: просим бота отправить письмо.
+
+    Ответ всегда одинаковый — иначе по нему перебирают, какие адреса
+    зарегистрированы. У них это правило соблюдено, повторяем и у себя.
+    """
+    email = str(ctx.payload().get("email") or "").strip()
+    if not email:
+        raise UpstreamError(httpx.Response(400, json={"detail": "Укажите email"}))
+    # Письмо они отправляют прямо в этом запросе, и на медленной почте он висит
+    # десятками секунд. Ждать нельзя не только из-за крутилки: письмо уходит
+    # ТОЛЬКО существующему адресу, поэтому по одной лишь задержке ответа
+    # перебирается, кто зарегистрирован. Отправку отпускаем в фон, а отвечаем
+    # сразу и одинаково на любой адрес.
+    _detach(ctx.call(
+        "POST", "/cabinet/auth/password/forgot", json={"email": email},
+        timeout=_MONEY_TIMEOUT,
+    ))
+    return {"success": True}
+
+
+@handler("POST", "/api/auth/password/reset/confirm")
+async def password_reset_confirm(ctx: Ctx) -> dict[str, Any]:
+    """Новый пароль по коду из письма.
+
+    У них вместо кода токен из ссылки — страница кабинета подставляет его в то же
+    поле, а email на этом шаге им не нужен (он зашит в токен).
+    """
+    body = ctx.payload()
+    token = str(body.get("code") or body.get("token") or "").strip()
+    password = str(body.get("password") or "")
+    if not token or not password:
+        raise UpstreamError(
+            httpx.Response(400, json={"detail": "Нужны код из письма и новый пароль"})
+        )
+    resp = await ctx.call(
+        "POST", "/cabinet/auth/password/reset", json={"token": token, "password": password}
+    )
+    if resp.status_code >= 400:
+        raise UpstreamError(resp)
+    return {"success": True}
+
+
+@handler("POST", "/api/auth/email/request-verification", deadline=MONEY_DEADLINE)
+async def email_request_verification(ctx: Ctx) -> dict[str, Any]:
+    """Отправить письмо с подтверждением почты (у них — со ссылкой)."""
+    me = await ctx.json("/cabinet/auth/me", {}) or {}
+    resp = await ctx.call(
+        "POST", "/cabinet/auth/email/resend", json={}, timeout=_MONEY_TIMEOUT
+    )
+    if resp.status_code >= 400:
+        raise UpstreamError(resp)
+    return {"success": True, "target_email": me.get("email"), "expires_at": None}
+
+
+@handler("POST", "/api/auth/email/confirm")
+async def email_confirm(ctx: Ctx) -> dict[str, Any]:
+    """Подтверждение почты.
+
+    Два случая под одной кнопкой: подтверждают либо СМЕНУ почты (там у них
+    настоящий код), либо первый адрес (там токен из ссылки). Что именно —
+    спрашиваем у них же, чтобы не гадать по длине строки.
+    """
+    code = str(ctx.payload().get("code") or "").strip()
+    if not code:
+        raise UpstreamError(httpx.Response(400, json={"detail": "Введите код из письма"}))
+    status = await ctx.json("/cabinet/auth/email/change/status", {}, soft=True) or {}
+    pending = status.get("pending_email") or status.get("new_email")
+    path, payload = (
+        ("/cabinet/auth/email/change/verify", {"code": code}) if pending
+        else ("/cabinet/auth/email/verify", {"token": code})
+    )
+    resp = await ctx.call("POST", path, json=payload)
+    if resp.status_code >= 400:
+        raise UpstreamError(resp)
+    data = {}
+    try:
+        data = resp.json() or {}
+    except ValueError:
+        data = {}
+    me = await ctx.json("/cabinet/auth/me", {}, soft=True) or {}
+    return {"success": True, "email": data.get("email") or me.get("email")}
+
+
+@handler("POST", "/api/auth/email/change", deadline=MONEY_DEADLINE)
+async def email_change(ctx: Ctx) -> dict[str, Any]:
+    """Смена почты: у них уходит в ожидание до подтверждения кодом."""
+    email = str(ctx.payload().get("email") or "").strip()
+    if not email:
+        raise UpstreamError(httpx.Response(400, json={"detail": "Укажите новый email"}))
+    resp = await ctx.call(
+        "POST", "/cabinet/auth/email/change", json={"new_email": email},
+        timeout=_MONEY_TIMEOUT,
+    )
+    if resp.status_code >= 400:
+        raise UpstreamError(resp)
+    data = {}
+    try:
+        data = resp.json() or {}
+    except ValueError:
+        data = {}
+    return {"success": True, "pending_email": data.get("pending_email") or email}
+
+
+@handler("POST", "/api/auth/telegram/link")
+async def telegram_link(ctx: Ctx) -> dict[str, Any]:
+    """Привязка Telegram к аккаунту с почтой. Данные виджета отдаём как есть:
+    подпись проверяет бот своим токеном, нам её трогать нельзя."""
+    resp = await ctx.call(
+        "POST", "/cabinet/auth/account/link/telegram", json=ctx.payload()
+    )
+    if resp.status_code >= 400:
+        raise UpstreamError(resp)
+    # Кабинет ждёт обновлённую карточку пользователя — отдаём её же формой.
+    return await me(ctx)
+
+
+# --- аккаунт: выгрузка данных, закрытие тикета, удаление --------------------------
+
+
+@handler("GET", "/api/account/export")
+async def account_export(ctx: Ctx) -> dict[str, Any]:
+    """«Выгрузить мои данные» одним файлом.
+
+    Отдельной ручки у них нет, но и не нужно: всё это кабинет и так читает по
+    частям. Собираем из того же, что показываем на экранах, — иначе человек не
+    может забрать свои данные только потому, что бэкенд другой.
+    """
+    profile, subscription, transactions, tickets = await asyncio.gather(
+        ctx.json("/cabinet/auth/me", {}, soft=True),
+        ctx.json("/cabinet/subscription", {}, soft=True),
+        ctx.json("/cabinet/balance/transactions", {}, soft=True, params={"per_page": 100}),
+        ctx.json("/cabinet/tickets", {}, soft=True),
+    )
+    tickets_list = (tickets or {}).get("items") if isinstance(tickets, dict) else tickets
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "bedolaga",
+        "profile": profile or {},
+        "subscription": subscription or {},
+        "transactions": (transactions or {}).get("items") or [],
+        "tickets": tickets_list or [],
+        # Историю входов бот не ведёт — честно пустой список, а не выдуманные строки.
+        "logins": [],
+    }
+
+
+@handler("POST", "/api/support/tickets/{id}/close")
+async def ticket_close(ctx: Ctx) -> dict[str, Any]:
+    """Закрыть своё обращение.
+
+    У них закрытие живёт только в админской ручке, поэтому идём туда админским
+    токеном — но сперва убеждаемся, что обращение принадлежит ЭТОМУ человеку:
+    иначе по номеру закрывались бы чужие тикеты.
+    """
+    ticket_id = ctx.param("id")
+    own = await ctx.json(f"/cabinet/tickets/{ticket_id}", {})
+    if not own:
+        raise UpstreamError(httpx.Response(404, json={"detail": "Обращение не найдено"}))
+    if not ctx.can_admin:
+        raise NotAvailable(
+            "Закрытие обращений недоступно: у адаптера нет админского доступа к боту"
+        )
+    # Их админское API — это web-api с ключом (`/tickets/...`), а не кабинетные
+    # `/cabinet/admin/...`: те ждут сессию админа-человека, а не токен.
+    resp = await ctx.admin(
+        "POST", f"/tickets/{ticket_id}/status", json={"status": "closed"}
+    )
+    if resp is None or resp.status_code >= 400:
+        raise UpstreamError(
+            resp if resp is not None
+            else httpx.Response(502, json={"detail": "Бот не ответил"})
+        )
+    return {"success": True}
+
+
+@handler("POST", "/api/account/delete")
+async def account_delete(ctx: Ctx) -> dict[str, Any]:
+    """Самоудаление аккаунта по фразе подтверждения.
+
+    Удаляет их же админская ручка — она умеет прибрать за собой и подписку в
+    панели. Фразу проверяем на сервере, а не только в браузере: кнопку можно
+    обойти, а действие необратимо.
+    """
+    confirm = str(ctx.payload().get("confirm") or "").strip().upper()
+    if confirm not in ("УДАЛИТЬ", "DELETE"):
+        raise UpstreamError(
+            httpx.Response(400, json={"detail": "Введите слово УДАЛИТЬ для подтверждения"})
+        )
+    me = await ctx.json("/cabinet/auth/me", {}) or {}
+    user_id = me.get("id")
+    if not user_id:
+        raise UpstreamError(httpx.Response(401, json={"detail": "Требуется вход"}))
+    if not ctx.can_admin:
+        raise NotAvailable(
+            "Удаление аккаунта недоступно: у адаптера нет админского доступа к боту"
+        )
+    # У них «удаление» — это пометка статусом (их же delete_user не делает
+    # ничего сверх этого), а web-api умеет только PATCH. Делаем ровно то же
+    # самое, что сделал бы их админ у себя в панели.
+    resp = await ctx.admin("PATCH", f"/users/{user_id}", json={"status": "deleted"})
+    if resp is None or resp.status_code >= 400:
+        raise UpstreamError(
+            resp if resp is not None
+            else httpx.Response(502, json={"detail": "Бот не ответил"})
+        )
+    return {"deleted": True}

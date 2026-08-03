@@ -8,6 +8,8 @@ export interface MenuConfig {
   connect_url: boolean; // «Подключиться» → /devices ссылкой
   remna_sub: boolean; // «Подписка (резерв)» — стандартная сабка Remnawave
   gift: boolean; // «Подарить подписку» — открывает выбор тарифа прямо в боте
+  custom_miniapp: boolean; // своя мини-аппа (чужое приложение или своя страница подписки)
+  custom_url?: string; // её адрес; только https, иначе Telegram не откроет
   order: string[]; // порядок кнопок (список ключей сверху вниз)
   texts?: Record<string, string>; // кастомные подписи по ключу (эмодзи ок)
   colors?: Record<string, string>; // цвет по ключу: primary|success|danger
