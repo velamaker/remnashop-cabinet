@@ -104,10 +104,30 @@ class BackupUpdate(BaseModel):
     send_to_chat: Optional[bool] = None
 
 
+# Границы паузы между сбросами — те же, что у бота (`use_cases/settings/commands/
+# extra.py`): от нуля (без паузы) до года. Одни и те же настройки правятся из двух
+# мест, и расходиться в правилах они не должны.
+COOLDOWN_MIN, COOLDOWN_MAX = 0, 8760
+
+
+class ResetFeatureUpdate(BaseModel):
+    """Сброс устройства/ссылки: включён ли и сколько ждать между сбросами."""
+
+    enabled: Optional[bool] = None
+    cooldown_hours: Optional[int] = None
+
+
 class SettingsUpdateRequest(BaseModel):
     access: Optional[AccessSettingsUpdate] = None
     referral: Optional[ReferralUpdate] = None
     backup: Optional[BackupUpdate] = None
+    # Три сброса кабинет ПОКАЗЫВАЛ, а принять их было некому: полей здесь не
+    # было вовсе, и «Сохранено» ничего не меняло — во всех установках сразу.
+    # Отдаём мы их давно (`_settings_to_dict`), в боте они правятся, так что
+    # чинится это приёмом полей, а не удалением тумблеров с экрана.
+    device_single_reset: Optional[ResetFeatureUpdate] = None
+    device_all_reset: Optional[ResetFeatureUpdate] = None
+    link_reset: Optional[ResetFeatureUpdate] = None
     registration_allowed: Optional[bool] = None
     payments_allowed: Optional[bool] = None
     rules_required: Optional[bool] = None
@@ -158,6 +178,23 @@ async def update_settings(
         s.extra.trial_channel_guard = body.trial_channel_guard
     if body.mini_app_reserve is not None:
         s.extra.mini_app_reserve = body.mini_app_reserve
+
+    # Сбросы. Меняем ровно присланное: экран шлёт только тумблер, а паузу правят
+    # в боте — и одно не должно затирать другое.
+    for field_name in ("device_single_reset", "device_all_reset", "link_reset"):
+        update = getattr(body, field_name)
+        if update is None:
+            continue
+        feature = getattr(s.extra, field_name)
+        if update.enabled is not None:
+            feature.enabled = update.enabled
+        if update.cooldown_hours is not None:
+            if not COOLDOWN_MIN <= update.cooldown_hours <= COOLDOWN_MAX:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Пауза между сбросами: от {COOLDOWN_MIN} до {COOLDOWN_MAX} часов",
+                )
+            feature.cooldown_hours = update.cooldown_hours
 
     if body.referral:
         if body.referral.enable is not None:

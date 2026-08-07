@@ -203,9 +203,14 @@ export default function AdminAdLinksPage() {
                 </button>
                 <button
                   onClick={() => toggleActive(link)}
-                  className={`relative h-6 w-11 rounded-full transition-colors ${link.is_active ? "bg-accent" : "bg-border"}`}
+                  title={link.is_active ? "Выключить" : "Включить"}
+                  /* shrink-0: без него в узкой строке кнопку сжимало, и кружок
+                     выезжал на соседнюю иконку удаления. */
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${link.is_active ? "bg-accent" : "bg-border"}`}
                 >
-                  <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${link.is_active ? "translate-x-5" : "translate-x-0.5"}`} />
+                  {/* Кружку нужна точка отсчёта: без left он вставал по «авто» и
+                      при сдвиге вылезал за пределы дорожки. */}
+                  <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${link.is_active ? "translate-x-5" : "translate-x-0"}`} />
                 </button>
                 <button onClick={() => remove(link)} className="rounded-lg p-1.5 text-fg-muted hover:text-danger transition-colors">
                   <Trash2 className="h-4 w-4" />

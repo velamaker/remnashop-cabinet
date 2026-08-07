@@ -141,15 +141,24 @@ function GroupedNav({
   onNavigate,
   itemPad,
   canSection,
+  canPage,
   collapsed = false,
 }: {
   onNavigate?: () => void;
   itemPad: string;
   canSection: (key: string) => boolean;
+  canPage: (path: string) => boolean;
   collapsed?: boolean;
 }) {
   const groups = navGroups
-    .map((group) => ({ ...group, items: group.items.filter((it) => canSection(it.section)) }))
+    // Два разных фильтра: canSection — про ПРАВА администратора, canPage — про
+    // УМЕНИЕ бэкенда. Раздел «Настройки» у нас один на два десятка страниц, и без
+    // второго фильтра отсутствие одной ручки прячет весь блок целиком (ровно это
+    // и делало админку поверх чужого бота «скудной»).
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((it) => canSection(it.section) && canPage(it.to)),
+    }))
     .filter((group) => group.items.length > 0);
   return (
     <>
@@ -191,7 +200,7 @@ function GroupedNav({
 }
 
 export function AdminLayout({ children }: { children: ReactNode }) {
-  const { user, logout, isReadonlyAdmin, canSection } = useAuth();
+  const { user, logout, isReadonlyAdmin, canSection, canPage } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -271,8 +280,10 @@ export function AdminLayout({ children }: { children: ReactNode }) {
           </div>
         </div>
 
-        <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto min-h-0">
-          <GroupedNav itemPad="py-2" canSection={canSection} collapsed={collapsed} />
+        {/* scrollbar-thin: без него разделов больше, чем влезает, и сбоку
+            появляется толстая системная полоса прокрутки поверх меню. */}
+        <nav className="scrollbar-thin flex flex-1 flex-col gap-0.5 overflow-y-auto min-h-0">
+          <GroupedNav itemPad="py-2" canSection={canSection} canPage={canPage} collapsed={collapsed} />
         </nav>
 
         <div className="mt-4 flex flex-col gap-0.5 border-t border-[var(--border)] pt-4">
@@ -373,8 +384,8 @@ export function AdminLayout({ children }: { children: ReactNode }) {
               </button>
             </div>
 
-            <nav ref={drawerNavRef} className="flex flex-1 flex-col gap-0.5 overflow-y-auto min-h-0">
-              <GroupedNav onNavigate={() => setMenuOpen(false)} itemPad="py-2.5" canSection={canSection} />
+            <nav ref={drawerNavRef} className="scrollbar-thin flex flex-1 flex-col gap-0.5 overflow-y-auto min-h-0">
+              <GroupedNav onNavigate={() => setMenuOpen(false)} itemPad="py-2.5" canSection={canSection} canPage={canPage} />
             </nav>
 
             <div className="mt-4 flex flex-shrink-0 flex-col gap-0.5 border-t border-[var(--border)] pt-4">

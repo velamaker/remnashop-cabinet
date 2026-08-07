@@ -36,8 +36,8 @@
     Правится ТОТ ЖЕ текст, который показывает бот, а не подменная копия.
   • «Меню» — цвет, подпись и премиум-эмодзи тех кнопок меню бота, которые ведут
     в кабинет (`/cabinet/admin/button-styles`), и подписи их авторских кнопок.
-  • «Вход через Telegram» — их настройки `TELEGRAM_OIDC_*` (экран живёт в группе
-    «Система», она пока не включена, но ручка ей понадобится).
+  • «Вход через Telegram» ПЕРЕЕХАЛ отсюда в свой файл `admin_auth.py` — там же
+    разобрано, что из него ложится на их настройки, а что нет.
 
 ЧЕГО У «БЕДОЛАГИ» НЕТ — И ЧТО МЫ С ЭТИМ ДЕЛАЕМ. Ничего не выдумываем: поле,
 которого у них нет, отдаётся в том значении, в каком кабинет РЕАЛЬНО работает
@@ -69,7 +69,6 @@ markdown ДЛЯ ПОКАЗА, но админу мы отдаём и прини�
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 import string
 import time
@@ -811,6 +810,19 @@ def _menu_view(styles: dict[str, Any], lang: str) -> dict[str, Any]:
         # Своей мини-аппы у них тоже нет: поле ссылки отдаём пустым, чтобы
         # оно было управляемым, а попытку задать адрес ниже честно отклоняем.
         "custom_url": "",
+        # Что на этом бэкенде вообще применимо. Кабинет прячет неприменимые блоки
+        # вместо того, чтобы показывать форму, которая на сохранении ответит
+        # отказом. Поля нет (наш бэкенд его не шлёт) — показываем всё, как раньше.
+        "supported": {
+            # Кнопки доступа в кабинет и «Подарить подписку» — наши, их меню
+            # собрано из своих кнопок, включить нашу нечем.
+            "access_buttons": False,
+            "gift": False,
+            # Шесть произвольных кнопок бота — тоже механика нашего бота.
+            "bot_buttons": False,
+            # А вот подписи и цвета ИХ навигации мы менять умеем.
+            "nav": True,
+        },
         # Порядок относится к тем же кнопкам доступа: своего порядка у нас нет.
         "order": [],
         "texts": texts,
@@ -823,10 +835,55 @@ async def _menu_styles(ctx: Ctx) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+async def _their_menu(ctx: Ctx, lang: str) -> list[dict[str, Any]]:
+    """Настоящие кнопки главного меню «Бедолаги».
+
+    Раньше экран показывал НАШИ пять пунктов навигации (Устройства, Пригласить…),
+    хотя у них меню своё — Личный кабинет, Баланс, Партнёрка, Инфо, Язык. Человек
+    правил подписи кнопкам, которых у бота нет. Читаем их раскладку и отдаём то,
+    что реально нарисовано в боте, в порядке строк меню.
+    """
+    layout = await ctx.admin("GET", "/menu-layout")
+    if layout is None or layout.status_code >= 400:
+        return []
+    try:
+        data = layout.json() or {}
+    except ValueError:
+        return []
+    buttons = data.get("buttons") or {}
+    if not isinstance(buttons, dict):
+        return []
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in data.get("rows") or []:
+        for key in row.get("buttons") or []:
+            cfg = buttons.get(key)
+            if not isinstance(cfg, dict) or key in seen:
+                continue
+            seen.add(key)
+            text = cfg.get("text") or {}
+            label = text.get(lang) or text.get("ru") or text.get("en") or key
+            items.append({
+                "key": key,
+                "label": label,
+                "enabled": bool(cfg.get("enabled", True)),
+                # Цвета у их кнопок нет вовсе — кабинет спрячет выбор (см. supported).
+                "color": None,
+            })
+    return items
+
+
 @handler("GET", "/api/admin/menu")
 async def menu_get(ctx: Ctx) -> dict[str, Any]:
     styles, lang = await asyncio.gather(_menu_styles(ctx), _default_lang(ctx))
-    return _menu_view(styles, lang)
+    view = _menu_view(styles, lang)
+    nav = await _their_menu(ctx, lang or "ru")
+    if nav:
+        # Список настоящих кнопок бота: кабинет нарисует его вместо нашей
+        # фиксированной навигации. Поля нет — рисует свою, как раньше.
+        view["nav_items"] = nav
+        view["supported"]["colors"] = False
+    return view
 
 
 @handler("PUT", "/api/admin/menu")
@@ -1031,68 +1088,9 @@ async def apps_refresh(_: Ctx) -> dict[str, Any]:
 
 # --- ВХОД ЧЕРЕЗ TELEGRAM ----------------------------------------------------
 #
-# Экран живёт в группе «Система» (она пока не включена целиком), но ручка ей
-# нужна, и переводится она полностью: у «Бедолаги» те же три настройки OIDC.
-# Секрет наружу не отдаём — только признак «задан», как и наш бэкенд.
-_OIDC_ENABLED = "TELEGRAM_OIDC_ENABLED"
-_OIDC_ID = "TELEGRAM_OIDC_CLIENT_ID"
-_OIDC_SECRET = "TELEGRAM_OIDC_CLIENT_SECRET"
-
-
-def _redirect_uri() -> str:
-    """Готовый Redirect URI для @BotFather → Web Login.
-
-    Считаем как наш бэкенд: адрес кабинета + фиксированный путь. Публичный адрес
-    адаптеру известен из `ADAPTER_ALLOWED_ORIGINS` (установщик кладёт туда
-    WEB_CABINET_URL), и это единственное место, где он у нас есть. Не знаем —
-    отдаём пусто: подсказка с неверным адресом хуже её отсутствия.
-    """
-    origins = (os.environ.get("ADAPTER_ALLOWED_ORIGINS") or "").split(",")
-    base = next((o.strip().rstrip("/") for o in origins if o.strip()), "")
-    return f"{base}/api/auth/telegram/oidc/callback" if base else ""
-
-
-async def _auth_view(ctx: Ctx) -> dict[str, Any]:
-    enabled, client_id, secret = await asyncio.gather(
-        _setting(ctx, _OIDC_ENABLED),
-        _setting(ctx, _OIDC_ID),
-        _setting(ctx, _OIDC_SECRET),
-    )
-    client_id = _text(client_id)
-    return {
-        "telegram_oidc_client_id": client_id,
-        # Значение секрета не показываем: экрану нужен только признак.
-        "has_secret": bool(_text(secret)),
-        "telegram_oidc_enabled_setting": bool(enabled),
-        # Их же формула: тумблер И заданный client_id (branding.py:903).
-        "telegram_oidc_active": bool(enabled) and bool(client_id),
-        "redirect_uri": _redirect_uri(),
-    }
-
-
-@handler("GET", "/api/admin/auth-settings")
-async def auth_settings_get(ctx: Ctx) -> dict[str, Any]:
-    return await _auth_view(ctx)
-
-
-@handler("PUT", "/api/admin/auth-settings")
-async def auth_settings_put(ctx: Ctx) -> dict[str, Any]:
-    body = ctx.payload()
-    current = await _auth_view(ctx)
-
-    if "telegram_oidc_client_id" in body:
-        client_id = _text(body.get("telegram_oidc_client_id"))
-        if client_id != current["telegram_oidc_client_id"]:
-            await _set_setting(ctx, _OIDC_ID, client_id, "Client ID")
-    if "telegram_oidc_client_secret" in body:
-        secret = _text(body.get("telegram_oidc_client_secret"))
-        # Пустое поле в форме = «оставить как было» (так же ведёт себя наш
-        # бэкенд): иначе каждое сохранение стирало бы секрет, которого не видно.
-        if secret:
-            await _set_setting(ctx, _OIDC_SECRET, secret, "Client Secret")
-    if "telegram_oidc_enabled" in body:
-        enabled = bool(body.get("telegram_oidc_enabled"))
-        if enabled != current["telegram_oidc_enabled_setting"]:
-            await _set_setting(ctx, _OIDC_ENABLED, enabled, "Вход через Telegram")
-
-    return await _auth_view(ctx)
+# Раздел уехал в свой файл `admin_auth.py` — здесь не осталось ничего намеренно.
+# Два регистратора на один путь не уживаются: модули `admin_*.py` грузятся по
+# алфавиту, и этот файл (admin_cabinet) идёт ПОСЛЕ admin_auth — его обработчик
+# молча затирал бы соседский. Заодно там починена засада с маской секрета: их
+# API отдаёт секрет заглушкой, и сверка «что записали ↔ что вернулось» здесь
+# всегда считала удачную запись неудачной («задаётся переменной окружения»).

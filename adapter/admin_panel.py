@@ -747,3 +747,48 @@ async def server_status_nodes(ctx: Ctx) -> dict[str, Any]:
             "disabled": bool(n.get("is_disabled") or n.get("disabled")),
         })
     return {"nodes": items}
+
+
+# --- заморозка подписки: наш раздел на нашей же памяти -------------------------
+#
+# Пауза — фича кабинета, «Бедолага» о ней не знает. Настройки (включена ли, на
+# сколько дней максимум) хранит адаптер, список поставленных на паузу — его же
+# таблица `freezes`. Бот в этом разделе не участвует вовсе, поэтому права
+# проверяем сами, как в «Статусе сервиса».
+_FREEZE_KEY = "freeze"
+_FREEZE_DEFAULT = {"enabled": True, "max_days": 30}
+
+
+@handler("GET", "/api/admin/freeze")
+async def freeze_config(ctx: Ctx) -> dict[str, Any]:
+    await _require_admin(ctx)
+    if ctx.state is None or not ctx.state.available:
+        # Памяти нет — паузы не работают вовсе; честно говорим «выключено».
+        return {**_FREEZE_DEFAULT, "enabled": False}
+    stored = ctx.state.get_setting(_FREEZE_KEY) or {}
+    return {**_FREEZE_DEFAULT, **(stored if isinstance(stored, dict) else {})}
+
+
+@handler("PUT", "/api/admin/freeze")
+async def freeze_config_save(ctx: Ctx) -> dict[str, Any]:
+    await _require_admin(ctx)
+    if ctx.state is None or not ctx.state.available:
+        raise NotAvailable(
+            "Настройку паузы негде хранить: адаптеру недоступна собственная память"
+        )
+    body = ctx.payload()
+    current = {**_FREEZE_DEFAULT, **(ctx.state.get_setting(_FREEZE_KEY) or {})}
+    if body.get("enabled") is not None:
+        current["enabled"] = bool(body["enabled"])
+    if body.get("max_days") is not None:
+        try:
+            days = int(body["max_days"])
+        except (TypeError, ValueError):
+            raise UpstreamError(
+                httpx.Response(400, json={"detail": "Срок паузы — число дней"})
+            ) from None
+        # Верхнюю границу держим в тех же рамках, что и наш бэкенд: пауза дольше
+        # года — это не пауза, а забытая подписка.
+        current["max_days"] = max(1, min(days, 365))
+    ctx.state.set_setting(_FREEZE_KEY, current)
+    return current

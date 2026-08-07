@@ -386,12 +386,25 @@ export interface AbuseCluster {
   accounts: AbuseAccount[];
 }
 
+export interface AbuseTrialsResponse {
+  clusters: AbuseCluster[];
+  total: number;
+  /** Чем именно ищет ПОДКЛЮЧЁННЫЙ бэкенд. Шлёт только тот, у кого набор сигналов
+   *  другой: адаптер поверх чужого бота, который не хранит адресов входа, — там
+   *  групп по общему IP не бывает вовсе. Поля нет (наш бэкенд его не шлёт) —
+   *  показываем прежнюю подсказку, она для нас верна. */
+  note?: string;
+  /** Что не сработало ИМЕННО СЕЙЧАС (панель не ответила, обход не дочитан).
+   *  Без этого пустой список читался бы как «всё чисто». */
+  warning?: string;
+}
+
 export const abuseAdminApi = {
   trials: (params: { min_accounts?: number; only_trial?: boolean } = {}) => {
     const qs = new URLSearchParams();
     if (params.min_accounts != null) qs.set("min_accounts", String(params.min_accounts));
     if (params.only_trial != null) qs.set("only_trial", String(params.only_trial));
-    return adminApi.get<{ clusters: AbuseCluster[]; total: number }>(`/abuse/trials?${qs}`);
+    return adminApi.get<AbuseTrialsResponse>(`/abuse/trials?${qs}`);
   },
 };
 
@@ -438,12 +451,36 @@ export interface UpdateItem {
   url: string | null;
   installed?: boolean; // false → версия новее установленной (доступна, ещё не стоит)
 }
+// Команда обновления и когда именно она подходит (каталог, сервер, режим установки).
+export interface UpdateCommand {
+  cmd: string;
+  when?: string | null;
+}
+// Одна из обновляемых частей установки: кабинет или обслуживающий её бот.
+export interface UpdateChannel {
+  title: string;
+  current: string | null; // null → версия бэкенду не видна (он так и скажет в note)
+  latest: string | null;
+  update_available: boolean;
+  repo?: string;
+  note?: string | null; // честная причина, если версия или лента неполные
+  commands?: UpdateCommand[];
+  items: UpdateItem[];
+}
 export interface UpdatesInfo {
   current: string;
   latest: string | null;
   update_available: boolean;
   repo: string;
   items: UpdateItem[];
+  // Ниже — НЕОБЯЗАТЕЛЬНОЕ. Кабинет и бот — разные продукты с разными релизами и
+  // разными командами обновления; бэкенд, который это различает (адаптер поверх
+  // чужого бота), присылает два блока и словами описывает расхождение между ними.
+  // Наш бэкенд полей не шлёт: у него кабинет и бот — один релиз и одна команда,
+  // поэтому экран остаётся прежним, с полями выше.
+  cabinet?: UpdateChannel;
+  bot?: UpdateChannel;
+  mismatch?: string | null;
 }
 export const updatesAdminApi = {
   // force=true (кнопка «Проверить») — обходит серверный кэш для моментальной проверки.
@@ -686,6 +723,76 @@ export const topupAdminApi = {
   update: (data: Partial<TopupAdminConfig>) => adminApi.put<TopupAdminConfig>("/topup", data),
 };
 
+/** Что на подключённом бэкенде применимо. `supported: false` — такого поля у него
+ *  нет вовсе, и рисовать его нельзя: человек правил бы настройку, которой не
+ *  существует. `locked` — поле есть и значение настоящее, но правится не отсюда:
+ *  показываем выключенным и подписываем причиной. Карт нет — бэкенд наш, экран
+ *  работает как раньше. Тот же договор, что у «Настроек» и «Меню бота». */
+export interface TopupApplicability {
+  supported?: Record<string, boolean>;
+  locked?: Record<string, string>;
+}
+
+/** Правила пополнения ОДНОГО способа оплаты.
+ *
+ *  Надстройка поверх «Пополнения» для бэкендов, где условия пополнения живут не
+ *  одним блоком на сервис, а у каждого способа свои (адаптер поверх чужого бота).
+ *  Наш собственный бэкенд этих путей не знает и отвечает на них 404 — тогда
+ *  карточка просто не показывается, а раздел остаётся прежним.
+ *
+ *  Суммы — В РУБЛЯХ и могут быть дробными (у бота они хранятся в копейках).
+ *  `*_custom: false` означает «значение по умолчанию этого способа», и поле на
+ *  экране остаётся пустым с подсказкой-умолчанием: цифра в пустом поле читалась
+ *  бы как своя настройка. */
+export interface TopupMethodRules {
+  method_id: string;
+  name: string;
+  is_active: boolean;
+  is_configured: boolean;
+  order_index: number;
+  min_amount: number;
+  max_amount: number;
+  min_default: number;
+  max_default: number;
+  min_custom: boolean;
+  max_custom: boolean;
+  /** Быстрые суммы. Пустой список при `presets_custom: true` — «кнопок нет». */
+  presets: number[];
+  presets_default: number[];
+  presets_custom: boolean;
+  /** Предупреждения бэкенда по этому способу: то, что бот сделает молча. */
+  hints: string[];
+}
+
+export interface TopupMethodsResponse {
+  items: TopupMethodRules[];
+  limits: {
+    presets_max_count: number;
+    preset_max_amount: number;
+    cabinet_min_amount: number;
+    cabinet_max_amount: number;
+  };
+  note?: string;
+  /** Применимость полей СВОДНОЙ карточки пополнения (TopupSettingsCard). */
+  summary?: TopupApplicability;
+  /** Применимость полей карточки способов. */
+  methods?: TopupApplicability;
+}
+
+/** null в теле — «вернуть значение по умолчанию»; ключа нет — «не трогать».
+ *  Для `presets` пустой список — это «кнопок нет», а не сброс: разные вещи. */
+export interface TopupMethodUpdate {
+  min_amount?: number | null;
+  max_amount?: number | null;
+  presets?: number[] | null;
+}
+
+export const topupMethodsAdminApi = {
+  get: () => adminApi.get<TopupMethodsResponse>("/topup/methods"),
+  update: (methodId: string, data: TopupMethodUpdate) =>
+    adminApi.put<TopupMethodRules>(`/topup/methods/${encodeURIComponent(methodId)}`, data),
+};
+
 // ---------- Скидка на первую покупку триальщикам ----------
 
 export interface TrialDiscountConfig {
@@ -693,6 +800,11 @@ export interface TrialDiscountConfig {
   percent: number;
   days_before: number;
   lifetime_hours: number;
+  /** Как скидка достаётся человеку на ПОДКЛЮЧЁННОМ бэкенде. Шлёт только тот, у
+   *  кого это работает иначе, чем у нас (адаптер поверх чужого бота: там скидка
+   *  приходит промокодом, а не ложится на аккаунт молча). Поля нет — описание
+   *  экрана и так верно. */
+  note?: string;
 }
 
 export const trialDiscountAdminApi = {
@@ -708,6 +820,22 @@ export interface ReserveConfig {
   reserve_gb: number;
   window_days: number;
   squad_uuid: string;
+  // Всё ниже — НЕОБЯЗАТЕЛЬНОЕ: шлёт только адаптер поверх чужого бота, у которого
+  // резерв устроен богаче (режимы вместо тумблера, срок в часах, два сквада).
+  // Наш собственный бэкенд этих полей не отдаёт вовсе, и карточка тогда обязана
+  // выглядеть и работать ровно как раньше.
+  mode?: string;
+  modes?: { value: string; label: string; desc?: string }[];
+  mode_note?: string;
+  window_hours?: number;
+  squad_uuid_limited?: string;
+  trial_enabled?: boolean;
+  daily_enabled?: boolean;
+  free_enabled?: boolean;
+  // Тот же договор, что у «Настроек»: чего у бэкенда нет — не рисуем (supported),
+  // что есть, но правится не отсюда — рисуем выключенным с причиной (locked).
+  supported?: Record<string, boolean>;
+  locked?: Record<string, string>;
 }
 
 export const reserveAdminApi = {

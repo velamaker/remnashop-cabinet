@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Save, AlertCircle, CheckCircle2, Bell, Lock, SlidersHorizontal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { settingsAdminApi, topupAdminApi, morningSummaryAdminApi, trialDiscountAdminApi, reserveAdminApi, promoBannerAdminApi, winbackAdminApi, digestAdminApi, trafficAlertAdminApi, newDeviceAdminApi, loginAlertAdminApi, emailGateAdminApi, freezeAdminApi, type AdminSettings, type TopupAdminConfig, type MorningSummaryConfig, type TrialDiscountConfig, type ReserveConfig, type PromoBannerConfig, type WinbackConfig, type DigestConfig, type TrafficAlertConfig, type NewDeviceConfig, type LoginAlertConfig, type FreezeConfig } from "@/api/admin";
+import { settingsAdminApi, topupAdminApi, morningSummaryAdminApi, trialDiscountAdminApi, reserveAdminApi, promoBannerAdminApi, winbackAdminApi, digestAdminApi, trafficAlertAdminApi, newDeviceAdminApi, loginAlertAdminApi, emailGateAdminApi, freezeAdminApi, type AdminSettings, type TopupAdminConfig, type TopupApplicability, type MorningSummaryConfig, type TrialDiscountConfig, type ReserveConfig, type PromoBannerConfig, type WinbackConfig, type DigestConfig, type TrafficAlertConfig, type NewDeviceConfig, type LoginAlertConfig, type FreezeConfig } from "@/api/admin";
 import { ApiError } from "@/types/api";
+import { useAuth } from "@/contexts/AuthContext";
 
 // Крупный блок настроек: заголовок с иконкой + вложенные секции (карточки).
 function Group({ title, icon: Icon, children }: { title: string; icon: LucideIcon; children: React.ReactNode }) {
@@ -30,16 +31,17 @@ function Section({ title, desc, children }: { title: string; desc?: string; chil
 }
 
 /** Just the switch control — used standalone or inside a row. */
-function Switch({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+function Switch({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
-      onClick={() => onChange(!checked)}
+      disabled={disabled}
+      onClick={() => !disabled && onChange(!checked)}
       className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
         checked ? "bg-accent" : "bg-border"
-      }`}
+      } ${disabled ? "cursor-not-allowed" : ""}`}
     >
       <span
         className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${
@@ -50,33 +52,40 @@ function Switch({ checked, onChange }: { checked: boolean; onChange: (v: boolean
   );
 }
 
-/** A full clickable row: label/sub on the left, switch pinned right inside a contained card. */
+/** A full clickable row: label/sub on the left, switch pinned right inside a contained card.
+ *  disabled — настройка у бэкенда есть, значение настоящее, но правится не отсюда;
+ *  причина приходит в `sub` (см. `locked` в ответе адаптера). */
 function Toggle({
   label,
   sub,
   checked,
   onChange,
+  disabled,
 }: {
   label: string;
   sub?: string;
   checked: boolean;
   onChange: (v: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
-      onClick={() => onChange(!checked)}
+      disabled={disabled}
+      onClick={() => !disabled && onChange(!checked)}
       className={`flex w-full items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition-colors ${
-        checked
-          ? "border-accent/30 bg-accent/5 hover:bg-accent/10"
-          : "border-border-subtle bg-bg hover:bg-bg-subtle"
+        disabled
+          ? "cursor-not-allowed border-border-subtle bg-bg opacity-60"
+          : checked
+            ? "border-accent/30 bg-accent/5 hover:bg-accent/10"
+            : "border-border-subtle bg-bg hover:bg-bg-subtle"
       }`}
     >
       <div className="min-w-0">
         <p className="truncate text-sm font-medium text-fg">{label}</p>
         {sub && <p className="mt-0.5 text-xs leading-snug text-fg-muted">{sub}</p>}
       </div>
-      <Switch checked={checked} onChange={onChange} />
+      <Switch checked={checked} onChange={onChange} disabled={disabled} />
     </button>
   );
 }
@@ -86,11 +95,15 @@ function Field({
   value,
   onChange,
   type = "text",
+  disabled,
+  hint,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   type?: string;
+  disabled?: boolean;
+  hint?: string;
 }) {
   return (
     <div>
@@ -98,9 +111,13 @@ function Field({
       <input
         type={type}
         value={value}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent"
+        className={`w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent ${
+          disabled ? "cursor-not-allowed opacity-60" : ""
+        }`}
       />
+      {hint && <p className="mt-1 text-xs leading-snug text-fg-muted">{hint}</p>}
     </div>
   );
 }
@@ -135,8 +152,32 @@ function prettyNotification(key: string): string {
   );
 }
 
+/** Что на подключённом бэкенде вообще применимо.
+ *
+ *  `supported` — чего у него нет вовсе: такой переключатель мы не рисуем. Показать
+ *  его нельзя не из вежливости: сохранение экрана уходит одним запросом, и отказ
+ *  по одному неприменимому полю отменяет заодно все соседние правки.
+ *  `locked` — настройка есть и значение настоящее, но правится не отсюда (задана в
+ *  .env бота, живёт отдельным списком): рисуем выключенной и подписываем причиной.
+ *  Полей нет — бэкенд наш, экран работает как раньше. */
+type Applicability = {
+  supported?: Record<string, boolean>;
+  locked?: Record<string, string>;
+};
+
+/** Карточка не загрузилась: беда это или «здесь такого не бывает».
+ *
+ *  501 от бэкенда означает ровно второе — кабинет стоит поверх чужого бота, и эта
+ *  механика у него не переведена (или её у него нет вовсе). Тогда карточку не
+ *  показываем совсем: «Не удалось загрузить» на месте функции, которой не
+ *  существует, читается как поломка нашего кабинета, и владелец идёт её чинить.
+ *  Любая другая беда (сеть, 500) — настоящая ошибка, и о ней надо сказать. */
+const UNSUPPORTED = "__unsupported__";
+const loadError = (e: unknown) =>
+  e instanceof ApiError && e.status === 501 ? UNSUPPORTED : "Не удалось загрузить";
+
 export default function AdminSettingsPage() {
-  const [settings, setSettings] = useState<AdminSettings | null>(null);
+  const [settings, setSettings] = useState<(AdminSettings & Applicability) | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -150,24 +191,54 @@ export default function AdminSettingsPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  // Показывать элемент? Поля нет — да (наш бэкенд про `supported` не знает).
+  const can = (key: string) => settings?.supported?.[key] !== false;
+  // Причина «правится не отсюда»; есть — элемент рисуем выключенным.
+  const why = (key: string) => settings?.locked?.[key];
+  // Отправлять ли поле в сохранение: только то, что видно И правится.
+  const editable = (key: string) => can(key) && !why(key);
+
   const save = async () => {
     if (!settings) return;
     setSaving(true);
     setError(null);
     try {
-      const updated = await settingsAdminApi.update({
-        access: settings.access,
-        registration_allowed: settings.access.registration_allowed,
-        payments_allowed: settings.access.payments_allowed,
-        rules_required: settings.requirements.rules_required,
-        channel_required: settings.requirements.channel_required,
-        channel_link: settings.requirements.channel_link,
-        rules_link: settings.requirements.rules_link,
-        backup: settings.backup,
-        trial_channel_guard: settings.extra.trial_channel_guard,
-        mini_app_reserve: settings.extra.mini_app_reserve,
-        notifications: settings.notifications,
-      });
+      // Кладём в тело ТОЛЬКО применимое. Раньше уходил весь экран целиком, и на
+      // чужом бэкенде это заканчивалось отказом по первому же неприменимому полю
+      // — вместе с ним терялись и настоящие правки в соседних блоках.
+      const body: Record<string, unknown> = {};
+      if (editable("access_mode") || editable("registration_allowed") || editable("payments_allowed")) {
+        body.access = settings.access;
+      }
+      if (editable("registration_allowed")) body.registration_allowed = settings.access.registration_allowed;
+      if (editable("payments_allowed")) body.payments_allowed = settings.access.payments_allowed;
+      if (editable("rules_required")) body.rules_required = settings.requirements.rules_required;
+      if (editable("channel_required")) body.channel_required = settings.requirements.channel_required;
+      if (editable("channel_link")) body.channel_link = settings.requirements.channel_link;
+      if (editable("rules_link")) body.rules_link = settings.requirements.rules_link;
+      const backup: Record<string, unknown> = {};
+      if (editable("backup_enabled")) backup.enabled = settings.backup.enabled;
+      if (editable("backup_send_to_chat")) backup.send_to_chat = settings.backup.send_to_chat;
+      if (editable("backup_interval_hours")) backup.interval_hours = settings.backup.interval_hours;
+      if (editable("backup_max_files")) backup.max_files = settings.backup.max_files;
+      if (Object.keys(backup).length) body.backup = backup;
+      if (editable("trial_channel_guard")) body.trial_channel_guard = settings.extra.trial_channel_guard;
+      if (editable("mini_app_reserve")) body.mini_app_reserve = settings.extra.mini_app_reserve;
+      // Три сброса. Раньше уходил только «Сброс ссылки» и только чужому бэкенду:
+      // наш их не принимал вовсе, и слать их значило бы делать вид, что тумблер
+      // работает. Теперь принимает — шлём все три, а чужому по-прежнему только
+      // то, что он сам объявил применимым.
+      for (const key of ["device_single_reset", "device_all_reset", "link_reset"] as const) {
+        if (editable(key)) body[key] = { enabled: settings.extra[key].enabled };
+      }
+      // Запертые переключатели уведомлений в тело не кладём — их значение всё
+      // равно диктует .env бота, а отказ по ним отменил бы остальные.
+      const notifications = Object.fromEntries(
+        Object.entries(settings.notifications).filter(([key]) => !why(`notifications.${key}`)),
+      );
+      if (Object.keys(notifications).length) body.notifications = notifications;
+
+      const updated = await settingsAdminApi.update(body);
       setSettings(updated);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -194,8 +265,11 @@ export default function AdminSettingsPage() {
   const setAllNotifications = (value: boolean) => {
     setSettings((prev) => {
       if (!prev) return prev;
-      const copy = JSON.parse(JSON.stringify(prev)) as AdminSettings;
+      const copy = JSON.parse(JSON.stringify(prev)) as AdminSettings & Applicability;
       for (const key of Object.keys(copy.notifications)) {
+        // Запертые (.env бота) не трогаем: иначе «Включить все» переключил бы
+        // на экране то, что на сохранении всё равно откатится к прежнему.
+        if (copy.locked?.[`notifications.${key}`]) continue;
         copy.notifications[key] = value;
       }
       return copy;
@@ -216,12 +290,29 @@ export default function AdminSettingsPage() {
     );
   if (!settings) return null;
 
+  // Текстовое поле, которое правится не отсюда, показываем только с содержимым:
+  // пустая заблокированная строка — шум, а не информация.
+  const showChannelLink = can("channel_link") && (!why("channel_link") || !!settings.requirements.channel_link);
+  const showRulesLink = can("rules_link") && (!why("rules_link") || !!settings.requirements.rules_link);
+  const backupKeys = ["backup_enabled", "backup_send_to_chat", "backup_interval_hours", "backup_max_files"];
+  const showBackup = backupKeys.some(can);
+  const extraKeys = ["trial_channel_guard", "mini_app_reserve", "device_single_reset", "device_all_reset", "link_reset"];
+  const showExtra = extraKeys.some(can);
+  const canSwitchAllNotifications = Object.keys(settings.notifications).some((key) => !why(`notifications.${key}`));
+  // Есть ли на экране хоть что-то, что кнопка «Сохранить» реально изменит.
+  // Если нет — кнопки быть не должно: «Сохранено!» без единой правки это враньё.
+  const canSaveAnything =
+    [...backupKeys, "trial_channel_guard", "mini_app_reserve", "access_mode", "registration_allowed",
+      "payments_allowed", "rules_required", "channel_required", "channel_link", "rules_link"].some(editable) ||
+    ["device_single_reset", "device_all_reset", "link_reset"].some((key) => can(key) && !why(key)) ||
+    (can("notifications") && canSwitchAllNotifications);
 
   return (
     <div className="mx-auto max-w-3xl space-y-8">
       {/* Sticky header */}
       <div className="sticky top-0 z-10 -mx-5 flex items-center justify-between border-b border-border-subtle bg-bg/80 px-5 py-3 backdrop-blur-md md:-mx-8 md:px-8">
         <h1 className="text-xl font-bold text-fg md:text-2xl">Настройки</h1>
+        {canSaveAnything ? (
         <button
           onClick={save}
           disabled={saving}
@@ -232,6 +323,11 @@ export default function AdminSettingsPage() {
           {saved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
           {saved ? "Сохранено!" : saving ? "Сохранение…" : "Сохранить"}
         </button>
+        ) : (
+          <span className="max-w-[60%] text-right text-xs leading-snug text-fg-muted">
+            Менять отсюда нечего: настройки этого бота заданы в его файле окружения (.env)
+          </span>
+        )}
       </div>
 
       {error && (
@@ -243,7 +339,9 @@ export default function AdminSettingsPage() {
 
       <Group title="Доступ и регистрация" icon={Lock}>
       {/* Access */}
+      {(can("access_mode") || can("registration_allowed") || can("payments_allowed")) && (
       <Section title="Доступ" desc="Кто и как может пользоваться сервисом">
+        {can("access_mode") && (
         <div>
           <label className="mb-1 block text-xs font-medium text-fg-muted">Режим доступа</label>
           <select
@@ -256,20 +354,28 @@ export default function AdminSettingsPage() {
             <option value="RESTRICTED">RESTRICTED — всё заблокировано</option>
           </select>
         </div>
+        )}
+        {(can("registration_allowed") || can("payments_allowed")) && (
         <div className="grid gap-2.5 sm:grid-cols-2">
-          <Toggle label="Разрешить регистрацию" checked={settings.access.registration_allowed} onChange={(v) => upd(["access", "registration_allowed"], v)} />
-          <Toggle label="Разрешить оплату" checked={settings.access.payments_allowed} onChange={(v) => upd(["access", "payments_allowed"], v)} />
+          {can("registration_allowed") && <Toggle label="Разрешить регистрацию" sub={why("registration_allowed")} disabled={!!why("registration_allowed")} checked={settings.access.registration_allowed} onChange={(v) => upd(["access", "registration_allowed"], v)} />}
+          {can("payments_allowed") && <Toggle label="Разрешить оплату" sub={why("payments_allowed")} disabled={!!why("payments_allowed")} checked={settings.access.payments_allowed} onChange={(v) => upd(["access", "payments_allowed"], v)} />}
         </div>
+        )}
       </Section>
+      )}
 
       {/* Requirements */}
       <Section title="Требования" desc="Условия для пользователей при регистрации">
-        <Toggle label="Принять правила" sub="Пользователь должен принять правила при регистрации" checked={settings.requirements.rules_required} onChange={(v) => upd(["requirements", "rules_required"], v)} />
-        <Toggle label="Обязательный канал" sub="Пользователь должен подписаться на канал" checked={settings.requirements.channel_required} onChange={(v) => upd(["requirements", "channel_required"], v)} />
+        {can("rules_required") && <Toggle label="Принять правила" sub={why("rules_required") ?? "Пользователь должен принять правила при регистрации"} disabled={!!why("rules_required")} checked={settings.requirements.rules_required} onChange={(v) => upd(["requirements", "rules_required"], v)} />}
+        {can("channel_required") && <Toggle label="Обязательный канал" sub={why("channel_required") ?? "Пользователь должен подписаться на канал"} disabled={!!why("channel_required")} checked={settings.requirements.channel_required} onChange={(v) => upd(["requirements", "channel_required"], v)} />}
+        {/* Поле, которое правится не отсюда, показываем только когда в нём что-то
+            есть: пустая серая строка не рассказывает ни о чём. */}
+        {(showChannelLink || showRulesLink) && (
         <div className="grid gap-4 pt-1 sm:grid-cols-2">
-          <Field label="Ссылка на канал" value={settings.requirements.channel_link} onChange={(v) => upd(["requirements", "channel_link"], v)} />
-          <Field label="Ссылка на правила" value={settings.requirements.rules_link} onChange={(v) => upd(["requirements", "rules_link"], v)} />
+          {showChannelLink && <Field label="Ссылка на канал" value={settings.requirements.channel_link} disabled={!!why("channel_link")} hint={why("channel_link")} onChange={(v) => upd(["requirements", "channel_link"], v)} />}
+          {showRulesLink && <Field label="Ссылка на правила" value={settings.requirements.rules_link} disabled={!!why("rules_link")} hint={why("rules_link")} onChange={(v) => upd(["requirements", "rules_link"], v)} />}
         </div>
+        )}
         <EmailGateToggle />
       </Section>
 
@@ -279,29 +385,38 @@ export default function AdminSettingsPage() {
 
       <Group title="Система" icon={SlidersHorizontal}>
       {/* Backup */}
+      {showBackup && (
       <Section title="Резервные копии">
+        {(can("backup_enabled") || can("backup_send_to_chat")) && (
         <div className="grid gap-2.5 sm:grid-cols-2">
-          <Toggle label="Автобэкап" checked={settings.backup.enabled} onChange={(v) => upd(["backup", "enabled"], v)} />
-          <Toggle label="Отправлять в чат" checked={settings.backup.send_to_chat} onChange={(v) => upd(["backup", "send_to_chat"], v)} />
+          {can("backup_enabled") && <Toggle label="Автобэкап" sub={why("backup_enabled")} disabled={!!why("backup_enabled")} checked={settings.backup.enabled} onChange={(v) => upd(["backup", "enabled"], v)} />}
+          {can("backup_send_to_chat") && <Toggle label="Отправлять в чат" sub={why("backup_send_to_chat")} disabled={!!why("backup_send_to_chat")} checked={settings.backup.send_to_chat} onChange={(v) => upd(["backup", "send_to_chat"], v)} />}
         </div>
+        )}
+        {(can("backup_interval_hours") || can("backup_max_files")) && (
         <div className="grid grid-cols-2 gap-4 pt-1">
-          <Field label="Интервал (часов)" type="number" value={String(settings.backup.interval_hours)} onChange={(v) => upd(["backup", "interval_hours"], Number(v))} />
-          <Field label="Макс. файлов" type="number" value={String(settings.backup.max_files)} onChange={(v) => upd(["backup", "max_files"], Number(v))} />
+          {can("backup_interval_hours") && <Field label="Интервал (часов)" type="number" value={String(settings.backup.interval_hours)} disabled={!!why("backup_interval_hours")} hint={why("backup_interval_hours")} onChange={(v) => upd(["backup", "interval_hours"], Number(v))} />}
+          {can("backup_max_files") && <Field label="Макс. файлов" type="number" value={String(settings.backup.max_files)} disabled={!!why("backup_max_files")} hint={why("backup_max_files")} onChange={(v) => upd(["backup", "max_files"], Number(v))} />}
         </div>
+        )}
       </Section>
+      )}
 
       {/* Extra */}
+      {showExtra && (
       <Section title="Дополнительно">
-        <Toggle label="Охрана канала для триала" sub="Запрещать пробный период без подписки на канал" checked={settings.extra.trial_channel_guard} onChange={(v) => upd(["extra", "trial_channel_guard"], v)} />
+        {can("trial_channel_guard") && <Toggle label="Охрана канала для триала" sub={why("trial_channel_guard") ?? "Запрещать пробный период без подписки на канал"} disabled={!!why("trial_channel_guard")} checked={settings.extra.trial_channel_guard} onChange={(v) => upd(["extra", "trial_channel_guard"], v)} />}
         <div className="grid gap-2.5 sm:grid-cols-2">
-          <Toggle label="Резервный Mini App" checked={settings.extra.mini_app_reserve} onChange={(v) => upd(["extra", "mini_app_reserve"], v)} />
-          <Toggle label="Сброс одного устройства" checked={settings.extra.device_single_reset.enabled} onChange={(v) => upd(["extra", "device_single_reset", "enabled"], v)} />
-          <Toggle label="Сброс всех устройств" checked={settings.extra.device_all_reset.enabled} onChange={(v) => upd(["extra", "device_all_reset", "enabled"], v)} />
-          <Toggle label="Сброс ссылки" checked={settings.extra.link_reset.enabled} onChange={(v) => upd(["extra", "link_reset", "enabled"], v)} />
+          {can("mini_app_reserve") && <Toggle label="Резервный Mini App" sub={why("mini_app_reserve")} disabled={!!why("mini_app_reserve")} checked={settings.extra.mini_app_reserve} onChange={(v) => upd(["extra", "mini_app_reserve"], v)} />}
+          {can("device_single_reset") && <Toggle label="Сброс одного устройства" sub={why("device_single_reset")} disabled={!!why("device_single_reset")} checked={settings.extra.device_single_reset.enabled} onChange={(v) => upd(["extra", "device_single_reset", "enabled"], v)} />}
+          {can("device_all_reset") && <Toggle label="Сброс всех устройств" sub={why("device_all_reset")} disabled={!!why("device_all_reset")} checked={settings.extra.device_all_reset.enabled} onChange={(v) => upd(["extra", "device_all_reset", "enabled"], v)} />}
+          {can("link_reset") && <Toggle label="Сброс ссылки" sub={why("link_reset")} disabled={!!why("link_reset")} checked={settings.extra.link_reset.enabled} onChange={(v) => upd(["extra", "link_reset", "enabled"], v)} />}
         </div>
       </Section>
+      )}
 
       {/* Notifications */}
+      {can("notifications") && (
       <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
@@ -311,6 +426,9 @@ export default function AdminSettingsPage() {
               {notifStats.on} / {notifStats.total}
             </span>
           </div>
+          {/* Кнопки «все» прячем, когда менять нечего: все переключатели заперты
+              настройками бота, и нажатие ничего бы не изменило. */}
+          {canSwitchAllNotifications && (
           <div className="flex items-center gap-1.5">
             <button
               type="button"
@@ -327,13 +445,15 @@ export default function AdminSettingsPage() {
               Выключить все
             </button>
           </div>
+          )}
         </div>
         <div className="grid gap-2.5 sm:grid-cols-2">
           {Object.entries(settings.notifications).map(([key, enabled]) => (
-            <Toggle key={key} label={prettyNotification(key)} checked={enabled} onChange={(v) => upd(["notifications", key], v)} />
+            <Toggle key={key} label={prettyNotification(key)} sub={why(`notifications.${key}`)} disabled={!!why(`notifications.${key}`)} checked={enabled} onChange={(v) => upd(["notifications", key], v)} />
           ))}
         </div>
       </section>
+      )}
 
       </Group>
     </div>
@@ -348,7 +468,7 @@ export function PromoBannerCard() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    promoBannerAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+    promoBannerAdminApi.get().then(setCfg).catch((e) => setError(loadError(e))).finally(() => setLoading(false));
   }, []);
 
   const patch = (p: Partial<PromoBannerConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
@@ -370,6 +490,7 @@ export function PromoBannerCard() {
   };
 
   if (loading) return null;
+  if (error === UNSUPPORTED) return null;
   if (!cfg) return <Section title="Промо-баннер">{error ?? "Ошибка"}</Section>;
 
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
@@ -448,22 +569,53 @@ export function ReserveCard() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    reserveAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+    reserveAdminApi.get().then(setCfg).catch((e) => setError(loadError(e))).finally(() => setLoading(false));
   }, []);
 
   const patch = (p: Partial<ReserveConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
+
+  // Тот же договор применимости, что и в «Настройках»: поля нет в ответе — элемент
+  // показываем (наш бэкенд про `supported` не знает); `false` — не показываем вовсе;
+  // `locked` — показываем выключенным и подписываем причиной.
+  const can = (key: string) => cfg?.supported?.[key] !== false;
+  const why = (key: string) => cfg?.locked?.[key];
+  const editable = (key: string) => can(key) && !why(key);
+  // Бэкенд с режимами (адаптер поверх чужого бота): у него вместо тумблера четыре
+  // режима, срок в ЧАСАХ и два сквада. Признак — наличие самого поля, а не догадки.
+  const graceMode = cfg?.mode !== undefined;
+  const hasHours = cfg?.window_hours !== undefined;
 
   const save = async () => {
     if (!cfg) return;
     setSaving(true);
     setError(null);
     try {
-      const updated = await reserveAdminApi.update({
-        enabled: cfg.enabled,
-        reserve_gb: Math.min(100, Math.max(1, Number(cfg.reserve_gb) || 1)),
-        window_days: Math.min(60, Math.max(1, Number(cfg.window_days) || 1)),
-        squad_uuid: (cfg.squad_uuid || "").trim(),
-      });
+      // Кладём в тело только то, что видно И правится. На нашем бэкенде карт
+      // применимости нет, а новых полей нет в ответе — уходят ровно прежние
+      // четыре поля, как и до появления пульта к чужому боту.
+      const body: Partial<ReserveConfig> = {};
+      if (editable("enabled")) body.enabled = cfg.enabled;
+      if (editable("reserve_gb")) {
+        // Наш бэкенд держит резерв в 1…100 ГБ и сам обрежет лишнее; у чужого
+        // бота свои границы, и молча ужимать его 200 ГБ до сотни нельзя —
+        // отдаём число как есть, а причину отказа он скажет сам.
+        const gb = Math.trunc(Number(cfg.reserve_gb) || 0);
+        body.reserve_gb = graceMode ? Math.max(0, gb) : Math.min(100, Math.max(1, gb || 1));
+      }
+      if (editable("window_days")) body.window_days = Math.min(60, Math.max(1, Number(cfg.window_days) || 1));
+      if (editable("squad_uuid")) body.squad_uuid = (cfg.squad_uuid || "").trim();
+      if (graceMode && editable("mode")) body.mode = cfg.mode;
+      // Часы НЕ пересчитываем в дни и обратно: тихое округление съедает остаток
+      // срока (на паузе это уже стоило людям подаренных дней).
+      if (hasHours && editable("window_hours")) body.window_hours = Math.max(1, Math.trunc(Number(cfg.window_hours) || 0));
+      if (cfg.squad_uuid_limited !== undefined && editable("squad_uuid_limited")) {
+        body.squad_uuid_limited = (cfg.squad_uuid_limited || "").trim();
+      }
+      if (cfg.trial_enabled !== undefined && editable("trial_enabled")) body.trial_enabled = cfg.trial_enabled;
+      if (cfg.daily_enabled !== undefined && editable("daily_enabled")) body.daily_enabled = cfg.daily_enabled;
+      if (cfg.free_enabled !== undefined && editable("free_enabled")) body.free_enabled = cfg.free_enabled;
+
+      const updated = await reserveAdminApi.update(body);
       setCfg(updated);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -475,27 +627,115 @@ export function ReserveCard() {
   };
 
   if (loading) return null;
+  if (error === UNSUPPORTED) return null;
   if (!cfg) return <Section title="Резервный доступ">{error ?? "Ошибка"}</Section>;
 
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
+  const modes = cfg.modes ?? [];
+  const modeDesc = modes.find((m) => m.value === cfg.mode)?.desc;
+  // У нашего бэкенда сквад-резерв необязателен (пусто = оставить текущий), у бота
+  // с режимами — наоборот, без него резерв не запустится. Подпись обязана
+  // говорить правду того бэкенда, который сейчас отвечает.
+  const squadHint = why("squad_uuid") ?? (graceMode ? "Обязателен для режима «Включён»: резерв выдаётся только на этом скваде." : "");
 
   return (
-    <Section title="Резервный доступ истёкшим" desc="Когда подписка заканчивается, юзер N дней сохраняет небольшой лимит трафика («спасательный круг»), чтобы успеть продлить. Дальше — доступ отключается. Надпись «подписка закончилась / продлите» приходит из настроек панели (уже по-русски).">
-      <Toggle label="Включить резерв" sub="По умолчанию выключено (раздаёт бесплатный трафик)" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
+    <Section
+      title="Резервный доступ истёкшим"
+      desc={
+        graceMode
+          ? "Когда подписка заканчивается или кончается трафик, человек ещё какое-то время сохраняет небольшой лимит («спасательный круг»), чтобы успеть продлить. Дальше доступ отключается. Экран правит настройки самого бота — срок у него считается в ЧАСАХ, а резерв выдаётся на отдельных сквадах."
+          : "Когда подписка заканчивается, юзер N дней сохраняет небольшой лимит трафика («спасательный круг»), чтобы успеть продлить. Дальше — доступ отключается. Надпись «подписка закончилась / продлите» приходит из настроек панели (уже по-русски)."
+      }
+    >
+      {can("enabled") && (
+        <Toggle
+          label="Включить резерв"
+          sub={why("enabled") ?? "По умолчанию выключено (раздаёт бесплатный трафик)"}
+          checked={cfg.enabled}
+          onChange={(v) => patch({ enabled: v })}
+          disabled={!!why("enabled")}
+        />
+      )}
+      {graceMode && can("mode") && (
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Режим резерва</label>
+          <select
+            value={cfg.mode}
+            disabled={!!why("mode")}
+            onChange={(e) => patch({ mode: e.target.value })}
+            className={`${inputCls} ${why("mode") ? "cursor-not-allowed opacity-60" : ""}`}
+          >
+            {modes.length
+              ? modes.map((m) => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
+                  </option>
+                ))
+              : <option value={cfg.mode}>{cfg.mode}</option>}
+          </select>
+          {modeDesc && <p className="mt-1 text-xs leading-snug text-fg-muted">{modeDesc}</p>}
+          {why("mode") && <p className="mt-1 text-xs leading-snug text-fg-muted">{why("mode")}</p>}
+          {cfg.mode_note && <p className="mt-1 text-xs leading-snug text-warning">{cfg.mode_note}</p>}
+        </div>
+      )}
       <div className="grid gap-3 sm:grid-cols-2">
-        <div>
-          <label className="mb-1 block text-xs text-fg-muted">Резерв трафика, ГБ</label>
-          <input type="number" min={1} max={100} value={String(cfg.reserve_gb)} onChange={(e) => patch({ reserve_gb: Number(e.target.value) })} className={inputCls} />
-        </div>
-        <div>
-          <label className="mb-1 block text-xs text-fg-muted">Окно резерва, дней</label>
-          <input type="number" min={1} max={60} value={String(cfg.window_days)} onChange={(e) => patch({ window_days: Number(e.target.value) })} className={inputCls} />
-        </div>
+        {can("reserve_gb") && (
+          <div>
+            <label className="mb-1 block text-xs text-fg-muted">Резерв трафика, ГБ</label>
+            <input type="number" min={1} max={graceMode ? undefined : 100} disabled={!!why("reserve_gb")} value={String(cfg.reserve_gb)} onChange={(e) => patch({ reserve_gb: Number(e.target.value) })} className={`${inputCls} ${why("reserve_gb") ? "cursor-not-allowed opacity-60" : ""}`} />
+            {why("reserve_gb") && <p className="mt-1 text-xs leading-snug text-fg-muted">{why("reserve_gb")}</p>}
+          </div>
+        )}
+        {can("window_days") && (
+          <div>
+            <label className="mb-1 block text-xs text-fg-muted">Окно резерва, дней</label>
+            <input type="number" min={1} max={60} disabled={!!why("window_days")} value={String(cfg.window_days)} onChange={(e) => patch({ window_days: Number(e.target.value) })} className={`${inputCls} ${why("window_days") ? "cursor-not-allowed opacity-60" : ""}`} />
+            {why("window_days") && <p className="mt-1 text-xs leading-snug text-fg-muted">{why("window_days")}</p>}
+          </div>
+        )}
+        {hasHours && can("window_hours") && (
+          <div>
+            {/* Единицу подписываем явно и не пересчитываем: столько часов и уйдёт в бота. */}
+            <label className="mb-1 block text-xs text-fg-muted">Срок резерва, часов</label>
+            <input type="number" min={1} disabled={!!why("window_hours")} value={String(cfg.window_hours)} onChange={(e) => patch({ window_hours: Number(e.target.value) })} className={`${inputCls} ${why("window_hours") ? "cursor-not-allowed opacity-60" : ""}`} />
+            <p className="mt-1 text-xs leading-snug text-fg-muted">
+              {why("window_hours") ?? `Столько часов держится резерв (${cfg.window_hours} ч ≈ ${Math.round(((cfg.window_hours ?? 0) / 24) * 10) / 10} сут.)`}
+            </p>
+          </div>
+        )}
       </div>
-      <div>
-        <label className="mb-1 block text-xs text-fg-muted">Сквад-резерв (UUID, необязательно — пусто = оставить текущий)</label>
-        <input type="text" value={cfg.squad_uuid} onChange={(e) => patch({ squad_uuid: e.target.value })} placeholder="напр. 03542796-2d7d-…" className={inputCls} />
-      </div>
+      {can("squad_uuid") && (
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">
+            {graceMode ? "Сквад для истёкших (UUID)" : "Сквад-резерв (UUID, необязательно — пусто = оставить текущий)"}
+          </label>
+          <input type="text" disabled={!!why("squad_uuid")} value={cfg.squad_uuid} onChange={(e) => patch({ squad_uuid: e.target.value })} placeholder="напр. 03542796-2d7d-…" className={`${inputCls} ${why("squad_uuid") ? "cursor-not-allowed opacity-60" : ""}`} />
+          {squadHint && <p className="mt-1 text-xs leading-snug text-fg-muted">{squadHint}</p>}
+        </div>
+      )}
+      {cfg.squad_uuid_limited !== undefined && can("squad_uuid_limited") && (
+        <div>
+          <label className="mb-1 block text-xs text-fg-muted">Сквад для исчерпавших трафик (UUID)</label>
+          <input type="text" disabled={!!why("squad_uuid_limited")} value={cfg.squad_uuid_limited} onChange={(e) => patch({ squad_uuid_limited: e.target.value })} placeholder="напр. 03542796-2d7d-…" className={`${inputCls} ${why("squad_uuid_limited") ? "cursor-not-allowed opacity-60" : ""}`} />
+          <p className="mt-1 text-xs leading-snug text-fg-muted">
+            {why("squad_uuid_limited") ?? "Кто выбрал весь трафик — попадает сюда, а не к истёкшим."}
+          </p>
+        </div>
+      )}
+      {cfg.trial_enabled !== undefined && (
+        <div className="space-y-2.5">
+          <p className="text-xs text-fg-muted">Кому положен резерв (обычные платные подписки получают его всегда):</p>
+          {can("trial_enabled") && (
+            <Toggle label="Пробным подпискам" sub={why("trial_enabled")} checked={!!cfg.trial_enabled} onChange={(v) => patch({ trial_enabled: v })} disabled={!!why("trial_enabled")} />
+          )}
+          {cfg.daily_enabled !== undefined && can("daily_enabled") && (
+            <Toggle label="Суточным подпискам" sub={why("daily_enabled")} checked={!!cfg.daily_enabled} onChange={(v) => patch({ daily_enabled: v })} disabled={!!why("daily_enabled")} />
+          )}
+          {cfg.free_enabled !== undefined && can("free_enabled") && (
+            <Toggle label="Бесплатным тарифам" sub={why("free_enabled")} checked={!!cfg.free_enabled} onChange={(v) => patch({ free_enabled: v })} disabled={!!why("free_enabled")} />
+          )}
+        </div>
+      )}
       <div className="flex items-center justify-between gap-3 pt-1">
         <span className="text-xs">
           {error && <span className="text-danger">{error}</span>}
@@ -547,7 +787,7 @@ export function FreezeCard() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    freezeAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+    freezeAdminApi.get().then(setCfg).catch((e) => setError(loadError(e))).finally(() => setLoading(false));
   }, []);
 
   const patch = (p: Partial<FreezeConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
@@ -572,6 +812,7 @@ export function FreezeCard() {
   };
 
   if (loading) return null;
+  if (error === UNSUPPORTED) return null;
   if (!cfg) return <Section title="Заморозка подписки">{error ?? "Ошибка"}</Section>;
 
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
@@ -604,7 +845,7 @@ export function NewDeviceCard() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    newDeviceAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+    newDeviceAdminApi.get().then(setCfg).catch((e) => setError(loadError(e))).finally(() => setLoading(false));
   }, []);
 
   const save = async (enabled: boolean) => {
@@ -623,6 +864,7 @@ export function NewDeviceCard() {
   };
 
   if (loading) return null;
+  if (error === UNSUPPORTED) return null;
   if (!cfg) return <Section title="Новое устройство">{error ?? "Ошибка"}</Section>;
 
   return (
@@ -641,7 +883,7 @@ export function LoginAlertCard() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    loginAlertAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+    loginAlertAdminApi.get().then(setCfg).catch((e) => setError(loadError(e))).finally(() => setLoading(false));
   }, []);
 
   const save = async (enabled: boolean) => {
@@ -660,6 +902,7 @@ export function LoginAlertCard() {
   };
 
   if (loading) return null;
+  if (error === UNSUPPORTED) return null;
   if (!cfg) return <Section title="Алерт о новом входе">{error ?? "Ошибка"}</Section>;
 
   return (
@@ -678,7 +921,7 @@ export function TrafficAlertCard() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    trafficAlertAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+    trafficAlertAdminApi.get().then(setCfg).catch((e) => setError(loadError(e))).finally(() => setLoading(false));
   }, []);
 
   const patch = (p: Partial<TrafficAlertConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
@@ -703,6 +946,7 @@ export function TrafficAlertCard() {
   };
 
   if (loading) return null;
+  if (error === UNSUPPORTED) return null;
   if (!cfg) return <Section title="Трафик заканчивается">{error ?? "Ошибка"}</Section>;
 
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
@@ -735,7 +979,7 @@ export function DigestCard() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    digestAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+    digestAdminApi.get().then(setCfg).catch((e) => setError(loadError(e))).finally(() => setLoading(false));
   }, []);
 
   const patch = (p: Partial<DigestConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
@@ -761,6 +1005,7 @@ export function DigestCard() {
   };
 
   if (loading) return null;
+  if (error === UNSUPPORTED) return null;
   if (!cfg) return <Section title="Месячный дайджест">{error ?? "Ошибка"}</Section>;
 
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
@@ -799,7 +1044,7 @@ export function WinbackCard() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    winbackAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+    winbackAdminApi.get().then(setCfg).catch((e) => setError(loadError(e))).finally(() => setLoading(false));
   }, []);
 
   const patch = (p: Partial<WinbackConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
@@ -826,6 +1071,7 @@ export function WinbackCard() {
   };
 
   if (loading) return null;
+  if (error === UNSUPPORTED) return null;
   if (!cfg) return <Section title="Win-back истёкших">{error ?? "Ошибка"}</Section>;
 
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
@@ -868,7 +1114,7 @@ export function TrialDiscountCard() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    trialDiscountAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+    trialDiscountAdminApi.get().then(setCfg).catch((e) => setError(loadError(e))).finally(() => setLoading(false));
   }, []);
 
   const patch = (p: Partial<TrialDiscountConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
@@ -895,12 +1141,20 @@ export function TrialDiscountCard() {
   };
 
   if (loading) return null;
+  if (error === UNSUPPORTED) return null;
   if (!cfg) return <Section title="Скидка триальщикам">{error ?? "Ошибка"}</Section>;
 
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
 
   return (
     <Section title="Скидка триальщикам на первую покупку" desc="За N дней до конца пробного периода юзеру выдаётся одноразовая скидка на первую оплату + баннер-таймер в кабинете и напоминание в Telegram. Скидка гаснет после покупки или по истечении срока.">
+      {/* Бэкенд рассказал, что у него это устроено иначе (промокод вместо
+          молчаливой выдачи) — печатаем дословно: описание выше написано про наш. */}
+      {cfg.note && (
+        <p className="rounded-xl border border-border-subtle bg-bg px-4 py-3 text-xs leading-relaxed text-fg-muted">
+          {cfg.note}
+        </p>
+      )}
       <Toggle label="Включить" sub="По умолчанию выключено" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
       <div className="grid gap-3 sm:grid-cols-3">
         <div>
@@ -937,7 +1191,7 @@ export function MorningSummaryCard() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    morningSummaryAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+    morningSummaryAdminApi.get().then(setCfg).catch((e) => setError(loadError(e))).finally(() => setLoading(false));
   }, []);
 
   const patch = (p: Partial<MorningSummaryConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
@@ -963,6 +1217,7 @@ export function MorningSummaryCard() {
   };
 
   if (loading) return null;
+  if (error === UNSUPPORTED) return null;
   if (!cfg) return <Section title="Утренняя сводка">{error ?? "Ошибка"}</Section>;
 
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
@@ -993,7 +1248,22 @@ export function MorningSummaryCard() {
   );
 }
 
-export function TopupSettingsCard() {
+export function TopupSettingsCard({ applicability }: { applicability?: TopupApplicability } = {}) {
+  // На чужом бэкенде («Бедолага») условия пополнения СОБИРАЮТСЯ из настроек
+  // каждого платёжного метода, и общего места, куда их записать, нет. Цифры при
+  // этом настоящие и полезные — поэтому показываем их, но без кнопки, за которой
+  // отказ. Признак приходит от бэкенда (whoami.readonly_pages), у нашего
+  // собственного этого поля нет вовсе — значит, всё как раньше.
+  const { isPageReadonly } = useAuth();
+  const readonly = isPageReadonly("/admin/topup");
+  // Разбор по ПОЛЯМ, а не по странице целиком: у бэкенда, который правит условия
+  // пополнения по каждому способу отдельно (карточка ниже), сама страница
+  // редактируемая, а вот эти пять сводных значений — нет. Карт нет — бэкенд наш,
+  // всё показывается и правится как раньше.
+  const can = (key: string) => applicability?.supported?.[key] !== false;
+  const why = (key: string) => applicability?.locked?.[key];
+  const editable = (key: string) => can(key) && !why(key);
+  const anyEditable = ["enabled", "bonus_percent", "min_amount", "max_amount", "presets"].some(editable);
   const [cfg, setCfg] = useState<TopupAdminConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1001,7 +1271,7 @@ export function TopupSettingsCard() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    topupAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить")).finally(() => setLoading(false));
+    topupAdminApi.get().then(setCfg).catch((e) => setError(loadError(e))).finally(() => setLoading(false));
   }, []);
 
   const patch = (p: Partial<TopupAdminConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
@@ -1015,13 +1285,15 @@ export function TopupSettingsCard() {
         .split(",")
         .map((s) => Number(s.trim()))
         .filter((n) => Number.isFinite(n) && n >= 1);
-      const updated = await topupAdminApi.update({
-        enabled: cfg.enabled,
-        bonus_percent: Number(cfg.bonus_percent) || 0,
-        min_amount: Number(cfg.min_amount) || 1,
-        max_amount: Number(cfg.max_amount) || 1,
-        presets,
-      });
+      // В тело кладём ТОЛЬКО применимое: сохранение уходит одним запросом, и
+      // отказ по одному неприменимому полю отменил бы правки в соседних.
+      const body: Partial<TopupAdminConfig> = {};
+      if (editable("enabled")) body.enabled = cfg.enabled;
+      if (editable("bonus_percent")) body.bonus_percent = Number(cfg.bonus_percent) || 0;
+      if (editable("min_amount")) body.min_amount = Number(cfg.min_amount) || 1;
+      if (editable("max_amount")) body.max_amount = Number(cfg.max_amount) || 1;
+      if (editable("presets")) body.presets = presets;
+      const updated = await topupAdminApi.update(body);
       setCfg(updated);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -1033,39 +1305,86 @@ export function TopupSettingsCard() {
   };
 
   if (loading) return null;
+  if (error === UNSUPPORTED) return null;
   if (!cfg) return <Section title="Пополнение баланса">{error ?? "Ошибка"}</Section>;
 
-  const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
+  const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-60";
+  // Причина «правится не отсюда» — прямо под полем: без неё выключенный ввод
+  // читается как поломка.
+  const lockNote = (key: string) =>
+    why(key) ? <p className="mt-1 text-[11px] leading-snug text-fg-muted">{why(key)}</p> : null;
+  // Число колонок считаем по видимым полям: с тремя фиксированными колонками
+  // спрятанный «Бонус» оставлял бы дыру.
+  const numberFields = ["bonus_percent", "min_amount", "max_amount"].filter(can).length;
 
   return (
-    <Section title="Пополнение через шлюзы" desc="Пользователь платит через платёжный шлюз, сумма (+бонус) зачисляется на ₽-баланс. Только рублёвые шлюзы.">
-      <Toggle label="Включить пополнение" sub="Показывать блок пополнения в кабинете" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
-      <div className="grid gap-3 sm:grid-cols-3">
-        <div>
-          <label className="mb-1 block text-xs text-fg-muted">Бонус, %</label>
-          <input type="number" min={0} max={100} value={String(cfg.bonus_percent)} onChange={(e) => patch({ bonus_percent: Number(e.target.value) })} className={inputCls} />
+    <Section
+      title="Пополнение через шлюзы"
+      desc={
+        can("bonus_percent")
+          ? "Пользователь платит через платёжный шлюз, сумма (+бонус) зачисляется на ₽-баланс. Только рублёвые шлюзы."
+          : "Пользователь платит через платёжный шлюз, сумма зачисляется на ₽-баланс. Только рублёвые шлюзы."
+      }
+    >
+      {can("enabled") && (
+        <Toggle
+          label="Включить пополнение"
+          sub={why("enabled") ?? "Показывать блок пополнения в кабинете"}
+          checked={cfg.enabled}
+          disabled={!!why("enabled")}
+          onChange={(v) => patch({ enabled: v })}
+        />
+      )}
+      {numberFields > 0 && (
+        <div className={`grid gap-3 ${numberFields >= 3 ? "sm:grid-cols-3" : numberFields === 2 ? "sm:grid-cols-2" : ""}`}>
+          {can("bonus_percent") && (
+            <div>
+              <label className="mb-1 block text-xs text-fg-muted">Бонус, %</label>
+              <input type="number" min={0} max={100} disabled={!!why("bonus_percent")} value={String(cfg.bonus_percent)} onChange={(e) => patch({ bonus_percent: Number(e.target.value) })} className={inputCls} />
+              {lockNote("bonus_percent")}
+            </div>
+          )}
+          {can("min_amount") && (
+            <div>
+              <label className="mb-1 block text-xs text-fg-muted">Мин. сумма, ₽</label>
+              <input type="number" min={1} disabled={!!why("min_amount")} value={String(cfg.min_amount)} onChange={(e) => patch({ min_amount: Number(e.target.value) })} className={inputCls} />
+              {lockNote("min_amount")}
+            </div>
+          )}
+          {can("max_amount") && (
+            <div>
+              <label className="mb-1 block text-xs text-fg-muted">Макс. сумма, ₽</label>
+              <input type="number" min={1} disabled={!!why("max_amount")} value={String(cfg.max_amount)} onChange={(e) => patch({ max_amount: Number(e.target.value) })} className={inputCls} />
+              {lockNote("max_amount")}
+            </div>
+          )}
         </div>
+      )}
+      {can("presets") && (
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Мин. сумма, ₽</label>
-          <input type="number" min={1} value={String(cfg.min_amount)} onChange={(e) => patch({ min_amount: Number(e.target.value) })} className={inputCls} />
+          <label className="mb-1 block text-xs text-fg-muted">Пресеты сумм (через запятую)</label>
+          <input type="text" disabled={!!why("presets")} value={cfg.presets.join(", ")} onChange={(e) => patch({ presets: e.target.value.split(",").map((s) => Number(s.trim())).filter((n) => !Number.isNaN(n)) })} className={inputCls} />
+          {lockNote("presets")}
         </div>
-        <div>
-          <label className="mb-1 block text-xs text-fg-muted">Макс. сумма, ₽</label>
-          <input type="number" min={1} value={String(cfg.max_amount)} onChange={(e) => patch({ max_amount: Number(e.target.value) })} className={inputCls} />
-        </div>
-      </div>
-      <div>
-        <label className="mb-1 block text-xs text-fg-muted">Пресеты сумм (через запятую)</label>
-        <input type="text" value={cfg.presets.join(", ")} onChange={(e) => patch({ presets: e.target.value.split(",").map((s) => Number(s.trim())).filter((n) => !Number.isNaN(n)) })} className={inputCls} />
-      </div>
+      )}
       <div className="flex items-center justify-between gap-3 pt-1">
         <span className="text-xs">
           {error && <span className="text-danger">{error}</span>}
           {saved && <span className="text-success">Сохранено</span>}
+          {readonly && (
+            <span className="text-fg-muted">
+              Условия берутся из настроек платёжных методов бота — меняйте их там.
+            </span>
+          )}
         </span>
-        <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
-          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
-        </button>
+        {/* Кнопки нет, когда править нечем: у бэкенда, где каждое поле помечено
+            «правится не отсюда», «Сохранить» вело бы в отказ. Карт нет — бэкенд
+            наш, кнопка на месте. */}
+        {!readonly && anyEditable && (
+          <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
+            <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+          </button>
+        )}
       </div>
     </Section>
   );

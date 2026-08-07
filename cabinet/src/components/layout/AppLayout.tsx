@@ -96,7 +96,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
         </NavLink>
 
         {/* Nav */}
-        <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto min-h-0">
+        {/* Та же причина, что и в админке: на низком окне у меню появлялась
+            толстая системная полоса прокрутки. */}
+        <nav className="scrollbar-thin flex flex-1 flex-col gap-0.5 overflow-y-auto min-h-0">
           {navItems.filter(({ feature }) => !feature || can(feature)).map(({ to, icon: Icon, labelKey }) => (
             <NavLink
               key={to}

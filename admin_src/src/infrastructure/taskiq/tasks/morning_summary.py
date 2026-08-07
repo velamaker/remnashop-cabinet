@@ -22,8 +22,9 @@ import json
 import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from dishka.integrations.taskiq import FromDishka, inject
 from loguru import logger
 from sqlalchemy import text
@@ -60,6 +61,40 @@ def _save_state(state: dict[str, Any]) -> None:
 def _fmt_amount(amount: float) -> str:
     # Целые суммы без хвоста .00, дробные — с двумя знаками.
     return f"{amount:.0f}" if float(amount).is_integer() else f"{amount:.2f}"
+
+
+def _plural_days(n: int) -> str:
+    """«1 день» / «3 дня» / «7 дней» — иначе строка сводки читается коряво."""
+    if 11 <= n % 100 <= 14:
+        return f"{n} дней"
+    last = n % 10
+    if last == 1:
+        return f"{n} день"
+    if 2 <= last <= 4:
+        return f"{n} дня"
+    return f"{n} дней"
+
+
+def _summary_keyboard() -> Optional[InlineKeyboardMarkup]:
+    """Кнопки-ссылки под сводкой: сразу уйти в статистику или в кабинет.
+
+    Без WEB_CABINET_URL кнопок нет — ссылки на пустоту Telegram не примет.
+    Кнопку «Закрыть» дорисует сам нотификатор (_prepare_reply_markup).
+    """
+    base = (os.environ.get("WEB_CABINET_URL") or "").strip().rstrip("/")
+    if not base.startswith("http"):
+        return None
+
+    # Обе ссылки в один ряд: ниже нотификатор допишет «Закрыть», и три отдельные
+    # широкие кнопки под сводкой смотрелись бы простынёй.
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📊 Статистика", url=f"{base}/admin/stats"),
+                InlineKeyboardButton(text="🏠 Кабинет", url=base),
+            ]
+        ]
+    )
 
 
 @broker.task(schedule=[{"cron": "0 * * * *"}], retry_on_error=False)
@@ -148,12 +183,17 @@ async def send_morning_summary(
 
     yday_str = (datetime.now() - timedelta(days=1)).strftime("%d.%m")
 
+    # Буллеты «• <b>Ключ</b>: значение» — тот же формат, что у остальных наших
+    # уведомлений: rich-слой (overlay_rich_notify) разбирает их в таблицу, а если
+    # Bot API rich не поддержит, строки нормально читаются и обычным текстом.
     body = (
-        f"☀️ <b>Сводка за {yday_str}</b>\n\n"
-        f"💰 Выручка: {revenue_line}\n"
-        f"🆕 Новых регистраций: {int(new_users)}\n"
-        f"📊 Активных подписок: {int(active_subs)}\n"
-        f"⏳ Истекают в ближайшие {days} дн.: {int(expiring)}"
+        f"<b>☀️ Сводка за {yday_str}</b>\n\n"
+        f"<blockquote>\n"
+        f"• <b>💰 Выручка</b>: {revenue_line}\n"
+        f"• <b>🆕 Новых регистраций</b>: {int(new_users)}\n"
+        f"• <b>📊 Активных подписок</b>: {int(active_subs)}\n"
+        f"• <b>⏳ Истекают через {_plural_days(days)}</b>: {int(expiring)}\n"
+        f"</blockquote>"
     )
 
     try:
@@ -162,6 +202,12 @@ async def send_morning_summary(
                 i18n_key="raw-message",
                 i18n_kwargs={"content": body},
                 delete_after=None,
+                reply_markup=_summary_keyboard(),
+                # Без этого «Закрыть» не появляется: у MessagePayloadDto поле по
+                # умолчанию True, то есть кнопку нотификатор НЕ дописывает. Владелец
+                # просил её вернуть (7 августа: «нет кнопки закрыть») — ставим явно,
+                # свои кнопки при этом остаются своим рядом.
+                disable_default_markup=False,
             ),
             roles=[Role.OWNER],
         )

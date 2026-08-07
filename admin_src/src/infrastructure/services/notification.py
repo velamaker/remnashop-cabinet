@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import os
 import string
 import traceback
 from dataclasses import asdict
@@ -41,6 +42,8 @@ from src.application.events.base import BaseEvent, UserEvent
 from src.application.events.system import (
     BlacklistRegistrationAttemptEvent,
     BotUpdateEvent,
+    NodeConnectionLostEvent,
+    NodeConnectionRestoredEvent,
     PromocodeActivatedEvent,
     RemnashopWelcomeEvent,
     SubscriptionRevokedEvent,
@@ -69,6 +72,15 @@ from src.infrastructure.services.overlay_push import (  # [OVERLAY]
     push_admin_event_standalone,
     push_user_standalone,
 )
+from src.infrastructure.services.overlay_rich_notify import (  # [OVERLAY]
+    build_rich_html,
+    logo_src,
+    rich_enabled,
+    send_rich_message,
+)
+from src.infrastructure.services.overlay_startup_stats import (  # [OVERLAY]
+    startup_stats_block,
+)
 from src.telegram.keyboards import (
     get_buy_keyboard,
     get_close_notification_button,
@@ -93,6 +105,35 @@ def _push_title_body(raw: str) -> tuple[str, str]:
     title = parts[0][:80]
     body = " ".join(parts[1:])[:180] if len(parts) > 1 else ""
     return (title, body)
+
+
+# [OVERLAY] Терпимость к коротким флапам нод.
+#
+# Панель считает ноду потерянной, если та не ответила за 15 секунд, и шлёт вебхук
+# CONNECTION_LOST. На плохом транзите (случай Германии 4 августа: пачки потерь по
+# 40-60 секунд) это даёт десяток пар «потеряна/восстановлена» в час, хотя нода жива
+# и юзеры работают. Поэтому сообщение о потере придерживаем: если связь вернулась
+# в течение NODE_FLAP_GRACE_SEC, владелец не узнаёт ни о потере, ни о восстановлении.
+# Реальное падение (связь не вернулась) доезжает как раньше, только с задержкой.
+#
+# Состояние держим на уровне модуля, а не инстанса: DI может пересоздать сервис,
+# а отложенная задача должна видеть тот же словарь.
+_NODE_FLAP_STATE: dict[str, dict[str, Any]] = {}
+_NODE_FLAP_LOCK = asyncio.Lock()
+
+
+def _node_flap_enabled() -> bool:
+    return (os.environ.get("NODE_FLAP_TOLERANCE") or "true").strip().lower() in (
+        "1", "true", "yes", "on", "да",
+    )
+
+
+def _node_flap_grace_sec() -> int:
+    """Сколько секунд ждать восстановления, прежде чем будить владельца."""
+    try:
+        return max(0, int(os.environ.get("NODE_FLAP_GRACE_SEC", "180")))
+    except ValueError:
+        return 180
 
 
 class NotificationService(Notifier):
@@ -235,9 +276,93 @@ class NotificationService(Notifier):
             logger.info(f"Notification for '{event.notification_type}' is disabled, skipping")
             return
 
+        # [OVERLAY] Короткие обрывы связи с нодой не будят владельца — см. _node_flap_gate.
+        if isinstance(event, (NodeConnectionLostEvent, NodeConnectionRestoredEvent)):
+            if not await self._node_flap_gate(event):
+                return
+
         payload = event.as_payload()
         payload.reply_markup = self._resolve_keyboard(event)
         await self.notify_system(payload, notification_type=event.notification_type)
+
+    # ── [OVERLAY] Терпимость к флапам нод ────────────────────────────────────────
+    async def _node_flap_gate(
+        self,
+        event: Union[NodeConnectionLostEvent, NodeConnectionRestoredEvent],
+    ) -> bool:
+        """True — отправлять сейчас, False — придержать/проглотить.
+
+        «Потеряна» откладывается на NODE_FLAP_GRACE_SEC: если за это время придёт
+        «восстановлена», обе новости выбрасываем. Если не придёт — отложенная задача
+        отправит сообщение о потере, и тогда последующее «восстановлена» уйдёт как
+        обычно (иначе владелец остался бы с ноды, которая «упала и не вернулась»).
+        """
+        if not _node_flap_enabled():
+            return True
+
+        key = f"{event.name}|{event.address}"
+
+        async with _NODE_FLAP_LOCK:
+            state = _NODE_FLAP_STATE.get(key)
+
+            if isinstance(event, NodeConnectionLostEvent):
+                if state is not None:
+                    # Нода уже числится проблемной: либо ждём выдержку, либо о ней
+                    # уже сообщено. Повторные «потеряна» — шум, глушим.
+                    return False
+                task = asyncio.create_task(self._node_flap_deferred_alert(key, event))
+                _NODE_FLAP_STATE[key] = {"alerted": False, "task": task}
+                logger.info(
+                    f"[OVERLAY] Node '{event.name}' lost, holding alert for "
+                    f"{_node_flap_grace_sec()}s"
+                )
+                return False
+
+            # NodeConnectionRestoredEvent
+            if state is None:
+                # Про потерю не сообщали (перезапуск процесса, тумблер был выключен) —
+                # молча пропускаем: «восстановлена» без «потеряна» только путает.
+                return False
+
+            _NODE_FLAP_STATE.pop(key, None)
+            task = state.get("task")
+            if task is not None and not task.done():
+                task.cancel()
+
+            if not state.get("alerted"):
+                logger.info(f"[OVERLAY] Node '{event.name}' recovered within grace, alert dropped")
+                return False
+
+            return True
+
+    async def _node_flap_deferred_alert(
+        self,
+        key: str,
+        event: NodeConnectionLostEvent,
+    ) -> None:
+        """Ждёт выдержку и, если связь не вернулась, всё-таки сообщает о потере."""
+        try:
+            await asyncio.sleep(_node_flap_grace_sec())
+        except asyncio.CancelledError:
+            return
+
+        async with _NODE_FLAP_LOCK:
+            state = _NODE_FLAP_STATE.get(key)
+            if state is None:
+                return
+            state["alerted"] = True
+            state["task"] = None
+
+        try:
+            settings: SettingsDto = await self.settings_dao.get()
+            if not settings.notifications.is_enabled(event.notification_type):
+                return
+            payload = event.as_payload()
+            payload.reply_markup = self._resolve_keyboard(event)
+            await self.notify_system(payload, notification_type=event.notification_type)
+            logger.info(f"[OVERLAY] Node '{event.name}' still down after grace, alert sent")
+        except Exception as exc:  # noqa: BLE001 — задача фоновая, падать молча нельзя
+            logger.error(f"[OVERLAY] Deferred node alert failed for '{event.name}': {exc}")
 
     @on_event(ErrorEvent)
     async def on_error_event(self, event: ErrorEvent) -> None:
@@ -417,6 +542,22 @@ class NotificationService(Notifier):
             i18n_kwargs=render_kwargs,
         )
 
+        # [OVERLAY] К стартовому уведомлению админам дописываем живые счётчики
+        # (пользователи/подписки/тикеты/панель) — владелец просил сводку при
+        # старте, как у «Бедолаги». Не собралось — просто нет блока.
+        try:
+            _role_for_stats = getattr(user, "role", None)
+            if (
+                payload.i18n_key == "event-bot.startup"
+                and _role_for_stats is not None
+                and _role_for_stats.includes(Role.ADMIN)
+            ):
+                stats_block = await startup_stats_block(self.config)
+                if stats_block:
+                    text = f"{text}\n\n{stats_block}"
+        except Exception as exc:  # noqa: BLE001 — статистика не должна мешать доставке
+            logger.warning(f"[OVERLAY] Блок статистики при старте пропущен: {exc}")
+
         # [OVERLAY] Админ-пуши: любое уведомление, уходящее админу в Telegram
         # (включая admin-broadcast через _process_task/_broadcast — регистрации,
         # оплаты, ошибки и т.п.), зеркалим в центр уведомлений админки, а на
@@ -442,6 +583,44 @@ class NotificationService(Notifier):
                     )
         except Exception:  # noqa: BLE001 — зеркало push не должно мешать TG
             pass
+
+        # [OVERLAY] Rich-вид (Bot API 10.1) для админских текстовых уведомлений:
+        # заголовок + таблица «показатель → значение» + футер вместо простыни.
+        # Только админам и только если текст разобрался в пары ключ-значение;
+        # всё остальное (и любой отказ Bot API) уходит обычным send_message ниже.
+        try:
+            _role = getattr(user, "role", None)
+            if (
+                payload.is_text
+                and not payload.media
+                and _role is not None
+                and _role.includes(Role.ADMIN)
+                and rich_enabled()
+            ):
+                # Импорт ленивый: appearance тянет веб-слой, боту он при старте не нужен.
+                from src.web.endpoints.public.appearance import (  # noqa: PLC0415
+                    resolve_brand_name,
+                )
+
+                rich_html = build_rich_html(
+                    text,
+                    resolve_brand_name() or "RemnaShop",
+                    # Логотип — ТОЛЬКО в стартовом уведомлении (решение владельца
+                    # 6 августа: «фотка сервиса на каждое уведомление — так не
+                    # надо, только на запуске»). В ленте оплат, регистраций и
+                    # алертов картинка занимает пол-экрана и мешает читать.
+                    logo=logo_src() if payload.i18n_key == "event-bot.startup" else "",
+                )
+                if rich_html and await send_rich_message(
+                    self.bot,
+                    user.telegram_id,
+                    rich_html,
+                    reply_markup=reply_markup,
+                    disable_notification=payload.disable_notification,
+                ):
+                    return None
+        except Exception as exc:  # noqa: BLE001 — rich не должен ломать доставку
+            logger.warning(f"[OVERLAY] rich-вид пропущен: {exc}")
 
         kwargs: dict[str, Any] = {
             "disable_notification": payload.disable_notification,

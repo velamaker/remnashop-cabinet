@@ -12,7 +12,7 @@ import {
   type UserReferrals, type ReferralMember,
 } from "@/api/admin";
 import { ApiError } from "@/types/api";
-import { formatDate } from "@/lib/format";
+import { formatDate, formatRelativeOnline } from "@/lib/format";
 import { useAuth } from "@/contexts/AuthContext";
 import { useBranding } from "@/contexts/BrandingContext";
 
@@ -487,6 +487,16 @@ function DevicesBlock({ userId }: { userId: number }) {
               <div className="min-w-0 flex-1">
                 <p className="truncate text-fg">{d.platform || "—"}{d.device_model ? ` · ${d.device_model}` : ""}</p>
                 <p className="truncate text-fg-subtle">{d.os_version || d.user_agent || d.hwid}</p>
+                {/* Когда устройство подключилось и когда заходило в последний раз:
+                    без этого в списке из пяти одинаковых айфонов невозможно понять,
+                    какой из них лишний и какой пора удалить. */}
+                {(d.created_at || d.updated_at) && (
+                  <p className="truncate text-fg-subtle">
+                    {d.created_at && <>подключено {formatDate(d.created_at)}</>}
+                    {d.created_at && d.updated_at && " · "}
+                    {d.updated_at && <>активно {formatRelativeOnline(d.updated_at)}</>}
+                  </p>
+                )}
               </div>
               {!isReadonlyAdmin && can("sub.devices.delete") && (
               <button

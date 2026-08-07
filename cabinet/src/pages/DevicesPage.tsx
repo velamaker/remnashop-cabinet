@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ConnectGuide } from "@/components/ConnectGuide";
 import { PlatformIcon } from "@/components/PlatformIcon";
-import { formatRelativeOnline } from "@/lib/format";
+import { formatDate, formatRelativeOnline } from "@/lib/format";
 import type { DeviceResponse, DevicesResponse } from "@/types/api";
 import { ApiError } from "@/types/api";
 
@@ -85,6 +85,11 @@ function DeviceRow({
         </p>
         <p className="truncate text-xs text-fg-subtle">
           {device.os_version || device.user_agent || device.hwid}
+          {/* Дата подключения: когда устройств несколько и они одинаковые, только
+              по ней и понятно, какое лишнее. */}
+          {device.created_at && (
+            <> · {t("devices.connected")} {formatDate(device.created_at)}</>
+          )}
         </p>
         <p className="mt-1 flex items-center gap-1.5 text-xs" style={{ color: dotColor }}>
           <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: dotColor }} />

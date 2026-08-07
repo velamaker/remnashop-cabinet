@@ -1,11 +1,24 @@
 import { useEffect, useState } from "react";
-import { Save, KeyRound, Copy, Check } from "lucide-react";
+import { Save, KeyRound, Copy, Check, AlertTriangle } from "lucide-react";
 import { authSettingsAdminApi, type AuthSettings } from "@/api/authSettings";
 import { ApiError } from "@/types/api";
 
 // Включение входа/привязки через Telegram (OIDC) прямо из админки: Client ID и
 // Secret из @BotFather → Web Login сохраняются в assets/auth.json и применяются
 // сразу, без переустановки. Пустой Secret при сохранении = «не менять».
+//
+// Поверх ЧУЖОГО бота (адаптер, adapter/admin_auth.py) часть полей может быть
+// неприменима: их нет вовсе (`supported`) или они есть, но правятся не отсюда
+// (`locked` — причина текстом). Экран обязан это читать: иначе он рисует галку,
+// которая никогда не сработает, и подсказывает ровно тот путь, который бэкенд
+// отвергнет. Наш собственный бэкенд этих полей не присылает — тогда всё как
+// раньше. Запертые поля в сохранение не кладём: PUT уходит одним запросом, и
+// отказ по одному полю отменил бы заодно правки соседних.
+//
+// Отдельно от запретов приходит `warnings` — цена рабочего поля. Поверх «Бедолаги»
+// сохранённый Client Secret она кладёт в свой журнал действий открытым текстом
+// (её дефект, адаптером не чинится), поэтому подпись у поля печатается ВСЕГДА,
+// а не только пока поле заперто.
 export default function AdminAuthPage() {
   const [s, setS] = useState<AuthSettings | null>(null);
   const [enabled, setEnabled] = useState(false);
@@ -32,15 +45,64 @@ export default function AdminAuthPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  // Показывать поле? Признака нет — да (наш бэкенд про `supported` не знает).
+  const can = (key: string) => s?.supported?.[key] !== false;
+  // Правится не отсюда — причина текстом.
+  const why = (key: string) => s?.locked?.[key];
+  // Рисуем, но выключенным: значение настоящее, менять его нельзя.
+  const ro = (key: string) => Boolean(why(key));
+  // Включить OIDC отсюда нельзя вовсе: бэкенд запер оба слагаемых своей формулы
+  // (тумблер и Client ID). Тогда и вводные тексты не должны звать этим путём.
+  const cantEnable =
+    !s?.telegram_oidc_active && (ro("telegram_oidc_enabled") || ro("telegram_oidc_client_id"));
+  // Можно ли вообще вписать Secret. Поверх «Бедолаги» он неприменим (её вход
+  // проверяет id_token подписью), поэтому вводный текст не должен звать его
+  // вставлять: поле рядом всё равно выключено.
+  const secretUsable = can("telegram_oidc_client_secret") && !ro("telegram_oidc_client_secret");
+  const FIELDS = [
+    "telegram_oidc_enabled",
+    "telegram_oidc_client_id",
+    "telegram_oidc_client_secret",
+  ];
+  // Нечего править — нечего и сохранять: кнопка отправляла бы пустой запрос и
+  // отвечала «Сохранено», ничего не изменив.
+  const anyEditable = FIELDS.some((k) => can(k) && !ro(k));
+  // Причина у запертых полей часто одна и та же (запрет общий, а не по полю) —
+  // печатаем её один раз, иначе экран трижды повторяет один абзац.
+  const printed = new Set<string>();
+  const note = (key: string) => {
+    const reason = why(key);
+    if (!reason || printed.has(reason)) return null;
+    printed.add(reason);
+    return <p className="mt-1 text-xs leading-snug text-fg-muted">{reason}</p>;
+  };
+  // Предупреждение о цене поля (не запрет!) — печатаем всегда, пока бэкенд его
+  // шлёт: поверх чужого бота сохранённый Client Secret ложится в его журнал
+  // действий открытым текстом, и узнать об этом человек должен ДО сохранения, а
+  // не когда поле разблокируется. Наш бэкенд `warnings` не присылает.
+  const warn = (key: string) => {
+    const text = s?.warnings?.[key];
+    if (!text) return null;
+    return (
+      <p className="mt-1 flex items-start gap-1.5 text-xs leading-snug text-warning">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <span>{text}</span>
+      </p>
+    );
+  };
+
   const save = async () => {
     setSaving(true);
     setMsg(null);
     try {
-      const next = await authSettingsAdminApi.update({
-        telegram_oidc_enabled: enabled,
-        telegram_oidc_client_id: clientId,
-        telegram_oidc_client_secret: clientSecret, // "" = не менять
-      });
+      const body: Parameters<typeof authSettingsAdminApi.update>[0] = {};
+      if (can("telegram_oidc_enabled") && !ro("telegram_oidc_enabled"))
+        body.telegram_oidc_enabled = enabled;
+      if (can("telegram_oidc_client_id") && !ro("telegram_oidc_client_id"))
+        body.telegram_oidc_client_id = clientId;
+      if (can("telegram_oidc_client_secret") && !ro("telegram_oidc_client_secret"))
+        body.telegram_oidc_client_secret = clientSecret; // "" = не менять
+      const next = await authSettingsAdminApi.update(body);
       apply(next);
       setMsg({ type: "success", text: "Сохранено" });
     } catch (e) {
@@ -75,23 +137,39 @@ export default function AdminAuthPage() {
           <KeyRound className="h-5 w-5 text-accent" />
           Вход через Telegram
         </h1>
-        <button
-          onClick={save}
-          disabled={saving}
-          className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-accent-fg transition-opacity hover:opacity-90 disabled:opacity-60"
-        >
-          <Save className="h-4 w-4" />
-          {saving ? "Сохранение…" : "Сохранить"}
-        </button>
+        {anyEditable && (
+          <button
+            onClick={save}
+            disabled={saving}
+            className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-accent-fg transition-opacity hover:opacity-90 disabled:opacity-60"
+          >
+            <Save className="h-4 w-4" />
+            {saving ? "Сохранение…" : "Сохранить"}
+          </button>
+        )}
       </div>
 
-      <p className="text-sm text-fg-muted">
-        Вход и <span className="text-fg">привязка</span> аккаунта через Telegram работают по
-        OpenID Connect. Включите OIDC и вставьте <span className="text-fg">Client ID</span> и{" "}
-        <span className="text-fg">Secret</span> из{" "}
-        <span className="text-fg">@BotFather → Bot Settings → Web Login</span>. Применяется сразу,
-        без переустановки.
-      </p>
+      {cantEnable ? (
+        <p className="text-sm text-fg-muted">
+          На этом бэкенде вход через Telegram работает{" "}
+          <span className="text-fg">классическим Login Widget</span> — он включён и настраивать
+          его здесь нечего. Вход по <span className="text-fg">OpenID Connect</span> недоступен,
+          причина — под полями.
+        </p>
+      ) : (
+        <p className="text-sm text-fg-muted">
+          Вход и <span className="text-fg">привязка</span> аккаунта через Telegram работают по
+          OpenID Connect. Включите OIDC и вставьте <span className="text-fg">Client ID</span>
+          {secretUsable ? (
+            <>
+              {" "}
+              и <span className="text-fg">Secret</span>
+            </>
+          ) : null}{" "}
+          из <span className="text-fg">@BotFather → Bot Settings → Web Login</span>. Применяется
+          сразу, без переустановки.
+        </p>
+      )}
 
       <section className="space-y-4 rounded-2xl border border-border-subtle bg-bg-subtle p-5">
         <div className="flex items-center justify-between">
@@ -106,36 +184,63 @@ export default function AdminAuthPage() {
           </span>
         </div>
 
-        <label className="flex items-center gap-2 text-sm text-fg">
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          Включить вход и привязку через Telegram (OIDC)
-        </label>
+        {can("telegram_oidc_enabled") && (
+          <div>
+            <label
+              className={`flex items-center gap-2 text-sm text-fg ${
+                ro("telegram_oidc_enabled") ? "cursor-not-allowed opacity-60" : ""
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={enabled}
+                disabled={ro("telegram_oidc_enabled")}
+                onChange={(e) => setEnabled(e.target.checked)}
+              />
+              Включить вход и привязку через Telegram (OIDC)
+            </label>
+            {note("telegram_oidc_enabled")}
+          </div>
+        )}
 
-        <div>
-          <label className="mb-1.5 block text-sm font-medium text-fg">Client ID</label>
-          <input
-            type="text"
-            value={clientId}
-            onChange={(e) => setClientId(e.target.value)}
-            placeholder="напр. 7123456789"
-            className="input w-full"
-            autoComplete="off"
-          />
-        </div>
+        {can("telegram_oidc_client_id") && (
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-fg">Client ID</label>
+            <input
+              type="text"
+              value={clientId}
+              disabled={ro("telegram_oidc_client_id")}
+              onChange={(e) => setClientId(e.target.value)}
+              placeholder="напр. 7123456789"
+              className={`input w-full ${
+                ro("telegram_oidc_client_id") ? "cursor-not-allowed opacity-60" : ""
+              }`}
+              autoComplete="off"
+            />
+            {note("telegram_oidc_client_id")}
+          </div>
+        )}
 
-        <div>
-          <label className="mb-1.5 block text-sm font-medium text-fg">Client Secret</label>
-          <input
-            type="password"
-            value={clientSecret}
-            onChange={(e) => setClientSecret(e.target.value)}
-            placeholder={
-              s?.has_secret ? "•••••• (сохранён) — пусто, чтобы не менять" : "secret из BotFather"
-            }
-            className="input w-full"
-            autoComplete="off"
-          />
-        </div>
+        {can("telegram_oidc_client_secret") && (
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-fg">Client Secret</label>
+            <input
+              type="password"
+              value={clientSecret}
+              disabled={ro("telegram_oidc_client_secret")}
+              onChange={(e) => setClientSecret(e.target.value)}
+              placeholder={
+                s?.has_secret ? "•••••• (сохранён) — пусто, чтобы не менять" : "secret из BotFather"
+              }
+              className={`input w-full ${
+                ro("telegram_oidc_client_secret") ? "cursor-not-allowed opacity-60" : ""
+              }`}
+              autoComplete="off"
+            />
+            {note("telegram_oidc_client_secret")}
+            {warn("telegram_oidc_client_secret")}
+          </div>
+        )}
 
         {s?.redirect_uri && (
           <div>
@@ -166,11 +271,20 @@ export default function AdminAuthPage() {
         )}
       </section>
 
-      <p className="text-xs text-fg-subtle">
-        Если OIDC выключен, кабинет пытается показать классический Login Widget — но он требует
-        отдельной привязки домена в @BotFather (<code className="rounded bg-bg-subtle px-1 text-fg">/setdomain</code>),
-        что тумблером не настраивается. Рекомендуем OIDC.
-      </p>
+      {cantEnable ? (
+        <p className="text-xs text-fg-subtle">
+          Классический Login Widget требует разовой привязки домена кабинета в @BotFather
+          (<code className="rounded bg-bg-subtle px-1 text-fg">/setdomain</code>) — это делается в
+          самом Telegram, тумблером не настраивается. Без неё кнопка Telegram на странице входа
+          скажет «Bot domain invalid».
+        </p>
+      ) : (
+        <p className="text-xs text-fg-subtle">
+          Если OIDC выключен, кабинет пытается показать классический Login Widget — но он требует
+          отдельной привязки домена в @BotFather (<code className="rounded bg-bg-subtle px-1 text-fg">/setdomain</code>),
+          что тумблером не настраивается. Рекомендуем OIDC.
+        </p>
+      )}
     </div>
   );
 }

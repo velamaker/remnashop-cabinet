@@ -56,6 +56,19 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+-- Расписание фоновых задач (scheduler.py). Помним время НАЧАЛА последнего
+-- запуска: контейнер перезапускают при каждом обновлении, и расписание, живущее
+-- в памяти процесса, означало бы либо потерянную ночную рассылку, либо вторую
+-- такую же через минуту после старта.
+CREATE TABLE IF NOT EXISTS schedule (
+    name        TEXT PRIMARY KEY,
+    last_run    TEXT,                      -- NULL = ни разу не запускалась
+    finished_at TEXT,
+    last_status TEXT,                      -- ok | error
+    last_error  TEXT,
+    runs        INTEGER NOT NULL DEFAULT 0,
+    failures    INTEGER NOT NULL DEFAULT 0
+);
 """
 
 # Захват записи на время снятия с паузы (см. claim_unfreeze). Отдельно от _SCHEMA:
@@ -301,3 +314,69 @@ class State:
         if self._db is None:
             return []
         return [dict(r) for r in self._db.execute("SELECT * FROM freezes").fetchall()]
+
+    # --- расписание фоновых задач --------------------------------------------
+
+    def claim_task_run(
+        self,
+        name: str,
+        interval_seconds: float,
+        run_at_start: bool = True,
+        now: datetime | None = None,
+    ) -> bool:
+        """Забирает очередной запуск задачи. False — ещё не время или уже забрали.
+
+        Решает база, а не проверка в коде: «прочитать last_run, сравнить, потом
+        записать» — это гонка, в которой второй проход (перезапуск на лету, две
+        копии процесса) успевает прочитать старое значение и запустить рассылку
+        второй раз. Здесь запуск достаётся тому, чей UPDATE изменил одну строку.
+        """
+        if self._db is None:
+            return False
+        now = now or datetime.now(timezone.utc)
+        stamp = now.isoformat()
+        interval = max(0.001, float(interval_seconds))
+        due = (now - timedelta(seconds=interval)).isoformat()
+        # Первое знакомство с задачей. run_at_start=False заводит её «как будто
+        # только что отработала»: свежая установка иначе выстрелила бы рассылкой
+        # в момент запуска.
+        self._db.execute(
+            "INSERT OR IGNORE INTO schedule (name, last_run) VALUES (?, ?)",
+            (name, None if run_at_start else stamp),
+        )
+        # Метку ставим ДО работы, а не после: оборванный посередине запуск не
+        # должен повториться сразу после перезапуска контейнера — он повторится
+        # в свой черёд. Ветка «last_run > stamp» на случай съехавших назад часов:
+        # без неё задача замерла бы, пока время не догонит запись.
+        cur = self._db.execute(
+            "UPDATE schedule SET last_run = ? WHERE name = ? AND ("
+            "  last_run IS NULL OR last_run <= ? OR last_run > ?"
+            ")",
+            (stamp, name, due, stamp),
+        )
+        self._db.commit()
+        return cur.rowcount == 1
+
+    def finish_task_run(self, name: str, ok: bool, error: str | None = None) -> None:
+        """Итог запуска. Нужен людям, а не расписанию: по этим полям видно, что
+        задача не просто «давно не бегала», а падает каждый раз."""
+        if self._db is None:
+            return
+        self._db.execute(
+            "UPDATE schedule SET finished_at = ?, last_status = ?, last_error = ?,"
+            " runs = runs + 1, failures = failures + ? WHERE name = ?",
+            (
+                datetime.now(timezone.utc).isoformat(),
+                "ok" if ok else "error",
+                None if ok else (error or "")[:500],
+                0 if ok else 1,
+                name,
+            ),
+        )
+        self._db.commit()
+
+    def task_runs(self) -> list[dict[str, Any]]:
+        """Строки расписания: из них считается время до ближайшего запуска."""
+        if self._db is None:
+            return []
+        return [dict(r) for r in self._db.execute("SELECT * FROM schedule").fetchall()]

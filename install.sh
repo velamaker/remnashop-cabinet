@@ -197,8 +197,16 @@ adapter_healthcheck() {
     return 1
   fi
   ok "  Адаптер отвечает: ${DIM}${out}${RST}"
+  # Смотрим ЖИВУЮ проверку, а не факт «ключи заданы»: адрес панели на отдельном
+  # сервере вписывают руками, и обе типовые ошибки (внутреннее имя контейнера,
+  # чужой токен) выглядят одинаково — пустые разделы без единого слова.
   case "$out" in
-    *'"panel": true'*|*'"panel":true'*) : ;;
+    *'"panel_check": "ok"'*|*'"panel_check":"ok"'*) : ;;
+    *'"panel_check": "не задана"'*|*'"panel_check":"не задана"'*)
+      warn "  Панель Remnawave адаптеру не задана — серверы и устройства будут пустыми." ;;
+    *'"panel_check"'*)
+      warn "  Панель Remnawave отвечает не так, как надо (см. panel_check выше):" >&2
+      warn "  проверьте адрес (снаружи нужен ПУБЛИЧНЫЙ https://) и токен панели." ;;
     *) warn "  Панель Remnawave адаптеру не задана — серверы и устройства будут пустыми." ;;
   esac
   case "$out" in
@@ -496,6 +504,56 @@ prompt_bedolaga_token() {
   fi
 }
 
+prompt_remnawave_for_adapter() {
+  # Панель Remnawave адаптеру нужна отдельно от бота: серверы, статус сервиса,
+  # устройства и «Новое устройство» — её данные, а не бота. На ОДНОМ сервере с
+  # ботом эти ключи уже лежат в .env и вопрос пропускается; на отдельном сервере
+  # их нет вовсе, и раньше это заканчивалось молча пустыми разделами: адаптер
+  # деградирует мягко, а оператор видит «серверов нет» и идёт искать поломку.
+  need_value REMNAWAVE_URL || { ok "  Панель Remnawave уже задана — пропускаю"; return; }
+  local url token
+  say ""
+  say "${BOLD}Панель Remnawave${RST} ${DIM}(серверы, статус сервиса, устройства)${RST}"
+  say "  На отдельном сервере нужен ${BOLD}публичный${RST} адрес панели с https://"
+  say "  ${DIM}(имя контейнера вроде remnawave:3000 сработает, только если панель рядом).${RST}"
+  say "  ${DIM}Пусто — пропустить: разделы про серверы и устройства останутся пустыми.${RST}"
+  read -r -p "$(printf '%sАдрес панели: %s' "$BOLD" "$RST")" url </dev/tty || true
+  [ -z "${url:-}" ] && { warn "Панель не задана — разделы про серверы/устройства будут пустыми."; return; }
+  # -s: токен не печатается в терминал и не остаётся в истории прокрутки.
+  read -r -s -p "$(printf '%sТокен панели (API key): %s' "$BOLD" "$RST")" token </dev/tty || true
+  say ""
+  [ -z "${token:-}" ] && { warn "Токен пуст — панель не сохранена, разделы останутся пустыми."; return; }
+  set_env REMNAWAVE_URL "$url"
+  set_env REMNAWAVE_TOKEN "$token"
+  ok "  Панель сохранена"
+}
+
+prompt_bedolaga_cabinet_login() {
+  # Служебный вход в бота для ФОНОВЫХ задач кабинета. Личное сообщение человеку
+  # их API открывает только сессией администратора: машинным ключом (выше) это
+  # не делается — проверено, 401, а персонального сообщения в машинном API нет
+  # вовсе. Поэтому спрашиваем почту и пароль ОТДЕЛЬНОГО служебного админа их
+  # бота. Пусто — рассылочные разделы кабинета честно не включатся, остальное
+  # работает; спрашиваем один раз, повторная установка не переспрашивает.
+  need_value BEDOLAGA_CABINET_EMAIL || { ok "  Служебный вход в бота уже задан — пропускаю"; return; }
+  local mail pass
+  say ""
+  say "${BOLD}Служебный вход в бота Bedolaga${RST} ${DIM}(для напоминаний и скидок из кабинета)${RST}"
+  say "  Заведите в боте ОТДЕЛЬНОГО админа и дайте ему два права:"
+  say "    ${DIM}users:send_message${RST} — писать человеку в Telegram;"
+  say "    ${DIM}promocodes:create${RST}  — выпускать промокод на скидку."
+  say "  ${DIM}Пусто — пропустить: разделы с рассылками останутся выключенными.${RST}"
+  read -r -p "$(printf '%sПочта служебного админа: %s' "$BOLD" "$RST")" mail </dev/tty || true
+  [ -z "${mail:-}" ] && { warn "Служебный вход не задан — рассылки кабинета будут выключены."; return; }
+  # -s: пароль не печатается в терминал и не остаётся в истории прокрутки.
+  read -r -s -p "$(printf '%sПароль: %s' "$BOLD" "$RST")" pass </dev/tty || true
+  say ""
+  [ -z "${pass:-}" ] && { warn "Пароль пуст — служебный вход не сохранён, рассылки выключены."; return; }
+  set_env BEDOLAGA_CABINET_EMAIL "$mail"
+  set_env BEDOLAGA_CABINET_PASSWORD "$pass"
+  ok "  Служебный вход сохранён"
+}
+
 # Префикс уезжает в nginx кабинета переменной API_PATH_PREFIX (см. nginx.conf).
 #
 # BACKEND_CHOICE — выбор ЭТОГО запуска. Читать его, а не .env: ensure кладёт новые
@@ -585,6 +643,8 @@ prompt_cabinet_backend() {
   # под `set -e` неудачная проверка иначе роняет всю установку.
   check_bedolaga_api "$bed_url" || true
   prompt_bedolaga_token "$bed_url"
+  prompt_bedolaga_cabinet_login
+  prompt_remnawave_for_adapter
 }
 
 publish_cabinet_auto() {
@@ -719,8 +779,17 @@ if [ "$MODE" = "site" ]; then
   SITE_COMPOSE=(-f cabinet/docker-compose.site.yml)
   if [ "$BACKEND_CHOICE" = bedolaga ]; then
     SITE_COMPOSE+=(-f cabinet/docker-compose.site-adapter.yml)
+    # Спрашиваем ЗДЕСЬ, а не только при выборе бэкенда: на повторной установке
+    # выбор уже записан, и `prompt_cabinet_backend` выходит раньше своих вопросов
+    # — тогда служебный вход и панель не спрашивались ни разу, а разделы молча
+    # пустовали. Сами функции ничего не переспрашивают, если значение уже есть.
+    prompt_bedolaga_cabinet_login
+    prompt_remnawave_for_adapter
     export BEDOLAGA_UPSTREAM="$(getval BEDOLAGA_UPSTREAM)"
     export BEDOLAGA_ADMIN_TOKEN="$(getval BEDOLAGA_ADMIN_TOKEN)"
+    # Служебный вход для фоновых задач кабинета (см. prompt_bedolaga_cabinet_login).
+    export BEDOLAGA_CABINET_EMAIL="$(getval BEDOLAGA_CABINET_EMAIL)"
+    export BEDOLAGA_CABINET_PASSWORD="$(getval BEDOLAGA_CABINET_PASSWORD)"
     export REMNAWAVE_URL="$(getval REMNAWAVE_URL)"
     export REMNAWAVE_TOKEN="$(getval REMNAWAVE_TOKEN)"
     # Значения уже записаны в .env выше (при выборе бэкенда) — здесь только
@@ -850,6 +919,11 @@ CABINET_COMPOSE=(-f docker-compose.yml -f cabinet/docker-compose.cabinet.yml)
 COMPOSE_LIST="docker-compose.yml:cabinet/docker-compose.cabinet.yml"
 if [ "$BACKEND_CHOICE" = bedolaga ]; then
   CABINET_COMPOSE+=(-f "$ADAPTER_YML")
+  # Те же два вопроса, что и в site-режиме, и по той же причине: при повторной
+  # установке выбор бэкенда уже записан, и до вопросов внутри prompt_cabinet_backend
+  # дело не доходит. Заданное второй раз не спрашивается.
+  prompt_bedolaga_cabinet_login
+  prompt_remnawave_for_adapter
   # Кабинет ходит в адаптер рядом, а не в бота: имя контейнера адаптера в общей
   # сети. Пишем принудительно — при смене бэкенда адрес обязан перезаписаться.
   # API_HOST_HEADER/API_SCHEME не трогаем: их дефолты живут в образе кабинета

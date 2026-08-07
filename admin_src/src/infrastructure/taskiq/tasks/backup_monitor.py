@@ -123,6 +123,8 @@ async def check_backups(notifier: FromDishka[Notifier]) -> None:
                     i18n_key="raw-message",
                     i18n_kwargs={"content": alert},
                     delete_after=None,
+                    # Иначе у алерта нет кнопки «Закрыть»: дефолт поля — True.
+                    disable_default_markup=False,
                 ),
                 roles=[Role.OWNER, Role.DEV, Role.ADMIN],
             )

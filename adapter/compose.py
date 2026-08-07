@@ -449,6 +449,34 @@ OWNER_REQUIREMENTS: list[tuple[str, str]] = [
 ]
 
 
+# К какому разделу прав относится каждая страница (то же, что `section` у пунктов
+# меню в кабинете). Нужно, чтобы раздел открывался, когда доступна ХОТЯ БЫ ОДНА
+# его страница: раздел «Настройки» один на два десятка экранов, и правило «нужны
+# все ручки» держало закрытыми уже готовые разделы.
+ADMIN_PAGE_SECTION: dict[str, str] = {
+    "/admin": "dashboard", "/admin/stats": "dashboard",
+    "/admin/transactions": "transactions", "/admin/users": "users",
+    "/admin/import": "import", "/admin/abuse": "abuse", "/admin/support": "support",
+    "/admin/plans": "plans", "/admin/promocodes": "promocodes",
+    "/admin/gateways": "gateways", "/admin/broadcasts": "broadcasts",
+    "/admin/ad-links": "ad_links", "/admin/remnawave": "remnawave",
+    "/admin/audit": "audit", "/admin/updates": "updates",
+    "/admin/appearance": "content", "/admin/cabinet": "content",
+    "/admin/info": "content", "/admin/menu": "content", "/admin/apps": "content",
+    # Всё остальное живёт в общей секции «Настройки».
+    "/admin/referral": "settings", "/admin/topup": "settings",
+    "/admin/reserve": "settings", "/admin/freeze": "settings",
+    "/admin/promo-banner": "settings", "/admin/trial-discount": "settings",
+    "/admin/winback": "settings", "/admin/digest": "settings",
+    "/admin/traffic-alert": "settings", "/admin/new-device": "settings",
+    "/admin/subscription-app": "settings", "/admin/server-status": "settings",
+    "/admin/email": "settings", "/admin/auth": "settings",
+    "/admin/settings": "settings", "/admin/notifications": "settings",
+    "/admin/summary": "settings", "/admin/backup": "settings",
+    "/admin/admin-ip": "settings",
+}
+
+
 def admin_sections() -> list[str]:
     """Разделы админки, которые адаптер отдаёт целиком.
 
@@ -456,11 +484,17 @@ def admin_sections() -> list[str]:
     ломает — кабинет просто не покажет ни одного админского пункта. Это ровно то
     поведение, которое нужно, пока переводить нечего.
     """
-    return [
+    strict = {
         name
         for name, needs in ADMIN_SECTION_REQUIREMENTS.items()
         if needs and all(_implemented(m, p) for m, p in needs)
-    ]
+    }
+    # Плюс разделы, у которых готова хотя бы одна страница: кабинет всё равно
+    # покажет только доступные страницы (см. admin_pages), а без этого раздел
+    # с двадцатью экранами оставался закрытым из-за пары непереведённых ручек.
+    pages = set(admin_pages())
+    loose = {sec for page, sec in ADMIN_PAGE_SECTION.items() if page in pages}
+    return sorted(strict | loose)
 
 
 def _section_prefix(path: str) -> str:
@@ -601,10 +635,18 @@ async def appearance(ctx: Ctx) -> dict[str, Any]:
         # Подарки у них выключаются тумблером в настройках бота. Наличия ручек
         # мало: с выключенным тумблером блок в кабинете показал бы кнопку,
         # которая отвечает отказом. Спрашиваем их конфигурацию — но только когда
-        # ручки есть, чтобы не ходить лишний раз, и мягко: гостю она отвечает
-        # отказом, и это не повод прятать подарки у вошедших.
-        if known.get("gift"):
-            gift_config = await ctx.json("/cabinet/gift/config", {}, soft=True) or {}
+        # ручки есть, чтобы не ходить лишний раз.
+        #
+        # ВАЖНО: гостю их `/cabinet/gift/config` отвечает 401, а `soft` 401 не
+        # глотает НАМЕРЕННО (см. Ctx.json: потерянная сессия не должна выглядеть
+        # как «данных нет»). Оформление же собирается ДО входа — и это падение
+        # роняло весь кабинет: невошедший видел экран «идут технические работы».
+        # Поэтому спрашиваем только при живой сессии и всё равно страхуемся.
+        if known.get("gift") and ctx.token:
+            try:
+                gift_config = await ctx.json("/cabinet/gift/config", {}, soft=True) or {}
+            except UpstreamError:
+                gift_config = {}
             if gift_config.get("is_enabled") is False:
                 known["gift"] = False
         data["features"] = known
@@ -670,6 +712,9 @@ async def whoami(ctx: Ctx) -> dict[str, Any]:
     # «весь», а ровно по тому, что адаптер умеет перевести: full_access никогда,
     # sections — посчитанный список. Появится новая ручка — раздел придёт сам.
     sections = admin_sections() if is_admin else []
+    # Поштучный список страниц: секция «Настройки» одна на два десятка экранов, и
+    # без него отсутствие пары ручек прячет их все разом.
+    pages = admin_pages() if is_admin else []
     # Мутации разрешаем только когда в ЭТИХ разделах переведена хоть одна
     # изменяющая ручка, иначе кабинет рисует кнопки, за которыми 501.
     can_write = bool(sections) and admin_can_write(sections)
@@ -696,6 +741,16 @@ async def whoami(ctx: Ctx) -> dict[str, Any]:
         "full_access": False,
         "can_write": can_write,
         "sections": sections,
+        "pages": pages,
+        # Страницы, где сохранять нечем (у них нет такого места в настройках).
+        # Поля кабинет покажет, кнопку сохранения — нет. Поля нет вовсе =
+        # прежнее поведение, поэтому наш собственный бэкенд не трогаем.
+        "readonly_pages": admin_readonly_pages(pages) if is_admin else [],
+        # Почему страницы нет — только про выключенные намеренно (см.
+        # ADMIN_PAGE_NOTES). Пункт меню скрыт, но адрес рабочий: кабинет один и
+        # тот же, админ приходит по памяти и должен прочитать причину, а не
+        # гадать над пустым экраном. Поля нет вовсе (наш бэкенд) = как раньше.
+        "page_notes": admin_page_notes(pages) if is_admin else {},
         "grant_expires_at": None,
         # Пароль есть у всех, кто вошёл по почте; у телеграм-входа — нет.
         "has_password": (user.get("auth_type") or "").lower() == "email",
@@ -1956,28 +2011,75 @@ async def referral_earnings(ctx: Ctx) -> dict[str, Any]:
     }
 
 
-# Их ошибки промокода — английские строки (routes/promocode.py:103-117), а кабинет
-# показывает detail пользователю как есть (api/client.ts:44). Переводим известное,
-# незнакомое пропускаем без изменений — лучше англ. текст, чем «что-то пошло не так».
+# Их ошибки промокода. ГЛАВНОЕ ПРО ФОРМУ: сейчас `detail` приходит ОБЪЕКТОМ
+# `{'code','message'}` (routes/promocode.py:124-128) — машинный код плюс английская
+# фраза. Кабинет умеет печатать только строку (api/client.ts:71-74: объект уходит в
+# `JSON.stringify` и человек читает `{"code":"not_found",...}`), поэтому объект надо
+# развернуть здесь. Переводим по КОДУ, а не по фразе: код — договор, фразу они правят
+# когда угодно. Английские фразы держим отдельной картой для старых сборок, где
+# `detail` был строкой; незнакомое пропускаем как есть — лучше англ. текст, чем
+# «что-то пошло не так».
 _PROMO_ERRORS = {
-    "Promo code not found": "Промокод не найден или неактивен",
-    "Promo code has expired": "Срок действия промокода истёк",
-    "Promo code is deactivated": "Промокод отключён",
-    "Promo code is not yet active": "Промокод ещё не начал действовать",
-    "Promo code has been fully used": "Лимит активаций промокода исчерпан",
-    "You have already used this promo code": "Вы уже активировали этот промокод",
-    "You already have an active discount. Deactivate it first via /deactivate-discount":
-        "У вас уже есть активная скидка — сначала отмените её",
-    "This promo code requires an active or expired subscription":
-        "Для этого промокода нужна подписка",
-    "Subscription not found": "Подписка не найдена",
-    "This promo code is only available for first purchase":
-        "Промокод действует только на первую покупку",
-    "Too many promo code activations today":
-        "Слишком много активаций промокодов за сутки — попробуйте позже",
-    "User not found": "Пользователь не найден",
-    "Server error occurred": "Не удалось активировать промокод",
+    "not_found": "Промокод не найден или неактивен",
+    "expired": "Срок действия промокода истёк",
+    "inactive": "Промокод отключён",
+    "not_yet_valid": "Промокод ещё не начал действовать",
+    "used": "Лимит активаций промокода исчерпан",
+    "already_used_by_user": "Вы уже активировали этот промокод",
+    "active_discount_exists":
+        "У вас уже есть активная скидка — новую можно применить после её окончания",
+    "no_subscription_for_days": "Для этого промокода нужна подписка",
+    "subscription_not_found": "Подписка не найдена",
+    "not_first_purchase": "Промокод действует только на первую покупку",
+    "daily_limit": "Слишком много активаций промокодов за сутки — попробуйте позже",
+    "trial_subscription_exists":
+        "У вас уже есть подписка — пробный промокод к ней не применить",
+    "trial_provisioning_failed":
+        "Пробный период сейчас не выдаётся — попробуйте позже",
+    "user_not_found": "Пользователь не найден",
+    "server_error": "Не удалось активировать промокод",
 }
+
+# Фраза старых сборок → тот же машинный код (перевод берётся из карты выше, чтобы
+# один текст не жил в двух местах и не разъезжался).
+_PROMO_ERROR_CODES = {
+    "Promo code not found": "not_found",
+    "Promo code has expired": "expired",
+    "Promo code is deactivated": "inactive",
+    "Promo code is not yet active": "not_yet_valid",
+    "Promo code has been fully used": "used",
+    "You have already used this promo code": "already_used_by_user",
+    "You already have an active discount. Deactivate it first via /deactivate-discount":
+        "active_discount_exists",
+    "This promo code requires an active or expired subscription": "no_subscription_for_days",
+    "Subscription not found": "subscription_not_found",
+    "This promo code is only available for first purchase": "not_first_purchase",
+    "Too many promo code activations today": "daily_limit",
+    "You already have a subscription, so this trial code cannot be applied":
+        "trial_subscription_exists",
+    "Could not provision the trial right now, please try again later":
+        "trial_provisioning_failed",
+    "User not found": "user_not_found",
+    "Server error occurred": "server_error",
+}
+
+
+def _promo_error(detail: Any) -> str | None:
+    """Их отказ в активации промокода — человеческим текстом. None — форма чужая
+    (например 422-список от pydantic), пусть её разбирает кабинет."""
+    if isinstance(detail, dict):
+        code = str(detail.get("code") or "").strip()
+        # Незнакомый код (их новая сборка) — не молчим: показываем их же
+        # английскую фразу, она всё равно ближе к правде, чем «ошибка сервера».
+        return (
+            _PROMO_ERRORS.get(code)
+            or str(detail.get("message") or "").strip()
+            or "Не удалось активировать промокод"
+        )
+    if isinstance(detail, str) and detail.strip():
+        text = detail.strip()
+        return _PROMO_ERRORS.get(_PROMO_ERROR_CODES.get(text, ""), text)
+    return None
 
 
 @handler("GET", "/api/trial-discount")
@@ -2151,15 +2253,13 @@ async def promocode_activate(ctx: Ctx) -> dict[str, Any]:
     resp = await ctx.call("POST", "/cabinet/promocode/activate", json={"code": code})
     if resp.status_code >= 400:
         try:
-            detail = resp.json().get("detail")
+            body = resp.json()
         except ValueError:
-            detail = None
-        if isinstance(detail, str):
-            raise UpstreamError(
-                httpx.Response(
-                    resp.status_code, json={"detail": _PROMO_ERRORS.get(detail, detail)}
-                )
-            )
+            body = None
+        detail = body.get("detail") if isinstance(body, dict) else None
+        text = _promo_error(detail)
+        if text:
+            raise UpstreamError(httpx.Response(resp.status_code, json={"detail": text}))
         raise UpstreamError(resp)  # 422-валидация: detail списком, кабинет её разберёт
 
     data = resp.json() if resp.content else {}
@@ -3314,3 +3414,173 @@ async def account_delete(ctx: Ctx) -> dict[str, Any]:
             else httpx.Response(502, json={"detail": "Бот не ответил"})
         )
     return {"deleted": True}
+
+
+# --- какие СТРАНИЦЫ админки умеет этот бэкенд --------------------------------
+#
+# Права администратора считает `sections`, а это — про наши возможности. Разница
+# принципиальная: раздел «Настройки» в кабинете один на два десятка страниц, и
+# правило «секция доступна, когда переведены ВСЕ её ручки» прятало разом двадцать
+# пунктов из-за пары непереведённых. Кабинет получает этот список в whoami и
+# скрывает лишь те страницы, которых бэкенд не умеет; поля нет — доступны все
+# (так отвечает наш бэкенд, поведение прежних установок не меняется).
+ADMIN_PAGE_REQUIREMENTS: dict[str, list[tuple[str, str]]] = {
+    "/admin": [("GET", "/api/admin/statistics/overview")],
+    "/admin/stats": [("GET", "/api/admin/statistics/overview")],
+    "/admin/transactions": [("GET", "/api/admin/transactions")],
+    "/admin/users": [("GET", "/api/admin/users"), ("GET", "/api/admin/users/{id}")],
+    # Экран рефералки редактирует общий блок настроек (`settings.referral`),
+    # отдельной ручки у него нет — требовать её значило прятать готовый раздел.
+    "/admin/referral": [("GET", "/api/admin/settings")],
+    # Импорт — три блока на одном экране, общая у них только одна ручка: опрос
+    # состояния (он же есть и в нашем бэкенде, `/import/status`). Требовать
+    # синхронизации нельзя: страница нужна и там, где работает лишь часть блоков,
+    # а несуществующий путь в этом списке молча прячет весь раздел из меню.
+    "/admin/import": [("GET", "/api/admin/import/status")],
+    "/admin/abuse": [("GET", "/api/admin/abuse/trials")],
+    "/admin/support": [
+        ("GET", "/api/admin/support/tickets"),
+        ("GET", "/api/admin/support/tickets/{id}"),
+    ],
+    "/admin/plans": [("GET", "/api/admin/plans"), ("GET", "/api/admin/plans/{id}")],
+    "/admin/promocodes": [("GET", "/api/admin/promocodes")],
+    "/admin/gateways": [("GET", "/api/admin/gateways")],
+    "/admin/topup": [("GET", "/api/admin/topup")],
+    "/admin/reserve": [("GET", "/api/admin/reserve")],
+    "/admin/freeze": [("GET", "/api/admin/freeze")],
+    "/admin/broadcasts": [("GET", "/api/admin/broadcasts")],
+    "/admin/ad-links": [("GET", "/api/admin/ad-links")],
+    "/admin/promo-banner": [("GET", "/api/admin/promo-banner")],
+    "/admin/trial-discount": [("GET", "/api/admin/trial-discount")],
+    "/admin/winback": [("GET", "/api/admin/winback")],
+    "/admin/digest": [("GET", "/api/admin/digest")],
+    # «Трафик 80 %» намеренно НЕ делаем поверх «Бедолаги»: у неё есть своё такое
+    # уведомление (вебхук панели bandwidth_usage_threshold_reached, тумблер
+    # WEBHOOK_NOTIFY_BANDWIDTH_THRESHOLD). Наше дублировало бы его — человек
+    # получал бы два сообщения об одном и том же. Решение владельца 4 августа.
+    "/admin/traffic-alert": [("GET", "/api/admin/traffic-alert")],
+    "/admin/new-device": [("GET", "/api/admin/new-device")],
+    "/admin/appearance": [("GET", "/api/admin/appearance")],
+    "/admin/cabinet": [("GET", "/api/admin/appearance")],
+    "/admin/info": [("GET", "/api/admin/info")],
+    "/admin/menu": [("GET", "/api/admin/menu"), ("GET", "/api/admin/menu/buttons")],
+    "/admin/apps": [("GET", "/api/admin/apps")],
+    "/admin/subscription-app": [("GET", "/api/admin/subscription-app")],
+    "/admin/server-status": [
+        ("GET", "/api/admin/server-status"),
+        ("GET", "/api/admin/server-status/nodes"),
+    ],
+    "/admin/email": [("GET", "/api/admin/email-settings")],
+    "/admin/remnawave": [
+        ("GET", "/api/admin/remnawave/system"),
+        ("GET", "/api/admin/remnawave/nodes"),
+    ],
+    "/admin/auth": [("GET", "/api/admin/auth-settings")],
+    "/admin/settings": [("GET", "/api/admin/settings")],
+    "/admin/notifications": [("GET", "/api/admin/notifications")],
+    "/admin/summary": [("GET", "/api/admin/morning-summary")],
+    "/admin/audit": [("GET", "/api/admin/audit")],
+    "/admin/backup": [("GET", "/api/admin/settings-io/export")],
+    # «Безопасность» (2FA админа + белый список IP) поверх «Бедолаги» намеренно
+    # НЕ делаем — решение владельца 6 августа. Дело не в трудозатратах: админка
+    # адаптера живёт на сессиях САМОГО бота, своей админской сессии у него нет, а
+    # вход в бота открыт отдельно от кабинета (у этой связки их API вообще торчит
+    # наружу). Наша двухфакторка закрыла бы одну дверь из двух, и человек считал
+    # бы админку защищённой — ложное чувство безопасности хуже его отсутствия.
+    # Ручек нет, значит страницы нет ни в меню, ни в `pages`; тому, кто придёт по
+    # адресу руками, причину покажет ADMIN_PAGE_NOTES ниже.
+    "/admin/admin-ip": [("GET", "/api/admin/admin-ip")],
+    "/admin/updates": [("GET", "/api/admin/updates")],
+}
+
+
+def admin_pages() -> list[str]:
+    """Страницы админки, которые адаптер реально обслуживает."""
+    return [
+        page
+        for page, needs in ADMIN_PAGE_REQUIREMENTS.items()
+        if all(_implemented(method, path) for method, path in needs)
+    ]
+
+
+# Почему страницы нет. Список короткий НАМЕРЕННО: обычно ручка просто ещё не
+# переведена, и об этом честно говорит 501 в ответе. Сюда попадает лишь то, что
+# решено не делать вовсе, — такую страницу админ, знающий кабинет по нашей
+# установке, откроет по памяти или из закладки и без единого слова прочитает
+# пустой экран как поломку.
+#
+# Поле в whoami необязательное: наш собственный бэкенд его не шлёт, и кабинет
+# тогда ведёт себя ровно как раньше.
+ADMIN_PAGE_NOTES: dict[str, str] = {
+    "/admin/admin-ip": (
+        "Двухфакторка админа и белый список IP поверх «Бедолаги» намеренно не "
+        "сделаны. Админка кабинета здесь работает на сессиях самого бота, и вход "
+        "в бота остаётся открытым отдельно от кабинета — наша защита закрыла бы "
+        "одну дверь из двух. Выключатель, который ничего не выключает, опаснее "
+        "своего отсутствия, поэтому раздел честно выключен, а не подделан. "
+        "Ограничивать доступ к админке нужно на стороне самого бота."
+    ),
+}
+
+
+def admin_page_notes(pages: list[str] | None = None) -> dict[str, str]:
+    """Пояснения ровно к тем страницам, которых на этой установке НЕТ.
+
+    Считается, а не перечисляется руками: появится у страницы ручка — пояснение
+    пропадёт само. Рассказывать про выключенный раздел, когда он уже включён,
+    хуже, чем молчать.
+    """
+    if pages is None:
+        pages = admin_pages()
+    return {page: text for page, text in ADMIN_PAGE_NOTES.items() if page not in pages}
+
+
+def _page_family(path: str) -> str:
+    """Ветка ресурса, а не конкретной ручки: `/api/admin/import/status` → `/api/admin/import`.
+
+    Чтение и запись у одного экрана часто лежат СОСЕДЯМИ, а не вложенно:
+    страница импорта читает `/import/status`, а пишет `/import/sync-panel`;
+    бэкап читает `/settings-io/export`, а пишет `/settings-io/import`. Сравнение
+    по точному пути объявляло такие экраны «только для чтения» и прятало у них
+    рабочие кнопки — ошибка хуже исходной.
+    """
+    parts = [p for p in path.split("/") if p]
+    if len(parts) < 3 or parts[0] != "api" or parts[1] != "admin":
+        return ""
+    return "/api/admin/" + parts[2].split("{", 1)[0]
+
+
+def admin_readonly_pages(pages: list[str] | None = None) -> list[str]:
+    """Страницы, которые открываются ТОЛЬКО на чтение.
+
+    `can_write` — один флаг на всю админку, и он честно отвечает «писать где-то
+    можно». Но «где-то» и «здесь» — разные вещи: условия пополнения, например,
+    собираются из настроек КАЖДОГО их шлюза, и общего места, куда записать одно
+    число, у «Бедолаги» нет (см. admin_money.topup_settings). Раздел при этом
+    полезен — цифры настоящие. Без этого списка кабинет рисовал бы там кнопку
+    «Сохранить», за которой 501, и админ считал бы, что сломалось сохранение.
+
+    Считается так же, как всё остальное: страница попадает сюда, когда для её
+    ветки путей нет НИ ОДНОГО изменяющего обработчика. Появится — исчезнет
+    отсюда сама, руками ничего перечислять не нужно.
+    """
+    if pages is None:
+        pages = admin_pages()
+
+    readonly = []
+    for page in pages:
+        branches = {
+            _page_family(path)
+            for _method, path in ADMIN_PAGE_REQUIREMENTS.get(page, [])
+        }
+        branches.discard("")
+        if not branches:
+            continue
+        writable = any(
+            method not in _READ_METHODS
+            and any(path == b or path.startswith(b + "/") for b in branches)
+            for method, path in HANDLERS
+        )
+        if not writable:
+            readonly.append(page)
+    return readonly

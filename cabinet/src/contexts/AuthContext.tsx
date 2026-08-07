@@ -29,8 +29,18 @@ interface AuthContextValue {
   fullAccess: boolean;
   // Ключи разрешённых разделов (при неполном доступе). Пусто = только те, что в grant.
   sections: string[];
+  /** Доступные страницы админки; пусто = ограничения нет (см. canPage). */
+  pages: string[] | null;
+  /** Страницы, где бэкенду нечего сохранять: поля показываем, кнопки — нет. */
+  readonlyPages: string[];
+  /** Страница только для чтения (бэкенд не умеет там писать). */
+  isPageReadonly: (path: string) => boolean;
   // Разрешён ли раздел (полный доступ ИЛИ ключ в списке).
   canSection: (key: string) => boolean;
+  /** Доступна ли страница админки по её адресу. Бэкенд не прислал список — доступна. */
+  canPage: (path: string) => boolean;
+  /** Почему страницы здесь нет — если бэкенд назвал причину. Не назвал — undefined. */
+  pageNote: (path: string) => string | undefined;
   hasPassword: boolean;
   isLoading: boolean;
   login: (data: LoginRequest) => Promise<void>;
@@ -50,6 +60,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isOwner, setIsOwner] = useState(false);
   const [fullAccess, setFullAccess] = useState(false);
   const [sections, setSections] = useState<string[]>([]);
+  const [pages, setPages] = useState<string[] | null>(null);
+  const [readonlyPages, setReadonlyPages] = useState<string[]>([]);
+  const [pageNotes, setPageNotes] = useState<Record<string, string>>({});
   const [hasPassword, setHasPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -66,6 +79,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setIsOwner(Boolean(who?.is_owner));
         setFullAccess(Boolean(who?.full_access));
         setSections(Array.isArray(who?.sections) ? who.sections : []);
+        // Список страниц необязателен: его шлёт только бэкенд, умеющий не всё.
+        setPages(Array.isArray(who?.pages) ? who.pages : null);
+        // Поля нет вовсе (наш собственный бэкенд) = сохранять можно везде.
+        setReadonlyPages(Array.isArray(who?.readonly_pages) ? who.readonly_pages : []);
+        // Тоже необязательное поле: причины шлёт только бэкенд, который чего-то
+        // намеренно не делает. Нет поля — нет и причины, экран прежний.
+        setPageNotes(
+          who?.page_notes && typeof who.page_notes === "object" ? who.page_notes : {},
+        );
         setHasPassword(Boolean(who?.has_password));
       } catch {
         setIsAdmin(false);
@@ -142,6 +164,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (key: string) => fullAccess || sections.includes(key),
     [fullAccess, sections],
   );
+  // Права проверяет canSection, а это — про УМЕНИЕ бэкенда: страницы, которых он
+  // не поддерживает, прятать даже у владельца с полным доступом.
+  const canPage = useCallback(
+    (path: string) => pages === null || pages.includes(path),
+    [pages],
+  );
+
+  // Отдельно от canSection: там про ПРАВА админа, здесь — про умение бэкенда.
+  // Условия пополнения, например, у «Бедолаги» собираются из настроек каждого
+  // шлюза, и общего места для записи нет — кнопка «Сохранить» там только врала бы.
+  const isPageReadonly = useCallback(
+    (path: string) => readonlyPages.includes(path),
+    [readonlyPages],
+  );
+
+  // Причина, по которой страницы здесь нет. Показывается только тому, кто всё
+  // же пришёл по адресу руками: в меню такой страницы нет вовсе.
+  const pageNote = useCallback((path: string) => pageNotes[path], [pageNotes]);
 
   const value = useMemo(
     () => ({
@@ -151,6 +191,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isOwner,
       fullAccess,
       sections,
+      pages,
+      readonlyPages,
+      isPageReadonly,
+      canPage,
+      pageNote,
       canSection,
       hasPassword,
       isLoading,
@@ -161,7 +206,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout,
       refreshMe,
     }),
-    [user, isAdmin, isReadonlyAdmin, isOwner, fullAccess, sections, canSection, hasPassword, isLoading, login, register, loginWithTelegram, loginWithTelegramWebApp, logout, refreshMe],
+    [user, isAdmin, isReadonlyAdmin, isOwner, fullAccess, sections, pages, readonlyPages, isPageReadonly, canPage, pageNote, canSection, hasPassword, isLoading, login, register, loginWithTelegram, loginWithTelegramWebApp, logout, refreshMe],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

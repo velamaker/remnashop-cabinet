@@ -30,6 +30,13 @@ services:
       # Панель Remnawave: серверы, трафик и устройства принадлежат ей, а не боту.
       REMNAWAVE_URL: "${REMNAWAVE_URL:-${REMNAWAVE_API_URL:-${REMNAWAVE_HOST:-}}}"
       REMNAWAVE_TOKEN: "${REMNAWAVE_TOKEN:-${REMNAWAVE_API_KEY:-}}"
+      # Служебный вход в бота для фоновых задач кабинета: личное сообщение человеку
+      # их API открывает только сессией администратора (машинный ключ выше на это
+      # не годится — 401). Нужен ОТДЕЛЬНЫЙ служебный админ их бота с правами
+      # `users:send_message` и `promocodes:create`. Пусто — рассылочные разделы
+      # честно отказываются включаться, остальной кабинет работает.
+      BEDOLAGA_CABINET_EMAIL: "${BEDOLAGA_CABINET_EMAIL:-}"
+      BEDOLAGA_CABINET_PASSWORD: "${BEDOLAGA_CABINET_PASSWORD:-}"
       # Разрешённые источники изменяющих запросов (CSRF). Host сюда приходит от
       # nginx кабинета как имя контейнера, поэтому сверяемся с публичным адресом.
       ADAPTER_ALLOWED_ORIGINS: "${ADAPTER_ALLOWED_ORIGINS:-${WEB_CABINET_URL:-}}"

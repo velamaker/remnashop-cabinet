@@ -58,6 +58,7 @@ from fastapi import FastAPI, Request, Response
 
 import compose
 from compose import HANDLERS, Ctx, NotAvailable, UpstreamError
+from scheduler import scheduler
 from state import State
 
 UPSTREAM = os.environ.get("BEDOLAGA_UPSTREAM", "http://127.0.0.1:8080").rstrip("/")
@@ -83,6 +84,27 @@ def _panel_url(raw: str) -> str:
 
 PANEL_URL = _panel_url(os.environ.get("REMNAWAVE_URL", ""))
 PANEL_TOKEN = os.environ.get("REMNAWAVE_TOKEN", "")
+
+
+def _panel_headers() -> dict[str, str]:
+    """Заголовки к панели. Токен — всегда, X-Forwarded-* — когда идём по http.
+
+    Панель за своим прокси и запрос без `x-forwarded-proto`/`x-forwarded-for`
+    РВЁТ: не 401 и не 403, а обрыв без ответа («Remote end closed connection»).
+    Проверено живьём на Remnawave 2.8.1 — тот же GET с этими заголовками даёт 200.
+    Так же поступает и официальный клиент `remnapy` (`_prepare_headers`: base_url
+    на `http://` → добавить оба), через него работает наш собственный бэкенд.
+    Без них на обычной установке (адаптер и панель в одной docker-сети, значит
+    http) МОЛЧА пустовали четыре раздела разом: серверы, статус сервиса,
+    устройства и «Новое устройство» — данных нет, а ошибки не видно.
+    На https-панели заголовки не нужны и не ставятся: там наружу торчит настоящий
+    прокси, и подделывать его метки чужому запросу незачем.
+    """
+    headers = {"authorization": f"Bearer {PANEL_TOKEN}"}
+    if PANEL_URL.startswith("http://"):
+        headers["x-forwarded-proto"] = "https"
+        headers["x-forwarded-for"] = "127.0.0.1"
+    return headers
 # Админский токен «Бедолаги» (их таблица web_api_tokens). Нужен там, где кабинет
 # умеет больше их бота — например заморозка подписки. Не задан — такие разделы
 # честно выключены, но всё остальное работает.
@@ -495,6 +517,10 @@ async def lifespan(_: FastAPI):
     global client, panel, admin
     async with httpx.AsyncClient(base_url=UPSTREAM, timeout=TIMEOUT) as c:
         client = c
+        # Фоновые задачи (см. scheduler.py). Заводим ПОСЛЕ клиента: задачам
+        # нужен готовый доступ к боту и панели. Сам по себе планировщик пустой —
+        # пока никто не зарегистрировал задачу, он только спит.
+        await scheduler.start()
         if ADMIN_TOKEN:
             admin = httpx.AsyncClient(
                 base_url=UPSTREAM, timeout=TIMEOUT,
@@ -504,13 +530,16 @@ async def lifespan(_: FastAPI):
             async with httpx.AsyncClient(
                 base_url=PANEL_URL,
                 timeout=TIMEOUT,
-                headers={"authorization": f"Bearer {PANEL_TOKEN}"},
+                headers=_panel_headers(),
             ) as p:
                 panel = p
                 yield
             panel = None
         else:
             yield
+    # Останавливаем ДО закрытия клиентов: иначе задача, начатая в последний миг,
+    # обнаружит закрытое соединение и упадёт уже на выходе.
+    await scheduler.stop()
     if admin is not None:
         await admin.aclose()
     client = None
@@ -640,6 +669,30 @@ def _not_implemented(ours: str) -> Response:
     )
 
 
+async def _panel_check() -> str:
+    """Живая проверка панели одним запросом. Строка для человека, не для кода.
+
+    `bool(panel)` означает всего лишь «адрес и токен заданы» — и этого мало:
+    на отдельном сервере оператор вписывает адрес руками, и обе типовые ошибки
+    (внутреннее имя контейнера, которое снаружи не резолвится, и чужой токен)
+    выглядят одинаково — разделы про серверы и устройства просто пустеют. Так
+    было и на нашем стенде: health бодро писал `panel: true`, пока панель не
+    отвечала вовсе. Поэтому здесь настоящий запрос с коротким сроком: установщик
+    покажет его вывод сразу после подъёма.
+    """
+    if panel is None:
+        return "не задана"
+    try:
+        resp = await panel.get("/api/nodes", timeout=httpx.Timeout(4.0))
+    except httpx.HTTPError as exc:
+        return f"недоступна ({type(exc).__name__})"
+    if resp.status_code in (401, 403):
+        return f"не приняла токен ({resp.status_code})"
+    if resp.status_code >= 400:
+        return f"ответила {resp.status_code}"
+    return "ok"
+
+
 @app.api_route("/adapter/health", methods=["GET", "HEAD"])
 async def health() -> dict[str, Any]:
     """Самопроверка: сколько путей закрыто картой, сколько собираем сами и сколько ещё нет."""
@@ -647,6 +700,8 @@ async def health() -> dict[str, Any]:
         "upstream": UPSTREAM,
         # Панель Remnawave: источник данных, которые боту не принадлежат.
         "panel": bool(panel),
+        # Что с ней на самом деле (ok / не приняла токен / недоступна / не задана).
+        "panel_check": await _panel_check(),
         # Админский токен бота и своя память — от них зависит заморозка.
         "admin_token": bool(admin),
         "state": state.available,

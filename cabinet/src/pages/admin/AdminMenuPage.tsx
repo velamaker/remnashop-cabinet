@@ -213,6 +213,9 @@ export default function AdminMenuPage() {
 
   // Редактор подписи (эмодзи) + цвета для одной кнопки — используется и для
   // кнопок доступа, и для навигации; показывается только когда строка раскрыта.
+  // Что бэкенд умеет в этом разделе. Поля нет — умеет всё (наш бэкенд его не шлёт).
+  const sup = cfg?.supported ?? {};
+
   const renderStyleEditor = (key: string) => {
     const text = cfg?.texts?.[key] ?? "";
     const color = cfg?.colors?.[key] ?? "";
@@ -280,6 +283,9 @@ export default function AdminMenuPage() {
           </div>
         )}
 
+        {/* У кнопок чужого бота цвета нет вовсе — выбор прячем, чтобы не предлагать
+            настройку, которая никуда не применится. */}
+        {sup.colors !== false && (
         <div className="flex flex-wrap gap-1.5">
           {["", "primary", "success", "danger"].map((c) => {
             const m = COLOR_META[c] ?? COLOR_META[""]!;
@@ -298,6 +304,7 @@ export default function AdminMenuPage() {
             );
           })}
         </div>
+        )}
       </div>
     );
   };
@@ -307,7 +314,14 @@ export default function AdminMenuPage() {
     setSaving(true);
     setError(null);
     try {
-      const next = await menuAdminApi.update(cfg);
+      // На чужом боте применимы только подписи и цвета его навигации. Слать
+      // туда весь конфиг нельзя: бэкенд честно откажет на первой же нашей кнопке,
+      // и человек увидит красную ошибку вместо сохранения.
+      const payload =
+        (cfg.supported?.access_buttons === false)
+          ? { texts: cfg.texts, colors: cfg.colors }
+          : cfg;
+      const next = await menuAdminApi.update(payload);
       setCfg(next);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -345,16 +359,28 @@ export default function AdminMenuPage() {
 
       {error && <p className="text-sm text-danger">{error}</p>}
 
+      {/* На чужом боте наши кнопки доступа поставить некуда — вместо формы,
+          которая ответит отказом на сохранении, объясняем это одной строкой. */}
+      {sup.access_buttons === false && (
+        <p className="rounded-xl border border-border-subtle bg-bg-subtle px-4 py-3 text-xs leading-relaxed text-fg-muted">
+          Главное меню этого бота собрано из его собственных кнопок — наши кнопки
+          доступа в кабинет туда не добавить. Здесь можно менять подписи, эмодзи и
+          цвета его кнопок навигации.
+        </p>
+      )}
+
       {/* Основные кнопки: доступ (кабинет/подключиться, с галочкой и порядком) + навигация (состав фиксирован) */}
       <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
-        <h2 className="text-sm font-semibold text-fg">Основные кнопки</h2>
+        <h2 className="text-sm font-semibold text-fg">{sup.access_buttons === false ? "Кнопки бота" : "Основные кнопки"}</h2>
         <p className="mb-3 mt-0.5 text-xs text-fg-muted">
-          Кнопки доступа к кабинету и стандартная навигация — то, чем пользователь
-          пользуется в первую очередь. Доступ можно включать/выключать и менять порядок,
-          навигация фиксирована. Нажмите на кнопку, чтобы изменить текст, эмодзи и цвет —
-          применяется сразу после «Сохранить».
+          {sup.access_buttons === false
+            ? "Кнопки навигации этого бота. Состав задаёт он сам, а подписи, эмодзи и цвета меняются здесь — применяется сразу после «Сохранить»."
+            : "Кнопки доступа к кабинету и стандартная навигация — то, чем пользователь пользуется в первую очередь. Доступ можно включать/выключать и менять порядок, навигация фиксирована. Нажмите на кнопку, чтобы изменить текст, эмодзи и цвет — применяется сразу после «Сохранить»."}
         </p>
 
+        {/* Кнопки доступа в кабинет — наши. На чужом боте их некуда поставить,
+            поэтому список не показываем вовсе, а не рисуем неактивные галочки. */}
+        {sup.access_buttons !== false && (
         <div className="space-y-1.5">
           {orderKeys.map((key, idx) => {
             const on = cfg[key];
@@ -442,6 +468,10 @@ export default function AdminMenuPage() {
           })}
         </div>
 
+        )}
+
+        {/* «Подарить подписку» — тоже наша механика: у чужого бота её нет. */}
+        {sup.gift !== false && (<>
         <p className="mb-1 mt-4 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">
           Подарки
         </p>
@@ -484,12 +514,16 @@ export default function AdminMenuPage() {
             );
           })()}
         </div>
+        </>)}
 
         <p className="mb-1 mt-4 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">
           Навигация
         </p>
         <div className="space-y-1.5">
-          {NAV_META.map((n) => {
+          {/* Кнопки берём у бэкенда, если он их прислал: у чужого бота меню своё
+              (Личный кабинет, Баланс, Партнёрка…), и показывать вместо него наши
+              названия — заставлять человека править несуществующие кнопки. */}
+          {(cfg.nav_items?.map((it) => ({ key: it.key, title: it.label })) ?? NAV_META).map((n) => {
             const isOpen = expanded === n.key;
             const summary = summaryLabel(cfg.texts?.[n.key] ?? "", cfg.colors?.[n.key] ?? "");
             return (
@@ -599,6 +633,8 @@ function BotButtonColors() {
 
   if (loading) return null;
   // Показываем только заполненные/активные кнопки бота (пустые слоты не нужны).
+  // Пустой список бывает и потому, что у чужого бота такой механики нет вовсе —
+  // тогда блока тоже быть не должно.
   const shown = buttons.filter((b) => b.is_active || (b.text && b.text !== "btn-test"));
   if (shown.length === 0) return null;
 

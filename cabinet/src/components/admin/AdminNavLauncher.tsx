@@ -5,9 +5,10 @@ import { useAuth } from "@/contexts/AuthContext";
 // Плиточный лаунчер разделов — главная страница админки. Все разделы собраны по
 // группам колонками; отсюда открывается остальная навигация.
 export function AdminNavLauncher() {
-  const { canSection } = useAuth();
+  const { canSection, canPage } = useAuth();
   const groups = navGroups
-    .map((g) => ({ ...g, items: g.items.filter((it) => canSection(it.section)) }))
+    // Тот же двойной фильтр, что и в боковом меню: права + умение бэкенда.
+    .map((g) => ({ ...g, items: g.items.filter((it) => canSection(it.section) && canPage(it.to)) }))
     .filter((g) => g.items.length > 0);
 
   return (

@@ -648,6 +648,8 @@ async def check_node_health(
                         i18n_key="raw-message",
                         i18n_kwargs={"content": text},
                         delete_after=None,
+                        # Иначе у алерта нет кнопки «Закрыть»: дефолт поля — True.
+                        disable_default_markup=False,
                     ),
                     roles=[Role.OWNER, Role.DEV, Role.ADMIN],
                 )

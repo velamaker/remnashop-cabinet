@@ -36,13 +36,21 @@ export default function AdminAbusePage() {
   const [error, setError] = useState<string | null>(null);
   const [onlyTrial, setOnlyTrial] = useState(true);
   const [busy, setBusy] = useState<number | null>(null);
+  // Чем ищет бэкенд и что у него сейчас не сработало. Оба поля необязательные:
+  // их шлёт только бэкенд, у которого набор сигналов не такой, как у нашего.
+  const [note, setNote] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
     abuseAdminApi
       .trials({ only_trial: onlyTrial })
-      .then((r) => setClusters(r.clusters))
+      .then((r) => {
+        setClusters(r.clusters);
+        setNote(r.note ?? null);
+        setWarning(r.warning ?? null);
+      })
       .catch((e) => setError(e instanceof ApiError ? e.detail : "Ошибка"))
       .finally(() => setLoading(false));
   }, [onlyTrial]);
@@ -101,12 +109,21 @@ export default function AdminAbusePage() {
         </button>
       </div>
 
+      {/* Подсказка своя у каждого бэкенда: сигналы зависят от того, что он вообще
+          хранит. Поля `note` нет — текст прежний, наш. */}
       <div className="rounded-2xl border border-border-subtle bg-accent/5 px-5 py-4 text-sm text-fg-muted">
-        💡 Группы аккаунтов с совпадающими признаками (общий девайс/HWID, общий IP,
-        «одинаковый» email с учётом gmail-точек/алиасов, само-рефералы с общего IP).
-        Похоже на мультиаккаунт ради нескольких бесплатных пробников. HWID снимается с
-        панели раз в 6 часов. Автодействий нет — решение за вами.
+        💡{" "}
+        {note ??
+          "Группы аккаунтов с совпадающими признаками (общий девайс/HWID, общий IP, «одинаковый» email с учётом gmail-точек/алиасов, само-рефералы с общего IP). Похоже на мультиаккаунт ради нескольких бесплатных пробников. HWID снимается с панели раз в 6 часов. Автодействий нет — решение за вами."}
       </div>
+
+      {/* Что не сработало сейчас: без этого пустой список читался бы как «чисто». */}
+      {warning && (
+        <div className="flex items-start gap-2 rounded-xl bg-warning/10 px-4 py-3 text-sm text-warning">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          {warning}
+        </div>
+      )}
 
       <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-fg-muted">
         <input
