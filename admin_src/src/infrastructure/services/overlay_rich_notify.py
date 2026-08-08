@@ -761,7 +761,10 @@ def build_rich_html(text: str, footer_label: str, logo: str = "") -> Optional[st
     parts = []
     if logo:
         parts.append(f'<img src="{html_lib.escape(logo, quote=True)}"/>')
-    parts.extend(f"<p>{tag}</p>" for tag in overline)
+    # Хештег в шапке НЕ печатаем. В кабинете надзаголовок — мелкая тихая подпись
+    # над заголовком, а Telegram делает из хештега яркую синюю ссылку: он стоял
+    # перед заголовком и был самым громким элементом сообщения. Уносим в подвал —
+    # поиск по хештегу продолжает работать, но он больше не спорит с заголовком.
     # <h3>, а не <h5>: в спецификации 1 — самый крупный размер, 6 — самый мелкий,
     # то есть <h5> заголовком не выглядел вовсе. В кабинете заголовок экрана —
     # самый крупный элемент, и иерархия трёхступенчатая: заголовок → надпись
@@ -783,6 +786,10 @@ def build_rich_html(text: str, footer_label: str, logo: str = "") -> Optional[st
     # Был ли уже напечатан хоть один раздел: от него надо отбить следующий,
     # если у того нет собственной надписи (см. ниже).
     printed_section = False
+    # Где в parts лежат надписи разделов и сколько разделов реально напечатано —
+    # чтобы в конце убрать надпись, если раздел оказался единственным.
+    label_positions: list[int] = []
+    printed_count = 0
 
     for heading, rows, texts in sections:
         # Главное число раздела вынимаем ДО раскладки таблицы: в кабинете
@@ -805,6 +812,7 @@ def build_rich_html(text: str, footer_label: str, logo: str = "") -> Optional[st
         if not table_rows and not aside_rows and not texts and hero is None:
             continue  # раздел без данных: заголовок сам по себе ничего не говорит
         if heading:
+            label_positions.append(len(parts))
             parts.append(f"<h5>{html_lib.escape(_section_label(heading))}</h5>")
         elif printed_section and not texts:
             # Раздел безымянный и начинается сразу со строк данных, а перед ним
@@ -832,11 +840,13 @@ def build_rich_html(text: str, footer_label: str, logo: str = "") -> Optional[st
                 f"<tr><td>{html_lib.escape(key)}</td><td>{value}</td></tr>"
                 for key, value in table_rows
             )
-            # Голая <table>: рамки и зебру Telegram включает атрибутами
-            # bordered/striped, и именно они делали вид «чужим» — в кабинете
-            # строка данных отбита волосяной линией снизу, вертикальных границ и
-            # чередования фона нет нигде.
-            parts.append(f"<table>{body}</table>")
+            # `bordered` — БЕЗ `striped`. Голая таблица читается сплошной кашей:
+            # строки ничем не отделены (жалоба владельца 8 августа). Линии между
+            # строками — единственный способ их разделить, который даёт Telegram:
+            # CSS там нет, а «волосяную линию снизу», как в кабинете, задать
+            # нечем. Зебру НЕ включаем: чередование фона и есть та деталь, по
+            # которой вид узнавался как чужой.
+            parts.append(f"<table bordered>{body}</table>")
         # Широкая пара идёт сразу под таблицей СВОЕГО раздела. Общей кучей в
         # конце уведомления она отрывалась от объекта, к которому относится.
         # Подпись тихая (курсив), значение моноширинное — это DetailRow кабинета,
@@ -846,10 +856,25 @@ def build_rich_html(text: str, footer_label: str, logo: str = "") -> Optional[st
             for key, value in aside_rows
         )
         printed_section = True
+        printed_count += 1
     # Сворачиваемые блоки — после таблицы: сначала цифры, потом расшифровка.
     parts.extend(block for block in map(_details_block, expandable) if block)
-    parts.append("<hr/>")
-    parts.append(f"<footer>{html_lib.escape(footer_label)} · {stamp}</footer>")
+
+    # Раздел в сообщении один — его надпись убираем. «ПОЛЬЗОВАТЕЛЬ» под
+    # заголовком «Новый пользователь» ничего не добавляет: заголовок уже сказал,
+    # о чём речь. Надписи нужны ТОЛЬКО чтобы различать несколько объектов в одном
+    # сообщении (платёж / пользователь / тариф). На двух строках данных пять
+    # блоков обрамления давали экран воздуха — жалоба владельца 8 августа.
+    if printed_count == 1 and len(label_positions) == 1:
+        del parts[label_positions[0]]
+
+    # Линия перед подвалом — только когда телу есть что отделять. У короткого
+    # уведомления (один раздел, без свёрнутых блоков) подвал и так отбит, а
+    # лишняя линия — ещё одна пустая строка.
+    if printed_count > 1 or expandable:
+        parts.append("<hr/>")
+    tail = " · ".join([*(_plain(tag) for tag in overline), html_lib.escape(footer_label)])
+    parts.append(f"<footer>{tail} · {stamp}</footer>")
     return "".join(parts)
 
 
