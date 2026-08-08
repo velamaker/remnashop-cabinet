@@ -238,34 +238,83 @@ async def _record_user_notification(session: AsyncSession, user_id: int, payload
         logger.debug(f"push: не смог записать историю юзер-уведомления: {exc}")
 
 
-# --- Настройки админ-уведомлений: один тумблер «слать web-push на телефон». ---
-# История (admin_notifications) пишется ВСЕГДА, а фактическая отправка push на
-# устройства админа гейтится этим флагом — чтобы не задваивать с Telegram, но
-# при этом центр уведомлений в админке оставался полным.
+# --- Настройки админ-уведомлений: тумблеры из админки кабинета. ---
+#   admin_push_enabled — слать ли web-push на телефон. История
+#     (admin_notifications) пишется ВСЕГДА, а фактическая отправка push на
+#     устройства админа гейтится этим флагом — чтобы не задваивать с Telegram, но
+#     при этом центр уведомлений в админке оставался полным.
+#   admin_rich_enabled — печатать ли админские уведомления в Telegram «богатым»
+#     видом (таблица ключ→значение, футер) вместо прежней простыни текста.
+#
+# ПОЧЕМУ ФАЙЛ, А НЕ ПЕРЕМЕННАЯ ОКРУЖЕНИЯ. Кабинет можно поставить на ОТДЕЛЬНЫЙ
+# сервер (режим `site`), где бота нет вовсе: тумблер оттуда обязан менять
+# состояние НА СТОРОНЕ БОТА, через admin-API. Плюс файл читается на каждой
+# отправке — настройка применяется без перезапуска бота.
 _NOTIF_SETTINGS_PATH = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets")) / "notif_settings.json"
 
 
+def _rich_default() -> bool:
+    """Значение rich-вида, пока тумблер ни разу не сохраняли: NOTIFY_RICH.
+
+    Разбор строки намеренно повторяет overlay_rich_notify.rich_enabled(): тянуть
+    сюда импорт того модуля нельзя — он зависит от aiogram, а этот файл зовёт и
+    веб-процесс (эндпоинты админки).
+    """
+    return (os.environ.get("NOTIFY_RICH") or "true").strip().lower() in (
+        "1", "true", "yes", "on", "да",
+    )
+
+
 def load_notif_settings() -> dict:
-    """{'admin_push_enabled': bool}. Дефолт — включено. Битый файл → дефолт."""
+    """{'admin_push_enabled': bool, 'admin_rich_enabled': bool}. Битый файл → дефолты."""
+    defaults = {"admin_push_enabled": True, "admin_rich_enabled": _rich_default()}
     try:
         if _NOTIF_SETTINGS_PATH.exists():
             with _NOTIF_SETTINGS_PATH.open(encoding="utf-8") as fh:
                 data = json.load(fh)
             if isinstance(data, dict):
-                return {"admin_push_enabled": bool(data.get("admin_push_enabled", True))}
+                # Ключа может не быть (файл от старой версии) — тогда дефолт.
+                return {key: bool(data.get(key, value)) for key, value in defaults.items()}
     except Exception:
         pass
-    return {"admin_push_enabled": True}
+    return defaults
 
 
-def save_notif_settings(admin_push_enabled: bool) -> None:
+def save_notif_settings(
+    admin_push_enabled: bool | None = None,
+    admin_rich_enabled: bool | None = None,
+) -> None:
+    """Пишет только переданные тумблеры; None = «не трогать» (остальные — как были).
+
+    Частичное сохранение нужно, чтобы переключение одного тумблера не затирало
+    соседний значением, которое кабинет мог прочитать давно и уже устаревшим.
+    """
+    current = load_notif_settings()
+    if admin_push_enabled is not None:
+        current["admin_push_enabled"] = bool(admin_push_enabled)
+    if admin_rich_enabled is not None:
+        current["admin_rich_enabled"] = bool(admin_rich_enabled)
     _NOTIF_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with _NOTIF_SETTINGS_PATH.open("w", encoding="utf-8") as fh:
-        json.dump({"admin_push_enabled": bool(admin_push_enabled)}, fh, ensure_ascii=False, indent=2)
+    # Пишем через временный файл рядом и подменяем одним движением. Открытие на
+    # "w" обрезало бы файл сразу, а читают его теперь на КАЖДОМ админском
+    # уведомлении и пуше: в момент записи читатель успевал увидеть обрезанный
+    # JSON и молча уезжал на дефолты. os.replace меняет запись каталога целиком —
+    # читатель всегда видит либо старую версию, либо новую.
+    tmp = _NOTIF_SETTINGS_PATH.with_suffix(".json.tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        json.dump(current, fh, ensure_ascii=False, indent=2)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, _NOTIF_SETTINGS_PATH)
 
 
 def _admin_push_enabled() -> bool:
     return load_notif_settings()["admin_push_enabled"]
+
+
+def admin_rich_enabled() -> bool:
+    """Сохранённый тумблер rich-вида. Читается на КАЖДОЙ отправке — без перезапуска."""
+    return load_notif_settings()["admin_rich_enabled"]
 
 
 async def push_admins_standalone(payload: dict) -> int:

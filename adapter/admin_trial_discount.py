@@ -84,9 +84,18 @@ GET `/api/admin/trial-discount`. Форма конфига (`enabled`, `percent`
 (`active_discount_exists`): если у него уже есть действующая скидка (их промо-оффер
 или другой промокод), наш код он активирует только после её окончания. Код при
 этом не сгорает и живёт до `valid_until`. Ломать это правило мы не имеем права:
-оно защищает владельца от сложения скидок. Заранее проверить, есть ли у человека
-скидка, тоже нечем: их машинный `/users` поля `promo_offer_discount_percent` не
-отдаёт вовсе.
+оно защищает владельца от сложения скидок.
+
+ПОЭТОМУ СПРАШИВАЕМ ЗАРАНЕЕ. Машинный `/users` поля `promo_offer_discount_percent`
+действительно не отдаёт — но кабинетная ручка `GET /cabinet/admin/users/{id}`
+(право `users:read`) отдаёт и его, и срок (`..._expires_at`), а этой сессией
+модуль и так ходит. Без проверки получалось молчаливое «предложение в никуда»:
+человеку с чужой скидкой уходил код, который в тот момент не активируется, а
+отметка «выдано» ставится по факту ДОСТАВКИ — второго предложения не будет
+никогда. Теперь такой человек ПРОПУСКАЕТСЯ без отметки и получит своё, когда
+чужая скидка кончится (окно выдачи — сутки и больше, заход раз в час). Спросить
+не вышло (права нет, бот молчит) — ведём себя как раньше и говорим об этом в
+сводке: раздел, замолчавший из-за недоданного права, хуже лишнего кода.
 
 БАННЕР В КАБИНЕТЕ — ЧУЖОЙ СЛОТ, И МЫ ЕГО НЕ ТРОГАЕМ. Публичный путь
 `GET /api/trial-discount`, за которым ходит `TrialDiscountBanner.tsx`, УЖЕ занят
@@ -153,6 +162,16 @@ GET `/api/admin/trial-discount`. Форма конфига (`enabled`, `percent`
 
 ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНО: рассылка, включившаяся сама собой при обновлении, — это
 письма и скидки, которых никто не заказывал.
+
+ЧТО ВЛАДЕЛЕЦ УЗНАЁТ БЕЗ ЛОГА. Лог контейнера никто не читает, а две беды раздела
+молчаливы по своей природе: прогон, останавливающийся на первом же кандидате
+(служебному админу не выдали `promocodes:create`), и невручённый промокод,
+который не удалось отозвать, — живая скидка «на предъявителя» в их админке.
+Обе теперь едут в ленту уведомлений админки (`admin_notifications.record`, дедуп
+по дню) и в ответ `GET` этого раздела (`last_error`, `orphan_codes`), а карточка
+на экране печатает их прямо в поле `note` — то самое, которое она уже
+показывает дословно. Тумблер «включено» при молчащей рассылке перестал быть
+ложью в админке.
 """
 
 from __future__ import annotations
@@ -227,7 +246,8 @@ _QUIET_FROM, _QUIET_TO = 22, 9
 # Их права. Личное сообщение — `app/cabinet/routes/admin_users.py`
 # (`require_permission('users:send_message')`), выпуск промокода с защитой «только
 # первая покупка» — `app/cabinet/routes/admin_promocodes.py`
-# (`require_permission('promocodes:create')`), список людей —
+# (`require_permission('promocodes:create')`), карточка человека (по ней видно,
+# нет ли у него уже чужой скидки) и список людей —
 # `require_permission('users:read')`.
 _SEND_RIGHT = "users:send_message"
 _ISSUE_RIGHT = "promocodes:create"
@@ -237,6 +257,14 @@ _READ_RIGHT = "users:read"
 # заблокировал бота или телеграма у него нет вовсе (routes/admin_users.py:2166,
 # 2192). Всё прочее — беда часа, а не приговор.
 _NEVER_AGAIN = ("forbidden", "no_telegram_id")
+
+# Спросить про чужую скидку не вышло (нет права, нет ручки, бот молчит). Один
+# текст на прогон и на холостой прогон: раздел работает как раньше, но молчать
+# об этом нельзя — иначе часть выданных кодов «не работает» без объяснений.
+_CANNOT_ASK = (
+    "не удалось заранее спросить, нет ли у человека другой скидки (нужно право "
+    f"«{_READ_RIGHT}» служебному админу бота) — коды выдаются как раньше"
+)
 
 # Промокод: из чего собираем и сколько раз пробуем при совпадении.
 # Алфавит без 0/O/1/I — код читают глазами из сообщения и набирают руками.
@@ -362,13 +390,118 @@ _MECHANISM = (
     "привязан — поля «кому» у промокода нет, поэтому пересланный код активирует "
     "любой, кто ещё не платил. Служебному админу бота нужны два права: "
     "«users:send_message» (написать) и «promocodes:create» (выпустить код с "
-    "защитой «только первая покупка»)."
+    "защитой «только первая покупка»); третье, «users:read», не обязательно, но "
+    "без него нечем заранее увидеть, что у человека уже есть другая скидка — "
+    "тогда его код в тот момент не активируется."
 )
 
 
-def _with_note(config: dict[str, Any]) -> dict[str, Any]:
-    """Настройка + рассказ о механизме. В хранилище уходит config БЕЗ него."""
-    return {**config, "note": _MECHANISM}
+def _with_note(state: Any, config: dict[str, Any]) -> dict[str, Any]:
+    """Настройка + рассказ о механизме + то, о чём владелец обязан узнать С
+    ЭКРАНА. В хранилище уходит config БЕЗ этого.
+
+    Тревоги печатаются в том же поле `note`, которое карточка кабинета уже
+    показывает дословно (TrialDiscountCard): свои поля (`last_error`,
+    `orphan_codes`) сегодняшний экран не умеет читать, а «включено, но не
+    работает» и «живой невручённый промокод» владелец обязан видеть СЕЙЧАС, а не
+    после обновления кабинета. Лишние ключи экран игнорирует, наш собственный
+    бэкенд их не шлёт вовсе — значит, обычная установка не меняется.
+    """
+    out: dict[str, Any] = {**config, "note": _MECHANISM}
+    # Признак «у этого бэкенда есть холостой прогон». Наш собственный бэкенд поля
+    # не шлёт вовсе, и кнопки на его экране не появится — правило совместимости
+    # то же, что у `note` и у полей резервного доступа.
+    out["can_dry_run"] = HANDLERS.get(("POST", "/api/admin/trial-discount/dry-run")) is not None
+    alarms: list[str] = []
+
+    stop = _last_stop(state)
+    text = str(stop.get("stopped") or "").strip()
+    if text:
+        out["last_error"] = text
+        out["last_error_at"] = stop.get("at")
+        if config.get("enabled"):
+            # Тумблер включён, а прогон каждый час упирается в одно и то же.
+            alarms.append(f"⚠ Рассылка включена, но не работает: {text}")
+
+    orphans = _orphans(state)
+    if orphans:
+        out["orphan_codes"] = orphans[:10]
+        codes = ", ".join(str(row.get("code") or "?") for row in orphans[:5])
+        alarms.append(
+            f"⚠ Невручённых промокодов: {len(orphans)} ({codes}). Они живы, и их "
+            "может активировать любой, кому попадутся, — удалите их в разделе "
+            "промокодов бота."
+        )
+
+    if alarms:
+        out["note"] = "\n\n".join([*alarms, _MECHANISM])
+    return out
+
+
+# --- почему рассылка молчит ----------------------------------------------------
+
+# Причина, по которой остановился последний прогон. Раньше она жила только в
+# логе контейнера: тумблер месяцами показывал работающую рассылку, которой нет.
+# Одна запись, а не журнал: интересна ПОСЛЕДНЯЯ причина, история беды лежит в
+# ленте уведомлений.
+_STATUS_KEY = "trial_discount_status"
+
+
+def _last_stop(state: Any) -> dict[str, Any]:
+    if state is None or not getattr(state, "available", False):
+        return {}
+    raw = state.get_setting(_STATUS_KEY, {})
+    return raw if isinstance(raw, dict) else {}
+
+
+def _remember_stop(state: Any, text: str) -> None:
+    if state is None or not getattr(state, "available", False):
+        return
+    state.set_setting(
+        _STATUS_KEY,
+        {"stopped": text, "at": datetime.now(timezone.utc).isoformat()},
+    )
+
+
+def _forget_stop(state: Any) -> None:
+    """Прогон дошёл до конца — старая причина больше не правда.
+
+    Пишем, только если было что стирать: лишняя запись в общую память на каждом
+    часовом заходе никому не нужна.
+    """
+    if state is None or not getattr(state, "available", False):
+        return
+    if _last_stop(state).get("stopped"):
+        state.set_setting(_STATUS_KEY, {})
+
+
+def _tell_owner(target: Any, title: str, body: str, key: str, days: float = 1.0) -> None:
+    """Событие в ленту уведомлений админки (колокольчик в шапке).
+
+    Импорт ЛЕНИВЫЙ, как у соседей (`admin_backup._note`): лента нарочно
+    импортирует `admin_support` до объявления своих ручек, и затаскивать эту
+    цепочку в чужой слот загрузки нельзя. Модуля может не быть в образе вовсе —
+    тогда просто нет записи, а раздел работает.
+
+    Дедуп по дню: беда повторяется каждый час всё окно выдачи, и лента из
+    двадцати четырёх одинаковых карточек хуже одной.
+    """
+    try:
+        from admin_notifications import record
+    except Exception:  # noqa: BLE001 — модуля может не быть в образе
+        return
+    try:
+        record(
+            target,
+            "trial_discount",
+            title,
+            body,
+            url="/admin/trial-discount",
+            key=key,
+            dedup_seconds=86400.0 * days,
+        )
+    except Exception as exc:  # noqa: BLE001 — журнал не имеет права ломать прогон
+        _log(f"событие в ленту не записано: {exc!r}")
 
 
 # --- память о выданных предложениях ----------------------------------------------
@@ -503,6 +636,7 @@ def _remember_orphan(state: Any, issued: dict[str, Any], reason: str) -> None:
     if state is None or not getattr(state, "available", False):
         return
     rows = _orphans(state)
+    code = str(issued.get("code") or "?")
     rows.insert(
         0,
         {
@@ -514,6 +648,16 @@ def _remember_orphan(state: Any, issued: dict[str, Any], reason: str) -> None:
         },
     )
     state.set_setting(_ORPHAN_KEY, rows[:_ORPHAN_LIMIT])
+    # Живая скидка «на предъявителя» — это не строка в логе, а деньги владельца.
+    # Дедуп по самому коду: один брошенный код — одна карточка в ленте.
+    _tell_owner(
+        state,
+        "Невручённый промокод на скидку",
+        f"Код {code} выпущен, но ни доставить, ни отозвать его не удалось "
+        f"({reason}). Он живой — удалите его в разделе промокодов бота.",
+        key=f"trial_discount_orphan:{code}",
+        days=30.0,
+    )
 
 
 # --- права ------------------------------------------------------------------------
@@ -814,6 +958,59 @@ def _deadline(now: datetime, hours: int, trial_end: datetime | None) -> datetime
     return trial_end if trial_end is not None and trial_end > base else base
 
 
+async def _held_discount(ctx: Ctx, user_id: int, tz: Any) -> tuple[str, bool]:
+    """Есть ли у человека ЧУЖАЯ действующая скидка. → (причина словами, спросили ли).
+
+    ЗАЧЕМ. Их правило `active_discount_exists` (`promocode_service`) проверяется
+    только В МОМЕНТ активации: код выпустится и уедет, а человек его в этот час
+    активировать не сможет. Отметка «выдано» ставится по факту ДОСТАВКИ, значит
+    второго предложения не будет никогда — предложение пропадало бы молча.
+    Поэтому спрашиваем ЗАРАНЕЕ и такого человека просто пропускаем БЕЗ отметки:
+    окно выдачи — сутки и больше, заход раз в час, чужая скидка кончится — своё
+    он получит.
+
+    ЧЕМ СПРАШИВАЕМ. Кабинетной ручкой `GET /cabinet/admin/users/{id}` (право
+    `users:read`): их машинный `/users` этих полей не отдаёт вовсе, а здесь они
+    есть — `promo_offer_discount_percent` и `..._expires_at`. Из фоновой задачи
+    идём служебным входом, из ручки админки — сессией зашедшего (`Ctx.call` всё
+    равно перебьёт заголовок его токеном, а `users:read` у него уже спрошено).
+
+    НЕ СМОГЛИ СПРОСИТЬ — НЕ БЕДА ЧЕЛОВЕКА. Права нет, ручки нет, бот молчит:
+    возвращаем «спросить не вышло», и прогон идёт как раньше. Обратное (молча
+    никому не писать) превратило бы недоданное право в тихо выключённый раздел.
+    """
+    path = f"/cabinet/admin/users/{int(user_id)}"
+    try:
+        resp = (
+            await ctx.call("GET", path)
+            if ctx.token
+            else await bot_session.request(ctx, "GET", path)
+        )
+    except (httpx.HTTPError, RuntimeError):
+        return "", False
+    if resp.status_code >= 400:
+        return "", False
+    try:
+        data = resp.json() or {}
+    except ValueError:
+        return "", False
+    if not isinstance(data, dict):
+        return "", False
+    try:
+        percent = int(data.get("promo_offer_discount_percent") or 0)
+    except (TypeError, ValueError):
+        percent = 0
+    if percent <= 0:
+        return "", True
+    until = _stamp(data.get("promo_offer_discount_expires_at"))
+    # Их же условие: просроченная скидка активации не мешает (`expires_at`
+    # в прошлом — как будто её нет).
+    if until is not None and until <= datetime.now(timezone.utc):
+        return "", True
+    when = f"до {_when(until, tz)}" if until is not None else "без срока"
+    return f"у человека уже есть скидка {percent}% ({when}) — предложим позже", True
+
+
 async def _issue_code(
     ctx: Ctx, percent: int, hours: int, deadline: datetime
 ) -> dict[str, Any]:
@@ -1016,6 +1213,10 @@ async def run_once(
         # больше не в выборке, и владелец должен видеть это отдельно от «не
         # дошло, попробуем ещё».
         "undeliverable": 0,
+        # Сколько пропущено из-за ЧУЖОЙ действующей скидки: их правило
+        # `active_discount_exists` не дало бы активировать наш код сейчас.
+        # Отметки таким не ставим — предложим, когда чужая скидка кончится.
+        "has_discount": 0,
         "truncated": False,
         # Пусто, пока прогон не остановился на общей беде (нет прав на выпуск
         # кода, бот лёг). Строка здесь — причина, по которой остальные не
@@ -1069,9 +1270,20 @@ async def run_once(
         deadline = _deadline(now, hours, trial_end)
 
         if dry_run:
+            # Чужую скидку спрашиваем и здесь: холостой прогон обязан обещать
+            # ровно тех, кому боевой напишет, иначе он проверяет не то, что
+            # произойдёт. Запросов при этом не больше `_DRY_LIMIT`.
+            held, asked = ("", True)
+            if not record["skip"]:
+                held, asked = await _held_discount(ctx, record["user_id"], tz)
+            if held:
+                summary["has_discount"] += 1
+            if not asked and not summary.get("discount_check"):
+                summary["discount_check"] = _CANNOT_ASK
             summary["previews"].append(
                 _preview(
                     record,
+                    skip=held,
                     percent=percent,
                     valid_until=deadline.isoformat(),
                     # Настоящий код здесь не выпускается сознательно: превью не
@@ -1092,7 +1304,9 @@ async def run_once(
         # Считаем ПОПЫТКИ, а не удачи. Неудачная попытка — это три обращения к
         # боту (выпуск, отправка, отзыв), и пропускать её мимо потолка значило бы
         # пройти всю базу разом, без единой паузы, ровно в тот час, когда боту
-        # плохо.
+        # плохо. Вопрос про чужую скидку — тоже обращение, и он ВНУТРИ потолка:
+        # иначе база, целиком сидящая на чужих скидках, обходилась бы полностью
+        # и каждый час.
         if attempts >= _MAX_PER_RUN:
             summary["truncated"] = True
             _log(
@@ -1101,6 +1315,24 @@ async def run_once(
             )
             break
         attempts += 1
+
+        # Их правило «одна активная скидка на человека» проверяется только при
+        # активации, а отметка «выдано» ставится по факту доставки: без этого
+        # вопроса человек с чужой скидкой получал код, который не может ввести,
+        # и терял предложение навсегда. Пропускаем БЕЗ отметки — вернёмся, когда
+        # чужая скидка кончится.
+        held, asked = await _held_discount(ctx, record["user_id"], tz)
+        if held:
+            summary["has_discount"] += 1
+            _log(f"user_id={record['user_id']}: {held}")
+            continue
+        if not asked and not summary.get("discount_check"):
+            # Один раз за прогон: спросить не вышло (нет права `users:read` у
+            # служебного админа, нет ручки, бот молчит). Ведём себя как раньше,
+            # но говорим об этом вслух — иначе владелец не поймёт, почему часть
+            # выданных кодов у людей «не работает».
+            summary["discount_check"] = _CANNOT_ASK
+            _log(_CANNOT_ASK)
 
         # Порядок строгий: сначала код, потом письмо, и не дошло — код убираем.
         try:
@@ -1189,8 +1421,17 @@ async def trial_discount(ctx: Ctx) -> None:
 
     if not _delivery_configured():
         # Включили раньше, а доступ для отправки пропал (или его и не было).
-        # Молча ничего не делать нельзя: раз в час пишем, чего не хватает.
+        # Молча ничего не делать нельзя: раз в час пишем, чего не хватает — и
+        # тем же способом, что про остановленный прогон, иначе тумблер снова
+        # показывает работающую рассылку, которой нет.
         _log(f"выдача остановлена. {bot_session.NO_DELIVERY}")
+        _remember_stop(ctx.state, bot_session.NO_DELIVERY)
+        _tell_owner(
+            ctx,
+            "Скидка триальщикам: рассылка не работает",
+            f"Раздел включён, но отправлять нечем. {bot_session.NO_DELIVERY}",
+            key=f"trial_discount_stopped:{datetime.now(timezone.utc):%Y-%m-%d}",
+        )
         return
 
     tz, tz_name = await _bot_timezone(ctx)
@@ -1206,9 +1447,28 @@ async def trial_discount(ctx: Ctx) -> None:
         _log(
             "осмотрено {examined}, к выдаче {candidates}, выдано {sent}, "
             "без телеграма {unreachable}, уже предлагали {already_offered}, "
+            "у них своя скидка {has_discount}, "
             "не удалось {failed} (из них навсегда {undeliverable}) "
             "(пояс {tz})".format(**summary, tz=tz_name)
         )
+
+    # Тумблер включён — значит владелец ждёт писем. Прогон, который каждый час
+    # упирается в одно и то же (служебному админу не дали `promocodes:create`,
+    # бот отвечает 500), раньше знал об этом только лог контейнера: наружу не
+    # уходило ничего, и «включено» месяцами означало «ничего не происходит».
+    if summary["stopped"]:
+        _remember_stop(ctx.state, summary["stopped"])
+        _tell_owner(
+            ctx,
+            "Скидка триальщикам: рассылка не работает",
+            f"Раздел включён, но выдача останавливается на первом же человеке: "
+            f"{summary['stopped']}",
+            key=f"trial_discount_stopped:{datetime.now(timezone.utc):%Y-%m-%d}",
+        )
+    else:
+        # Дошли до конца — прежняя причина больше не правда, и тумблер снова
+        # означает то, что показывает.
+        _forget_stop(ctx.state)
 
 
 # --- ручки ------------------------------------------------------------------------
@@ -1217,7 +1477,7 @@ async def trial_discount(ctx: Ctx) -> None:
 @_claim("GET", "/api/admin/trial-discount")
 async def trial_discount_config(ctx: Ctx) -> dict[str, Any]:
     await _require_admin(ctx)
-    return _with_note(_config(ctx.state))
+    return _with_note(ctx.state, _config(ctx.state))
 
 
 @_claim("PUT", "/api/admin/trial-discount")
@@ -1287,7 +1547,12 @@ async def trial_discount_save(ctx: Ctx) -> dict[str, Any]:
         config["enabled"] = bool(enabled)
 
     ctx.state.set_setting(_KEY, config)
-    return _with_note(config)
+    if turning_on:
+        # Включили заново — прежняя причина остановки относится к прошлой жизни
+        # раздела. Оставить её значило бы пугать владельца бедой, которой,
+        # возможно, уже нет; настоящая вернётся первым же прогоном.
+        _forget_stop(ctx.state)
+    return _with_note(ctx.state, config)
 
 
 @_claim("POST", "/api/admin/trial-discount/dry-run", deadline=120.0)
@@ -1340,8 +1605,15 @@ async def trial_discount_dry_run(ctx: Ctx) -> dict[str, Any]:
         "привязан — поля «кому» у промокода нет, поэтому пересланный код "
         "активирует любой, кто ещё не платил. Выпускается кабинетной ручкой бота "
         f"от имени служебного админа: ему нужны права «{_SEND_RIGHT}» и "
-        f"«{_ISSUE_RIGHT}»."
+        f"«{_ISSUE_RIGHT}», а желательно и «{_READ_RIGHT}» — по нему видно, что у "
+        "человека уже есть другая скидка и предлагать ему пока нечего."
     )
+    # Почему рассылка молчит при включённом тумблере: причина последней остановки
+    # прогона. Пусто — прогон доходил до конца.
+    stop = _last_stop(ctx.state)
+    if stop.get("stopped"):
+        summary["last_error"] = stop["stopped"]
+        summary["last_error_at"] = stop.get("at")
     if not summary["delivery_configured"]:
         summary["delivery_note"] = bot_session.NO_DELIVERY
     if not summary["can_issue_discount"]:

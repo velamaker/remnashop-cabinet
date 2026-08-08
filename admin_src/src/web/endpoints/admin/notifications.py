@@ -22,18 +22,31 @@ router = APIRouter(prefix="/notifications", tags=["Admin - Notifications"])
 
 
 class NotifSettingsUpdate(BaseModel):
-    admin_push_enabled: bool
+    """Оба поля НЕОБЯЗАТЕЛЬНЫЕ: None = «не менять этот тумблер».
+
+    Почему не required: старый собранный кабинет шлёт только admin_push_enabled
+    (и не знает про rich) — он обязан работать без 422. А новый шлёт лишь тот
+    тумблер, который дёрнули, чтобы не затирать соседний устаревшим значением.
+    """
+
+    admin_push_enabled: bool | None = None
+    admin_rich_enabled: bool | None = None
 
 
 @router.get("/settings")
 async def get_notif_settings(_admin: AdminUser) -> dict[str, Any]:
-    """Тумблер дублирования админ-уведомлений в web-push (на телефон)."""
+    """Тумблеры админ-уведомлений: web-push на телефон и rich-вид в Telegram.
+
+    Настройка ЖИВЁТ ЗДЕСЬ, на стороне бота (assets/notif_settings.json): кабинет
+    может стоять на отдельном сервере (режим `site`), где ни бота, ни его .env
+    рядом нет — управлять видом уведомлений можно только через это API.
+    """
     return load_notif_settings()
 
 
 @router.put("/settings")
 async def update_notif_settings(body: NotifSettingsUpdate, _admin: AdminUser) -> dict[str, Any]:
-    save_notif_settings(body.admin_push_enabled)
+    save_notif_settings(body.admin_push_enabled, body.admin_rich_enabled)
     return load_notif_settings()
 
 

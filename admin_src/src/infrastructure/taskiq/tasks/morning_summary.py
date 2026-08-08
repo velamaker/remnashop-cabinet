@@ -18,9 +18,10 @@ N дней. Данные считаются на лету из БД (как /sta
 Auto-discover taskiq по глобу tasks/*.py.
 """
 
+import html as html_lib
 import json
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -41,6 +42,20 @@ STATE_PATH = ASSETS_DIR / "morning_summary_state.json"
 
 # Символы валют для красивого вывода (фолбэк — сам код валюты).
 _CURRENCY_SIGN = {"RUB": "₽", "USD": "$", "EUR": "€", "XTR": "⭐"}
+
+# Сколько человек показываем поимённо. Сегодня истекающих единицы, к концу месяца
+# может быть полсотни — весь список в сообщение не влезет: классический предел
+# Telegram 4096 знаков (rich — 32768, но читать простыню всё равно невозможно).
+# 20 строк — верх разумного для чтения с телефона, а точный предел считаем по
+# реальной длине готовых строк (см. _LIST_BUDGET), а не «на глазок».
+_LIST_LIMIT = 20
+# Запас под список в классическом сообщении: 4096 минус шапка сводки (заголовок,
+# четыре буллета, теги — около 350 знаков) и минус хвост «…и ещё N». Строку, после
+# которой бюджет кончился, не печатаем — она уходит в счётчик остатка.
+_LIST_BUDGET = 3500
+# Длинное имя в строке списка обрезаем: на телефоне строка всё равно переносится,
+# а из-за одного «Иван Иванович Иванов-Петровский» список превращается в кашу.
+_NAME_MAX = 22
 
 
 def _load_state() -> dict[str, Any]:
@@ -73,6 +88,87 @@ def _plural_days(n: int) -> str:
     if 2 <= last <= 4:
         return f"{n} дня"
     return f"{n} дней"
+
+
+def _left(expire_at: datetime, now: datetime) -> str:
+    """Сколько осталось — «через 4 ч», «через 2 дня». Дата без остатка не читается.
+
+    Владельцу важна срочность, а не арифметика: «08.08 04:27» ничего не говорит,
+    пока не сравнишь с сегодняшним числом.
+    """
+    total = int((expire_at - now).total_seconds())
+    if total <= 0:
+        return "истекает"
+    if total < 3600:
+        return f"через {max(1, total // 60)} мин"
+    if total < 86400:
+        return f"через {total // 3600} ч"
+    return f"через {_plural_days(total // 86400)}"
+
+
+def _short_name(name: str) -> str:
+    """Имя для строки списка: без переносов и не длиннее _NAME_MAX."""
+    cleaned = " ".join((name or "").split()) or "без имени"
+    if len(cleaned) <= _NAME_MAX:
+        return cleaned
+    return cleaned[: _NAME_MAX - 1].rstrip() + "…"
+
+
+def _expiring_line(index: int, row: Any, now: datetime) -> str:
+    """Одна строка списка: «3. Имя @user — 09.08 04:58, через 2 дня».
+
+    Кроме имени, ника и срока в сообщение ничего не тащим: это живые люди, почта
+    и платежи в утренней сводке не нужны.
+
+    Строка — на ЧЕЛОВЕКА, а не на подписку. У кого в окне несколько подписок, тот
+    идёт одной строкой по ближайшему сроку с пометкой «×2»: раньше на одну пометку
+    «проб.» надеяться было нельзя — две подписки одного типа давали две байт-в-байт
+    одинаковые строки. «проб.» ставим, только если пробные ВСЕ подписки в окне,
+    иначе пометка врала бы про оплаченную.
+    """
+    who = html_lib.escape(_short_name(row.name))
+    if row.username:
+        who += f" @{html_lib.escape(row.username)}"
+    when = row.expire_at.astimezone().strftime("%d.%m %H:%M")
+    trial = " · проб." if row.is_trial else ""
+    cnt = int(getattr(row, "cnt", 1) or 1)
+    many = f" · ×{cnt}" if cnt > 1 else ""
+    return f"{index}. {who} — {when}, {_left(row.expire_at, now)}{trial}{many}"
+
+
+def _expiring_block(rows: list[Any], total: int, days: int) -> str:
+    """Сворачиваемая цитата со списком «кто истекает» (пусто — если некому).
+
+    <blockquote expandable> Telegram схлопывает сам: в сообщении видно заголовок,
+    список раскрывается нажатием — цифра из таблицы перестаёт быть поводом лезть
+    в админку, но и сводку собой не заслоняет.
+
+    Длину режем дважды: по числу строк (_LIST_LIMIT) и по реально набранным
+    знакам (_LIST_BUDGET) — имена бывают любой длины, а сообщение обрежется молча.
+    Всё, что не поместилось, честно считаем в «…и ещё N».
+    """
+    if not rows:
+        return ""
+
+    now = datetime.now(timezone.utc)
+    lines: list[str] = []
+    used = 0
+    for row in rows[:_LIST_LIMIT]:
+        line = _expiring_line(len(lines) + 1, row, now)
+        if used + len(line) + 1 > _LIST_BUDGET:
+            break
+        lines.append(line)
+        used += len(line) + 1
+
+    if not lines:
+        return ""
+
+    rest = max(0, total - len(lines))
+    if rest:
+        lines.append(f"…и ещё {rest} — весь список в админке")
+
+    head = f"<b>⏳ Кто истекает (≤ {_plural_days(days)})</b>"
+    return "\n<blockquote expandable>" + head + "\n" + "\n".join(lines) + "</blockquote>"
 
 
 def _summary_keyboard() -> Optional[InlineKeyboardMarkup]:
@@ -157,11 +253,15 @@ async def send_morning_summary(
             text("SELECT count(*) FROM subscriptions WHERE status::text = 'ACTIVE'")
         )
     ).scalar_one() or 0
+    # Истекающих считаем по ЛЮДЯМ (count DISTINCT), а не по подпискам: у кого две
+    # подписки — это один человек, которому надо продлиться. Так цифра сходится и
+    # со списком ниже, и с фильтром «истекают в N дней» в админке (он тоже про
+    # людей, web/endpoints/admin/users.py), куда зовёт хвост «…и ещё N».
     expiring = (
         await session.execute(
             text(
                 """
-                SELECT count(*) FROM subscriptions
+                SELECT count(DISTINCT user_id) FROM subscriptions
                 WHERE status::text = 'ACTIVE'
                   AND expire_at >= now()
                   AND expire_at < now() + make_interval(days => :n)
@@ -170,6 +270,33 @@ async def send_morning_summary(
             {"n": days},
         )
     ).scalar_one() or 0
+
+    # Кто именно истекает — условия ОДИН В ОДИН как у счётчика выше (та же
+    # транзакция, значит и now() тот же), поэтому цифра и список всегда сходятся.
+    # Строка на человека: срок — ближайший из его подписок в окне, cnt — сколько
+    # их всего (уходит в «×2»), «проб.» — только если пробные все до одной.
+    # Сортировка по срочности, ближайшие сверху.
+    expiring_rows = (
+        await session.execute(
+            text(
+                """
+                SELECT u.name AS name, u.username AS username,
+                       min(s.expire_at) AS expire_at,
+                       bool_and(s.is_trial) AS is_trial,
+                       count(*) AS cnt
+                FROM subscriptions s
+                JOIN users u ON u.id = s.user_id
+                WHERE s.status::text = 'ACTIVE'
+                  AND s.expire_at >= now()
+                  AND s.expire_at < now() + make_interval(days => :n)
+                GROUP BY u.id, u.name, u.username
+                ORDER BY min(s.expire_at) ASC, u.id ASC
+                LIMIT :lim
+                """
+            ),
+            {"n": days, "lim": _LIST_LIMIT},
+        )
+    ).all()
 
     pay_count = sum(int(r.cnt or 0) for r in revenue_rows)
     if revenue_rows:
@@ -186,6 +313,8 @@ async def send_morning_summary(
     # Буллеты «• <b>Ключ</b>: значение» — тот же формат, что у остальных наших
     # уведомлений: rich-слой (overlay_rich_notify) разбирает их в таблицу, а если
     # Bot API rich не поддержит, строки нормально читаются и обычным текстом.
+    # Список «кто истекает» идёт отдельной сворачиваемой цитатой ПОСЛЕ буллетов:
+    # rich-слой такие блоки не разбирает, а доставляет как есть (там <details>).
     body = (
         f"<b>☀️ Сводка за {yday_str}</b>\n\n"
         f"<blockquote>\n"
@@ -194,6 +323,7 @@ async def send_morning_summary(
         f"• <b>📊 Активных подписок</b>: {int(active_subs)}\n"
         f"• <b>⏳ Истекают через {_plural_days(days)}</b>: {int(expiring)}\n"
         f"</blockquote>"
+        f"{_expiring_block(list(expiring_rows), int(expiring), days)}"
     )
 
     try:

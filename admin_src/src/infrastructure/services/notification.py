@@ -4,6 +4,7 @@ import os
 import string
 import traceback
 from dataclasses import asdict
+from datetime import datetime, timezone  # [OVERLAY] заглушка Message для rich-ветки
 from typing import Any, Callable, Optional, Sequence, Union
 
 from aiogram import Bot
@@ -16,6 +17,7 @@ from aiogram.exceptions import (
 )
 from aiogram.types import (
     BufferedInputFile,
+    Chat,  # [OVERLAY] заглушка Message для rich-ветки
     FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -69,6 +71,7 @@ from src.core.types import AnyKeyboard, NotificationType
 from src.infrastructure.services.event_bus import on_event
 from src.infrastructure.services.notification_queue import NotificationWorker
 from src.infrastructure.services.overlay_push import (  # [OVERLAY]
+    admin_rich_enabled,
     push_admin_event_standalone,
     push_user_standalone,
 )
@@ -134,6 +137,13 @@ def _node_flap_grace_sec() -> int:
         return max(0, int(os.environ.get("NODE_FLAP_GRACE_SEC", "180")))
     except ValueError:
         return 180
+
+
+# [OVERLAY] Сколько минимум живёт самоудаляющееся уведомление. База ставит
+# delete_after=5 по умолчанию — за пять секунд фразу вроде «Синхронизация
+# подписки выполнена» не успеваешь прочитать, остаётся ощущение, что что-то
+# мелькнуло и пропало. Владелец попросил 30.
+_MIN_DELETE_AFTER = 30
 
 
 class NotificationService(Notifier):
@@ -588,37 +598,93 @@ class NotificationService(Notifier):
         # заголовок + таблица «показатель → значение» + футер вместо простыни.
         # Только админам и только если текст разобрался в пары ключ-значение;
         # всё остальное (и любой отказ Bot API) уходит обычным send_message ниже.
+        #
+        # Два условия, а не одно:
+        #   rich_enabled()      — NOTIFY_RICH (аварийный выключатель в .env) плюс
+        #                         латч «сервер Bot API rich не умеет»;
+        #   admin_rich_enabled() — тумблер из админки кабинета (assets/notif_settings.json).
+        # Тумблер живёт на стороне бота и читается на каждой отправке: кабинет
+        # может стоять на другом сервере, а перезапуск бота ради галки недопустим.
         try:
             _role = getattr(user, "role", None)
             if (
                 payload.is_text
                 and not payload.media
+                # Самоудаляющиеся служебные сообщения («Синхронизация выполнена»)
+                # раньше исключались из rich: ветка возвращала None, удаление не
+                # заводилось, и сообщение висело НАВСЕГДА. Причина устранена (id
+                # возвращается, удаление планируется), поэтому исключение снято —
+                # решение владельца: показывать в новом виде и убирать через 30 с.
                 and _role is not None
                 and _role.includes(Role.ADMIN)
                 and rich_enabled()
+                and admin_rich_enabled()
             ):
                 # Импорт ленивый: appearance тянет веб-слой, боту он при старте не нужен.
                 from src.web.endpoints.public.appearance import (  # noqa: PLC0415
+                    load_branding,
                     resolve_brand_name,
                 )
 
+                # Подпись под уведомлением = ТО ЖЕ имя, что показывает кабинет.
+                # resolve_brand_name() смотрит только переменную окружения и имя
+                # бота и НЕ читает branding.json, куда пишет «Оформление»: из-за
+                # этого в подписи стояло имя бота («BEGEMOT»), хотя сервис
+                # называется иначе («Begemot VPN»). Порядок повторяет
+                # appearance.get_appearance: сохранённое имя, иначе авто-резолв.
+                _brand = ""
+                try:
+                    _brand = str((load_branding() or {}).get("brand_name") or "").strip()
+                except Exception as exc:  # noqa: BLE001 — подпись не должна ронять доставку
+                    logger.warning(f"[OVERLAY] Бренд для подписи не прочитан: {exc}")
+
                 rich_html = build_rich_html(
                     text,
-                    resolve_brand_name() or "RemnaShop",
+                    _brand or resolve_brand_name() or "RemnaShop",
                     # Логотип — ТОЛЬКО в стартовом уведомлении (решение владельца
                     # 6 августа: «фотка сервиса на каждое уведомление — так не
                     # надо, только на запуске»). В ленте оплат, регистраций и
                     # алертов картинка занимает пол-экрана и мешает читать.
                     logo=logo_src() if payload.i18n_key == "event-bot.startup" else "",
                 )
-                if rich_html and await send_rich_message(
-                    self.bot,
-                    user.telegram_id,
-                    rich_html,
-                    reply_markup=reply_markup,
-                    disable_notification=payload.disable_notification,
-                ):
-                    return None
+                rich_id = (
+                    await send_rich_message(
+                        self.bot,
+                        user.telegram_id,
+                        rich_html,
+                        reply_markup=reply_markup,
+                        disable_notification=payload.disable_notification,
+                    )
+                    if rich_html
+                    else None
+                )
+                if rich_id is not None:
+                    # Возвращаем НАСТОЯЩИЙ Message, а не None: вызывающие проверяют
+                    # результат как «доставлено» — админка отвечает
+                    # {"delivered": …}, бот показывает «❌ Не удалось отправить
+                    # сообщение», а импортер зовёт у него .delete(). С None
+                    # rich-отправка выглядела как провал, хотя сообщение уходило
+                    # (владелец, написав деву из админки, видел «не доставлено»).
+                    # Отсюда и message_id из ответа Bot API, а не просто «да/нет».
+                    sent = Message(
+                        message_id=rich_id,
+                        date=datetime.now(timezone.utc),
+                        chat=Chat(id=user.telegram_id, type="private"),
+                    ).as_(self.bot)
+                    # Автоудаление. Сегодня сюда не доходят payload'ы с
+                    # delete_after (исключены условием выше), но страховка стоит:
+                    # снимут исключение — сообщение всё равно удалится, а не
+                    # повиснет навсегда. Нижняя граница та же, что в обычной
+                    # ветке (_MIN_DELETE_AFTER), иначе rich исчезал бы быстрее.
+                    if rich_id and payload.delete_after:
+                        asyncio.create_task(
+                            self._schedule_message_deletion(
+                                chat_id=user.telegram_id,
+                                message_id=rich_id,
+                                delay=max(payload.delete_after, _MIN_DELETE_AFTER),
+                            )
+                        )
+                    return sent
         except Exception as exc:  # noqa: BLE001 — rich не должен ломать доставку
             logger.warning(f"[OVERLAY] rich-вид пропущен: {exc}")
 
@@ -650,11 +716,16 @@ class NotificationService(Notifier):
                 return None
 
             if message and payload.delete_after:
+                # [OVERLAY] Нижняя граница жизни самоудаляющегося уведомления —
+                # 30 секунд (решение владельца). База ставит 5 по умолчанию, и
+                # этого не хватает даже прочитать фразу: человек видит вспышку и
+                # не понимает, что произошло. Более долгие сроки, заданные
+                # вызывающим кодом осознанно, не укорачиваем.
                 asyncio.create_task(
                     self._schedule_message_deletion(
                         chat_id=user.telegram_id,
                         message_id=message.message_id,
-                        delay=payload.delete_after,
+                        delay=max(payload.delete_after, _MIN_DELETE_AFTER),
                     )
                 )
 

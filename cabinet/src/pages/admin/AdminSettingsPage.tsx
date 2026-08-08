@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Save, AlertCircle, CheckCircle2, Bell, Lock, SlidersHorizontal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { settingsAdminApi, topupAdminApi, morningSummaryAdminApi, trialDiscountAdminApi, reserveAdminApi, promoBannerAdminApi, winbackAdminApi, digestAdminApi, trafficAlertAdminApi, newDeviceAdminApi, loginAlertAdminApi, emailGateAdminApi, freezeAdminApi, type AdminSettings, type TopupAdminConfig, type TopupApplicability, type MorningSummaryConfig, type TrialDiscountConfig, type ReserveConfig, type PromoBannerConfig, type WinbackConfig, type DigestConfig, type TrafficAlertConfig, type NewDeviceConfig, type LoginAlertConfig, type FreezeConfig } from "@/api/admin";
+import { settingsAdminApi, topupAdminApi, morningSummaryAdminApi, trialDiscountAdminApi, reserveAdminApi, promoBannerAdminApi, winbackAdminApi, digestAdminApi, trafficAlertAdminApi, newDeviceAdminApi, loginAlertAdminApi, emailGateAdminApi, freezeAdminApi, type AdminSettings, type TopupAdminConfig, type TopupApplicability, type MorningSummaryConfig, type TrialDiscountConfig, type TrialDiscountDryRun, type ReserveConfig, type PromoBannerConfig, type WinbackConfig, type DigestConfig, type TrafficAlertConfig, type NewDeviceConfig, type LoginAlertConfig, type FreezeConfig } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -1112,10 +1112,30 @@ export function TrialDiscountCard() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Холостой прогон: «кого зацепит рассылка, если её включить». Единственный
+  // способ проверить такую рассылку, не раздав живым людям настоящие скидки, —
+  // до этого он был доступен только curl'ом. Есть не у всех бэкендов
+  // (can_dry_run), у нашего собственного его нет вовсе, и кнопки тогда нет.
+  const [dry, setDry] = useState<TrialDiscountDryRun | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [dryError, setDryError] = useState<string | null>(null);
 
   useEffect(() => {
     trialDiscountAdminApi.get().then(setCfg).catch((e) => setError(loadError(e))).finally(() => setLoading(false));
   }, []);
+
+  const check = async () => {
+    setChecking(true);
+    setDryError(null);
+    try {
+      setDry(await trialDiscountAdminApi.dryRun());
+    } catch (e) {
+      setDry(null);
+      setDryError(e instanceof ApiError ? e.detail : "Не удалось проверить");
+    } finally {
+      setChecking(false);
+    }
+  };
 
   const patch = (p: Partial<TrialDiscountConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
 
@@ -1150,8 +1170,11 @@ export function TrialDiscountCard() {
     <Section title="Скидка триальщикам на первую покупку" desc="За N дней до конца пробного периода юзеру выдаётся одноразовая скидка на первую оплату + баннер-таймер в кабинете и напоминание в Telegram. Скидка гаснет после покупки или по истечении срока.">
       {/* Бэкенд рассказал, что у него это устроено иначе (промокод вместо
           молчаливой выдачи) — печатаем дословно: описание выше написано про наш. */}
+      {/* Дословно, с переносами: бэкенд кладёт сюда не только описание механизма,
+          но и свои предупреждения («включено, но не работает», невручённые
+          промокоды) отдельными абзацами. */}
       {cfg.note && (
-        <p className="rounded-xl border border-border-subtle bg-bg px-4 py-3 text-xs leading-relaxed text-fg-muted">
+        <p className="whitespace-pre-line rounded-xl border border-border-subtle bg-bg px-4 py-3 text-xs leading-relaxed text-fg-muted">
           {cfg.note}
         </p>
       )}
@@ -1170,6 +1193,57 @@ export function TrialDiscountCard() {
           <input type="number" min={1} max={720} value={String(cfg.lifetime_hours)} onChange={(e) => patch({ lifetime_hours: Number(e.target.value) })} className={inputCls} />
         </div>
       </div>
+      {cfg.can_dry_run && (
+        <div className="space-y-3 rounded-xl border border-border-subtle bg-bg px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-fg-muted">
+              Проверка без отправки: кому уйдёт предложение, если включить рассылку прямо сейчас.
+              Ничего не отправляется и не выдаётся.
+            </p>
+            <button
+              onClick={check}
+              disabled={checking}
+              className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-border-subtle px-3 py-2 text-sm font-medium text-fg hover:bg-bg-subtle disabled:opacity-50"
+            >
+              {checking ? "…" : "Проверить"}
+            </button>
+          </div>
+          {dryError && <p className="text-xs text-danger">{dryError}</p>}
+          {dry && (
+            <div className="space-y-2 text-xs text-fg-muted">
+              <p className="text-fg">
+                Осмотрено {dry.examined}, получат предложение {dry.previews.filter((p) => p.would_send).length}
+                {dry.truncated ? " (показана первая часть)" : ""}
+              </p>
+              {dry.skipped && Object.keys(dry.skipped).length > 0 && (
+                <ul className="space-y-0.5">
+                  {Object.entries(dry.skipped).map(([reason, count]) => (
+                    <li key={reason}>
+                      {reason} — {count}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {!!dry.has_discount && <p>У них уже есть другая скидка — {dry.has_discount} (предложим позже)</p>}
+              {dry.discount_check && <p className="text-warning">{dry.discount_check}</p>}
+              {dry.lifetime_note && <p>{dry.lifetime_note}</p>}
+              {dry.orphan_note && (
+                <p className="text-danger">
+                  {dry.orphan_note}
+                  {dry.orphan_codes?.length ? ` (${dry.orphan_codes.map((c) => c.code).join(", ")})` : ""}
+                </p>
+              )}
+              {dry.previews.find((p) => p.would_send)?.text && (
+                <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg bg-bg-subtle p-3 text-[11px] leading-relaxed text-fg">
+                  {dry.previews
+                    .find((p) => p.would_send)!
+                    .text!.replace(/<[^>]+>/g, "")}
+                </pre>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       <div className="flex items-center justify-between gap-3 pt-1">
         <span className="text-xs">
           {error && <span className="text-danger">{error}</span>}

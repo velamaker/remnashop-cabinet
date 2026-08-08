@@ -50,6 +50,16 @@ RUN pip --python /opt/remnashop/.venv/bin/python install --no-cache-dir --no-dep
 COPY scripts/patch-remnapy-2.8.py /opt/remnashop/scripts/patch-remnapy-2.8.py
 RUN /opt/remnashop/.venv/bin/python /opt/remnashop/scripts/patch-remnapy-2.8.py
 
+# Русские переводы базы, разделители тысяч и пустая почта: Fluent печатал числа как
+# «123 456 789» прямо внутри tg://user?id= (тап по @нику не открывал профиль) и в
+# адресе узла в алертах («example.com:2 222»), а у людей из панели выводилась
+# бессмысленная строка «Почта: 0». Через assets/translations/ru/custom.ftl это
+# НЕ чинится: фрагменты подставляются в event-*/msg-* на этапе компиляции внутри
+# базового бандла, оверрайд отдельным бандлом их не перебивает. Патчим сами
+# assets.default (fail-closed: блок не найден — билд падает). scripts/patch-translations-ru.py.
+COPY scripts/patch-translations-ru.py /opt/remnashop/scripts/patch-translations-ru.py
+RUN /opt/remnashop/.venv/bin/python /opt/remnashop/scripts/patch-translations-ru.py
+
 # Overlay admin API files on top of the base image
 COPY admin_src/src/ /opt/remnashop/src/
 

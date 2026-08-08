@@ -803,14 +803,47 @@ export interface TrialDiscountConfig {
   /** Как скидка достаётся человеку на ПОДКЛЮЧЁННОМ бэкенде. Шлёт только тот, у
    *  кого это работает иначе, чем у нас (адаптер поверх чужого бота: там скидка
    *  приходит промокодом, а не ложится на аккаунт молча). Поля нет — описание
-   *  экрана и так верно. */
+   *  экрана и так верно. Сюда же бэкенд кладёт свои предупреждения (рассылка
+   *  включена, но остановлена; невручённые промокоды) — печатаем дословно. */
   note?: string;
+  /** Есть ли у бэкенда холостой прогон (кнопка «Проверить»). Наш собственный
+   *  бэкенд поля не шлёт вовсе — кнопки тогда нет, экран прежний. */
+  can_dry_run?: boolean;
+  /** Почему рассылка молчит при включённом тумблере. Только адаптер. */
+  last_error?: string;
+}
+
+/** Ответ холостого прогона: кого зацепит рассылка, если её включить. Только у
+ *  бэкендов с `can_dry_run` — у нашего такой ручки нет. */
+export interface TrialDiscountDryRun {
+  examined: number;
+  candidates: number;
+  unreachable: number;
+  already_offered: number;
+  has_discount?: number;
+  truncated: boolean;
+  skipped?: Record<string, number>;
+  previews: {
+    user_id: number;
+    telegram_id: number | null;
+    trial_ends: string | null;
+    would_send: boolean;
+    skip: string | null;
+    valid_until?: string;
+    text?: string;
+  }[];
+  discount_check?: string;
+  lifetime_note?: string;
+  orphan_codes?: { id: number | null; code: string | null; valid_until?: string | null }[];
+  orphan_note?: string;
+  last_error?: string;
 }
 
 export const trialDiscountAdminApi = {
   get: () => adminApi.get<TrialDiscountConfig>("/trial-discount"),
   update: (data: Partial<TrialDiscountConfig>) =>
     adminApi.put<TrialDiscountConfig>("/trial-discount", data),
+  dryRun: () => adminApi.post<TrialDiscountDryRun>("/trial-discount/dry-run", {}),
 };
 
 // ---------- Резервный доступ истёкшим (1 ГБ на N дней) ----------
@@ -1259,6 +1292,10 @@ export interface AdminNotification {
 
 export interface NotifSettings {
   admin_push_enabled: boolean;
+  // Rich-вид админских уведомлений в Telegram. Поле НЕОБЯЗАТЕЛЬНОЕ: на установках
+  // поверх чужого бота («Бедолага», адаптер) этого слоя нет вовсе и бэкенд поле не
+  // отдаёт — тогда тумблер не рисуем совсем, чтобы не было мёртвой галки.
+  admin_rich_enabled?: boolean;
 }
 
 export const notificationsAdminApi = {
@@ -1266,8 +1303,10 @@ export const notificationsAdminApi = {
     adminApi.get<{ items: AdminNotification[] }>(`/notifications?limit=${limit}`),
   clear: () => adminApi.delete<{ ok: boolean }>("/notifications"),
   getSettings: () => adminApi.get<NotifSettings>("/notifications/settings"),
-  updateSettings: (admin_push_enabled: boolean) =>
-    adminApi.put<NotifSettings>("/notifications/settings", { admin_push_enabled }),
+  // Шлём ТОЛЬКО тот тумблер, который дёрнули: бэкенд трактует отсутствующее поле
+  // как «не менять», и переключение одного не затирает соседний.
+  updateSettings: (body: Partial<Pick<NotifSettings, "admin_push_enabled" | "admin_rich_enabled">>) =>
+    adminApi.put<NotifSettings>("/notifications/settings", body),
 };
 
 // ---------- Импорт пользователей (как в боте) ----------

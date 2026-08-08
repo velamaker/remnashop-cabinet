@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, Bell, Trash2, Smartphone } from "lucide-react";
+import { AlertCircle, Bell, Trash2, Smartphone, LayoutList } from "lucide-react";
 import { notificationsAdminApi, type AdminNotification } from "@/api/admin";
 import { ApiError } from "@/types/api";
 
@@ -21,6 +21,10 @@ export default function AdminNotificationsPage() {
   const [clearing, setClearing] = useState(false);
   const [pushEnabled, setPushEnabled] = useState<boolean | null>(null);
   const [pushSaving, setPushSaving] = useState(false);
+  // null = бэкенд про rich-вид не знает (адаптер «Бедолаги» или старая версия
+  // бота) → карточку не рисуем вовсе, мёртвого переключателя быть не должно.
+  const [richEnabled, setRichEnabled] = useState<boolean | null>(null);
+  const [richSaving, setRichSaving] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -33,7 +37,15 @@ export default function AdminNotificationsPage() {
 
   useEffect(() => {
     load();
-    notificationsAdminApi.getSettings().then((s) => setPushEnabled(s.admin_push_enabled)).catch(() => {});
+    notificationsAdminApi
+      .getSettings()
+      .then((s) => {
+        setPushEnabled(s.admin_push_enabled);
+        // Только настоящий boolean включает карточку rich-вида: поля нет —
+        // значит слоя на бэкенде нет (см. NotifSettings в api/admin.ts).
+        setRichEnabled(typeof s.admin_rich_enabled === "boolean" ? s.admin_rich_enabled : null);
+      })
+      .catch(() => {});
     try { localStorage.setItem("admin_notif_seen", String(Date.now())); } catch { /* ignore */ }
     window.dispatchEvent(new Event("admin-notif-seen"));
   }, []);
@@ -44,13 +56,31 @@ export default function AdminNotificationsPage() {
     setPushSaving(true);
     setPushEnabled(next); // оптимистично
     try {
-      const s = await notificationsAdminApi.updateSettings(next);
+      const s = await notificationsAdminApi.updateSettings({ admin_push_enabled: next });
       setPushEnabled(s.admin_push_enabled);
     } catch (e) {
       setPushEnabled(!next); // откат
       setError(e instanceof ApiError ? e.detail : "Не удалось сохранить настройку");
     } finally {
       setPushSaving(false);
+    }
+  };
+
+  const toggleRich = async () => {
+    if (richEnabled === null) return;
+    const next = !richEnabled;
+    setRichSaving(true);
+    setRichEnabled(next); // оптимистично
+    try {
+      const s = await notificationsAdminApi.updateSettings({ admin_rich_enabled: next });
+      // Настройка хранится У БОТА (а кабинет может стоять на другом сервере),
+      // поэтому верим ответу сервера, а не своему оптимистичному значению.
+      setRichEnabled(typeof s.admin_rich_enabled === "boolean" ? s.admin_rich_enabled : next);
+    } catch (e) {
+      setRichEnabled(!next); // откат
+      setError(e instanceof ApiError ? e.detail : "Не удалось сохранить настройку");
+    } finally {
+      setRichSaving(false);
     }
   };
 
@@ -121,6 +151,43 @@ export default function AdminNotificationsPage() {
           />
         </button>
       </div>
+
+      {/* Тумблер: вид админских уведомлений в Telegram (карточка ↔ обычный текст).
+          Показываем, только если бэкенд отдал поле: на установке поверх чужого
+          бота этого слоя нет и управлять нечем. */}
+      {richEnabled !== null && (
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-border-subtle bg-bg-subtle px-4 py-3">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-subtle text-accent">
+              <LayoutList className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-fg">Новый вид уведомлений в Telegram</p>
+              <p className="mt-0.5 text-xs text-fg-muted">
+                Включено — админские уведомления приходят карточкой: заголовок, таблица
+                «показатель → значение» и время внизу. Выключите, чтобы вернуть прежний
+                обычный текст. Касается только уведомлений админам в Telegram —
+                сообщения пользователям и этот центр уведомлений не меняются.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={toggleRich}
+            disabled={richSaving}
+            aria-pressed={richEnabled}
+            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
+              richEnabled ? "bg-accent" : "bg-border"
+            }`}
+          >
+            <span
+              className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
+                richEnabled ? "translate-x-5" : "translate-x-0.5"
+              }`}
+            />
+          </button>
+        </div>
+      )}
 
       {error && (
         <div className="flex items-center gap-2 rounded-xl bg-danger/10 px-4 py-3 text-sm text-danger">
