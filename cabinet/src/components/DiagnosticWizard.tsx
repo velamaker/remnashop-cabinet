@@ -94,6 +94,9 @@ export function DiagnosticWizard() {
   };
 
   const reissue = async () => {
+    // То же подтверждение, что на Главной: действие необратимо, а кнопка стоит
+    // в ряду безобидных шагов диагностики.
+    if (!window.confirm(t("sub.reissueConfirm"))) return;
     setReissuing(true);
     try {
       await subscriptionApi.reissue();

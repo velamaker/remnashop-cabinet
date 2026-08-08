@@ -122,6 +122,11 @@ export default function DashboardPage() {
   }, []);
 
   const handleReissue = async () => {
+    // Спрашиваем подтверждение: перевыпуск необратим — старая ссылка умирает, и
+    // все устройства надо подключать заново. Кнопка стоит рядом с обычными, и
+    // её задевают случайно (владелец так и сделал 8 августа). В админке такое
+    // подтверждение уже есть, у пользователя не было.
+    if (!window.confirm(t("sub.reissueConfirm"))) return;
     setIsReissuing(true);
     setReissueError(null);
     try {
