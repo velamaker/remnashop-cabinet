@@ -127,6 +127,35 @@ flush_env() {
 
 # ── ввод (только если значение ещё не задано) ─────────────────────────────────
 ASKED=""
+# Сборка фронтенда — самая тяжёлая часть установки: на 1 ГБ памяти без подкачки
+# Node не укладывается и сервер «зависает» (жалоба пользователя, 9 августа).
+# Проверяем заранее и предлагаем файл подкачки, а не даём машине уйти в OOM
+# посреди установки.
+ensure_build_memory() {
+  local ram_mb swap_mb
+  ram_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+  swap_mb=$(awk '/SwapTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+  [ "$ram_mb" -eq 0 ] && return 0
+  info "Память: ${ram_mb} МБ, подкачка: ${swap_mb} МБ"
+  # 1800 МБ суммарно — запас, при котором сборка кабинета проходит без свопа.
+  if [ $((ram_mb + swap_mb)) -ge 1800 ]; then return 0; fi
+  warn "  Для сборки кабинета этого мало: возможен OOM и зависание сервера."
+  if [ -f /swapfile ]; then
+    warn "  /swapfile уже есть — включите его сами: swapon /swapfile"
+    return 0
+  fi
+  printf '  Создать файл подкачки на 2 ГБ? [Y/n] '
+  local answer; read -r answer </dev/tty || answer=""
+  case "${answer:-y}" in
+    [Nn]*) warn "  Пропускаю. Если установка встанет — причина, скорее всего, здесь."; return 0 ;;
+  esac
+  fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+  chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile \
+    && ok "  Подкачка включена (2 ГБ)." \
+    || warn "  Не удалось включить подкачку — продолжаю без неё."
+  grep -q '^/swapfile ' /etc/fstab 2>/dev/null || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+}
+
 ask() { # ask VAR "Подсказка" ["default"]
   local var="$1" prompt="$2" def="${3:-}" input
   need_value "$var" || { ok "  $var уже задан — пропускаю"; ASKED=""; return; }
@@ -831,6 +860,7 @@ if [ "$MODE" = "site" ]; then
   else
     info "Собираю и поднимаю кабинет (проксирует /api/ → https://${API_DOM})…"
   fi
+  ensure_build_memory
   $DC --env-file .env "${SITE_COMPOSE[@]}" up -d --build --force-recreate
 
   if [ "$BACKEND_CHOICE" = bedolaga ]; then
@@ -1034,6 +1064,7 @@ if [ "$WITH_CABINET" = yes ]; then
   else
     info "Собираю и поднимаю бота (overlay), воркеры и кабинет…"
   fi
+  ensure_build_memory
   $DC "${CABINET_COMPOSE[@]}" up -d --build
   if [ "$BACKEND_CHOICE" = bedolaga ]; then
     ADP="$(getval ADAPTER_CONTAINER)"

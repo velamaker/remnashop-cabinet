@@ -463,13 +463,20 @@ def _mono_value(value: str) -> str:
     получить моноширинный — <code>, поэтому им и набираем: цифры встают ровным
     столбиком, а подпись остаётся обычным шрифтом.
 
+    Моноширинным набираем ТОЛЬКО опознавательные значения: идентификаторы,
+    адреса, ключи, числа. Фразы («Трафик + устройства», «ЮMoney», «1 месяц»)
+    моноширинным выглядят как код и рвут строку по стилю — в кабинете моно тоже
+    стоит на данных, а не на словах.
+
     Значение с собственной разметкой (ссылка, уже <code>, зачёркнутая старая
     цена) не трогаем: <code> вокруг ссылки убил бы её кликабельность, а вложенный
     <code> в <code> Telegram не примет.
     """
     if "<" in value:
         return value
-    return f"<code>{value}</code>"
+    if _IDENT_RE.match(_plain(value)):
+        return f"<code>{value}</code>"
+    return value
 
 
 def _aside_value(value: str) -> str:
@@ -805,91 +812,80 @@ def build_rich_html(text: str, footer_label: str, logo: str = "") -> Optional[st
     printed_section = False
     # Где в parts лежат надписи разделов и сколько разделов реально напечатано —
     # чтобы в конце убрать надпись, если раздел оказался единственным.
-    label_positions: list[int] = []
+    all_rows: list[_Pair] = []
+    wide_rows: list[_Pair] = []
     printed_count = 0
 
-    for heading, rows, texts in sections:
-        # Главное число раздела вынимаем ДО раскладки таблицы: в кабинете
-        # StatCard — это тихая подпись и под ней крупное значение, а не строка
-        # наравне со счётчиками. Заодно уходит перекос, из-за которого выручка
-        # вылетала под таблицу просто потому, что не влезала в ячейку.
-        hero: Optional[_Pair] = None
-        rest_rows: list[_Pair] = []
-        for pair in rows:
-            if (
-                hero is None
-                and pair[0].lower() in _HERO_KEYS
-                and _HAS_DIGIT_RE.search(_plain(pair[1]))
-            ):
-                hero = pair
-            else:
-                rest_rows.append(pair)
+    # ОДНА таблица на всё уведомление (решение владельца 9 августа: «слишком
+    # большое, на весь экран»). Раньше у каждого объекта была своя надпись и своя
+    # таблица — на продлении подписки это три надписи и три таблицы, экран
+    # целиком. Склеиваем в одну; чтобы значения не приписались чужому объекту
+    # (ровно та беда, ради которой разделы и заводили), одинаковые подписи из
+    # разных объектов получают уточнение: «ID платежа» / «ID пользователя».
+    seen_keys: dict[str, str] = {}
+    for heading, rows, _texts in sections:
+        label = _section_label(heading).lower() if heading else ""
+        for key, _v in rows:
+            prev = seen_keys.get(key)
+            if prev is None:
+                seen_keys[key] = label
+            elif prev != label:
+                seen_keys[key] = "\x00"  # ключ встречается у разных объектов
 
-        table_rows, aside_rows = _split_rows(rest_rows)
-        if not table_rows and not aside_rows and not texts and hero is None:
+    # Уточнение — в родительном падеже: «ID платежа», а не «ID платеж».
+    _OF = {
+        "платеж": "платежа", "платёж": "платежа",
+        "пользователь": "пользователя", "план": "плана",
+        "пригласитель": "пригласителя", "подписка": "подписки",
+        "нода": "ноды", "узел": "узла", "баланс": "баланса",
+    }
+
+    def _key_for(key: str, heading: str) -> str:
+        if seen_keys.get(key) != "\x00" or not heading:
+            return key
+        label = _section_label(heading).lower()
+        return f"{key} {_OF.get(label, label)}"
+
+    for heading, rows, texts in sections:
+        # ОДНА таблица на всё уведомление, надписей разделов нет: у продления
+        # подписки их было три (платёж, пользователь, план), и сообщение занимало
+        # экран целиком (жалоба владельца 9 августа). Границы объектов при этом не
+        # теряются — совпадающие подписи уточняются в `_key_for`.
+        #
+        # Широкое значение (UUID платежа, длинный адрес) в ячейку не помещается и
+        # молча обрезается: Telegram таблицу не переносит и колонку не расширяет.
+        # Такие пары печатаем строкой ПОД таблицей — там значению доступна вся
+        # ширина, и его можно скопировать целиком.
+        table_rows, aside_rows = _split_rows(list(rows))
+        if not table_rows and not aside_rows and not texts:
             continue  # раздел без данных: заголовок сам по себе ничего не говорит
-        if heading:
-            label_positions.append(len(parts))
-            parts.append(f"<h5>{html_lib.escape(_section_label(heading))}</h5>")
-        elif printed_section and not texts:
-            # Раздел безымянный и начинается сразу со строк данных, а перед ним
-            # уже был раздел. Рамок у таблиц больше нет (это был почерк чужого
-            # бота), и две таблицы подряд читаются как ОДИН список строк: пары
-            # второго объекта выглядят продолжением первого — ровно тот дефект,
-            # ради которого разделы вообще завели. Свою границу раздел получает
-            # от надписи; у безымянного её нет, поэтому ставим линию.
-            #
-            # Свободный текст (условие «not texts») отбивать не надо: абзац и
-            # так не путается со строками таблицы, а лишняя линия перед
-            # концовкой вроде «Требуется ручная проверка» только шумит.
-            parts.append("<hr/>")
-        # Свободные строки раздела идут перед его таблицей: в разделе они всегда
-        # оказываются раньше пар (текст после пар открывает новый раздел).
         parts.extend(_free_lines(texts))
-        if hero:
-            # Подпись НАД значением — как в StatCard кабинета
-            # (AdminDashboardPage.tsx): сначала тихая подпись, потом крупное
-            # число. Наоборот число оставалось без имени до следующей строки.
-            parts.append(f"<p><i>{html_lib.escape(hero[0])}</i></p>")
-            parts.append(f"<h4>{hero[1]}</h4>")
-        if table_rows:
-            body = "".join(
-                f"<p><b>{html_lib.escape(key)}</b> — {_mono_value(value)}</p>"
-                for key, value in table_rows
-            )
-            # Таблицы НЕТ намеренно (решение владельца 8 августа, вариант «Б»).
-            # Telegram рисует содержимое таблиц СВОЕЙ гарнитурой, отличной от
-            # текста сообщения, и выбрать шрифт нечем: ни CSS, ни атрибута в
-            # rich-разметке не существует. Из-за этого одно уведомление выглядело
-            # набранным двумя разными шрифтами. Строка «<b>Подпись</b> — значение»
-            # набирается тем же шрифтом, что заголовок и абзацы; разделителей
-            # между строками при этом не будет — это осознанная цена выбора.
-            parts.append(body)
-        # Широкая пара идёт сразу под таблицей СВОЕГО раздела. Общей кучей в
-        # конце уведомления она отрывалась от объекта, к которому относится.
-        # Подпись тихая (курсив), значение моноширинное — это DetailRow кабинета,
-        # где payment_id намеренно приглушён, а не подан как заголовок раздела.
-        parts.extend(
-            f"<p><i>{html_lib.escape(key)}</i> {_aside_value(value)}</p>"
-            for key, value in aside_rows
-        )
+        all_rows.extend((_key_for(key, heading), value) for key, value in table_rows)
+        wide_rows.extend((_key_for(key, heading), value) for key, value in aside_rows)
         printed_section = True
         printed_count += 1
+    if all_rows:
+        body = "".join(
+            f"<tr><td>{html_lib.escape(key)}</td><td>{_mono_value(value)}</td></tr>"
+            for key, value in all_rows
+        )
+        # `bordered` БЕЗ `striped` — решение владельца 9 августа: «не хватает
+        # рамок». Линии между строками в Telegram даёт ТОЛЬКО таблица, CSS там
+        # нет. Цена принята: содержимое таблиц рисуется своей гарнитурой. Зебру
+        # не включаем — чередование фона и было почерком чужого бота.
+        parts.append(f"<table bordered>{body}</table>")
+    parts.extend(
+        f"<p><b>{html_lib.escape(key)}</b> — {_aside_value(value)}</p>"
+        for key, value in wide_rows
+    )
+
     # Сворачиваемые блоки — после таблицы: сначала цифры, потом расшифровка.
     parts.extend(block for block in map(_details_block, expandable) if block)
-
-    # Раздел в сообщении один — его надпись убираем. «ПОЛЬЗОВАТЕЛЬ» под
-    # заголовком «Новый пользователь» ничего не добавляет: заголовок уже сказал,
-    # о чём речь. Надписи нужны ТОЛЬКО чтобы различать несколько объектов в одном
-    # сообщении (платёж / пользователь / тариф). На двух строках данных пять
-    # блоков обрамления давали экран воздуха — жалоба владельца 8 августа.
-    if printed_count == 1 and len(label_positions) == 1:
-        del parts[label_positions[0]]
 
     # Линия перед подвалом — только когда телу есть что отделять. У короткого
     # уведомления (один раздел, без свёрнутых блоков) подвал и так отбит, а
     # лишняя линия — ещё одна пустая строка.
-    if printed_count > 1 or expandable:
+    if expandable or wide_rows:
         parts.append("<hr/>")
     tail = " · ".join([*(_plain(tag) for tag in overline), html_lib.escape(footer_label)])
     parts.append(f"<footer>{tail} · {stamp}</footer>")
