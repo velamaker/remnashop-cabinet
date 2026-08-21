@@ -341,18 +341,30 @@ async def run_reserve(
             logger.warning(f"reserve: user_id={uid} ({uuid}) — резерв не выдан: {problem}")
             continue
 
-        await session.execute(
-            text(
-                # Конфликт ловим по частичному уникальному индексу (миграция 0005):
-                # действующая выдача у человека может быть только одна, закрытые копятся
-                # историей. Страхует от гонки, если проходов вдруг окажется два.
-                "INSERT INTO reserve_grants (user_id, remna_uuid, granted_at, reserve_expire_at, ended) "
-                "VALUES (:u, :ru, now(), :re, false) "
-                "ON CONFLICT (user_id) WHERE ended = false DO NOTHING"
-            ),
-            {"u": uid, "ru": str(uuid), "re": reserve_expire},
-        )
-        await session.commit()
+        try:
+            await session.execute(
+                text(
+                    # Конфликт ловим по частичному уникальному индексу (миграция 0005):
+                    # действующая выдача у человека может быть только одна, закрытые
+                    # копятся историей. Страхует от гонки, если проходов вдруг два.
+                    "INSERT INTO reserve_grants (user_id, remna_uuid, granted_at, reserve_expire_at, ended) "
+                    "VALUES (:u, :ru, now(), :re, false) "
+                    "ON CONFLICT (user_id) WHERE ended = false DO NOTHING"
+                ),
+                {"u": uid, "ru": str(uuid), "re": reserve_expire},
+            )
+            await session.commit()
+        except Exception as e:  # noqa: BLE001
+            # Воркер и планировщик миграции не гоняют — их накатывает контейнер
+            # приложения. Если он не поднялся, индекса из 0005 может не быть, и без
+            # этой защиты падал бы весь проход, а не одна строка. Резерв в панели уже
+            # применён, человек им пользуется; следующий проход допишет запись.
+            await session.rollback()
+            logger.warning(
+                f"reserve: user_id={uid} ({uuid}) — резерв применён в панели, но запись "
+                f"не сохранилась: {e}"
+            )
+            continue
         granted += 1
         await notify_user_push(
             session,
