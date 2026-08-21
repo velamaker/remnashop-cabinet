@@ -898,8 +898,20 @@ export interface ReserveGrants {
   broken: number;
 }
 
+// Вердикт по сквад-резерву: отдаст он серверы или нет. checked=false — панель не
+// ответила (это не приговор скваду, просто проверить не смогли).
+export interface ReserveSquadCheck {
+  checked: boolean;
+  ok: boolean;
+  name: string | null;
+  hosts: number;
+  problems: string[];
+}
+
 export const reserveAdminApi = {
   get: () => adminApi.get<ReserveConfig>("/reserve"),
+  squadCheck: (squadUuid?: string) =>
+    adminApi.get<ReserveSquadCheck>(`/reserve/squad-check${squadUuid ? `?squad_uuid=${encodeURIComponent(squadUuid)}` : ""}`),
   update: (data: Partial<ReserveConfig>) => adminApi.put<ReserveConfig>("/reserve", data),
   // Ручки нет у адаптера поверх чужого бота — вызывающий обязан молча прятать блок.
   grants: () => adminApi.get<ReserveGrants>("/reserve/grants"),

@@ -7,6 +7,8 @@ import { ApiError } from "@/types/api";
 // это «выдан», а в приложении пусто; именно так дефект и прятался, пока состояние
 // панели не показывали. Тесты держат ровно это поведение.
 let grants: () => Promise<unknown> = () => Promise.resolve({ items: [], active: 0, broken: 0 });
+let squadCheck: () => Promise<unknown> = () =>
+  Promise.resolve({ checked: true, ok: true, name: "Telegram-only", hosts: 2, problems: [] });
 
 vi.mock("@/api/admin", () => ({
   reserveAdminApi: {
@@ -14,6 +16,8 @@ vi.mock("@/api/admin", () => ({
     get: () => Promise.resolve({ enabled: true, reserve_gb: 1, window_days: 7, squad_uuid: "sq-tg" }),
     update: (data: unknown) => Promise.resolve(data),
     grants: () => grants(),
+    // Вердикт по сквад-резерву — карточка настроек спрашивает его при открытии.
+    squadCheck: () => squadCheck(),
   },
   // Карточка настроек подтягивает сквады панели для выбора сквад-резерва.
   plansAdminApi: {
@@ -42,6 +46,8 @@ const grant = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   grants = () => Promise.resolve({ items: [], active: 0, broken: 0 });
+  squadCheck = () =>
+    Promise.resolve({ checked: true, ok: true, name: "Telegram-only", hosts: 2, problems: [] });
 });
 afterEach(cleanup);
 
@@ -134,6 +140,31 @@ describe("Кто на резерве", () => {
     render(<AdminReservePage />);
 
     await waitFor(() => expect(screen.queryByText("Всё сломалось")).not.toBeNull());
+  });
+
+  it("сломанный сквад-резерв виден сразу в настройках, а не из жалобы клиента", async () => {
+    squadCheck = () =>
+      Promise.resolve({
+        checked: true,
+        ok: false,
+        name: "Пустой",
+        hosts: 0,
+        problems: ["у сквада нет ни одного инбаунда — подписка будет пустой"],
+      });
+    render(<AdminReservePage />);
+
+    await waitFor(() =>
+      expect(screen.queryByText(/у сквада нет ни одного инбаунда/)).not.toBeNull(),
+    );
+  });
+
+  it("панель не ответила → вердикт не показываем (сквад не обвиняем зря)", async () => {
+    squadCheck = () =>
+      Promise.resolve({ checked: false, ok: false, name: null, hosts: 0, problems: ["панель недоступна"] });
+    render(<AdminReservePage />);
+
+    await waitFor(() => expect(screen.queryByText("Резервный доступ истёкшим")).not.toBeNull());
+    expect(screen.queryByText(/панель недоступна/)).toBeNull();
   });
 
   it("резерв ещё никому не выдавали → таблицы нет, но блок на месте", async () => {

@@ -96,13 +96,13 @@ else
 fi
 UUIDS="$(printf '%s\n' "$UUIDS" | grep -Eo '[0-9a-fA-F-]{36}')"
 
-if [ -z "$UUIDS" ]; then
-  warn "Нет ни одного UUID для проверки (резерв никому не выдан либо неверный user_id)."
+SQUAD_CFG="$(printf '%s\n' "$CFG" | sed -n 's/.*"squad_uuid": *"\([^"]*\)".*/\1/p')"
+if [ -z "$UUIDS" ] && [ -z "$SQUAD_CFG" ]; then
+  warn "Нет ни одного UUID для проверки и не задан сквад-резерв."
 else
   # Сквад-резерв передаём внутрь: без него нельзя отличить «человек на ТГ-скваде»
   # от «человек на обычных серверах», а это разные диагнозы.
-  SQUAD="$(printf '%s\n' "$CFG" | sed -n 's/.*"squad_uuid": *"\([^"]*\)".*/\1/p')"
-  printf '%s\n' "$UUIDS" | docker exec -i -e "RESERVE_SQUAD=${SQUAD}" "$APP_CONTAINER" \
+  printf '%s\n' "$UUIDS" | docker exec -i -e "RESERVE_SQUAD=${SQUAD_CFG}" "$APP_CONTAINER" \
     /opt/remnashop/.venv/bin/python - <<'PY'
 import asyncio, os, sys
 
@@ -127,9 +127,55 @@ reserve_squad = (os.environ.get("RESERVE_SQUAD") or "").strip().lower()
 uuids = [l.strip() for l in sys.stdin if l.strip()]
 
 
+async def check_squad(cli) -> None:
+    """Отдаст ли сам сквад-резерв хоть один сервер. Если нет — не работает НИ У КОГО."""
+    if not reserve_squad:
+        print("  Сквад-резерв не задан — резерв не выдаётся вовсе.")
+        return
+    try:
+        r = await cli.get("/api/internal-squads")
+        r.raise_for_status()
+        body = r.json().get("response") or r.json()
+        squads = body.get("internalSquads") if isinstance(body, dict) else body
+        squad = next((s for s in (squads or [])
+                      if str(s.get("uuid", "")).lower() == reserve_squad), None)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  Сквады панели не прочитаны: {exc}")
+        return
+    if squad is None:
+        print("  ► Сквад-резерв НЕ НАЙДЕН в панели — проверьте выбор в админке.")
+        return
+    inbounds = {str(i.get("uuid") or "") for i in (squad.get("inbounds") or [])} - {""}
+    print(f"  сквад-резерв: {squad.get('name')}   инбаундов: {len(inbounds)}")
+    if not inbounds:
+        print("  ► ПРИЧИНА: у сквада нет инбаундов — подписка будет пустой У ВСЕХ.")
+        return
+    try:
+        r = await cli.get("/api/hosts")
+        r.raise_for_status()
+        hosts = r.json().get("response") or r.json()
+    except Exception as exc:  # noqa: BLE001
+        print(f"  Хосты не прочитаны: {exc}")
+        return
+    live = 0
+    for h in hosts or []:
+        if h.get("isDisabled") or h.get("isHidden"):
+            continue
+        if str(h.get("inboundUuid") or "") not in inbounds:
+            continue
+        if reserve_squad in {str(x).lower() for x in (h.get("excludedInternalSquads") or [])}:
+            continue
+        live += 1
+    print(f"  серверов отдаётся скваду: {live}")
+    if not live:
+        print("  ► ПРИЧИНА: скваду не отдаётся ни один сервер — хосты выключены,")
+        print("    скрыты или сквад у них в исключениях. Резерв не работает НИ У КОГО.")
+
+
 async def main() -> None:
     async with httpx.AsyncClient(base_url=host, timeout=15,
                                  headers={"Authorization": f"Bearer {token}"}) as cli:
+        await check_squad(cli)
         for u in uuids:
             try:
                 r = await cli.get(f"/api/users/{u}")

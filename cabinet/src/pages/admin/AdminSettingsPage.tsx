@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Save, AlertCircle, CheckCircle2, Bell, Lock, SlidersHorizontal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { settingsAdminApi, topupAdminApi, morningSummaryAdminApi, trialDiscountAdminApi, reserveAdminApi, plansAdminApi, promoBannerAdminApi, winbackAdminApi, digestAdminApi, trafficAlertAdminApi, newDeviceAdminApi, loginAlertAdminApi, emailGateAdminApi, freezeAdminApi, type AdminSettings, type TopupAdminConfig, type TopupApplicability, type MorningSummaryConfig, type TrialDiscountConfig, type TrialDiscountDryRun, type ReserveConfig, type AdminSquad, type PromoBannerConfig, type WinbackConfig, type DigestConfig, type TrafficAlertConfig, type NewDeviceConfig, type LoginAlertConfig, type FreezeConfig } from "@/api/admin";
+import { settingsAdminApi, topupAdminApi, morningSummaryAdminApi, trialDiscountAdminApi, reserveAdminApi, plansAdminApi, promoBannerAdminApi, winbackAdminApi, digestAdminApi, trafficAlertAdminApi, newDeviceAdminApi, loginAlertAdminApi, emailGateAdminApi, freezeAdminApi, type AdminSettings, type TopupAdminConfig, type TopupApplicability, type MorningSummaryConfig, type TrialDiscountConfig, type TrialDiscountDryRun, type ReserveConfig, type ReserveSquadCheck, type AdminSquad, type PromoBannerConfig, type WinbackConfig, type DigestConfig, type TrafficAlertConfig, type NewDeviceConfig, type LoginAlertConfig, type FreezeConfig } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -570,6 +570,9 @@ export function ReserveCard() {
   // Сквады панели — чтобы выбирать из списка, а не вклеивать UUID руками. Опечатка в
   // UUID означала бы «резерв включён, а сервера нет», причём молча.
   const [squads, setSquads] = useState<AdminSquad[] | null>(null);
+  // Вердикт панели по выбранному скваду. Без него владелец узнавал бы, что сквад
+  // пустой или спрятан от хостов, только из жалобы клиента.
+  const [squadCheck, setSquadCheck] = useState<ReserveSquadCheck | null>(null);
 
   useEffect(() => {
     reserveAdminApi.get().then(setCfg).catch((e) => setError(loadError(e))).finally(() => setLoading(false));
@@ -577,6 +580,25 @@ export function ReserveCard() {
     // ручного ввода, вместо того чтобы ломать карточку.
     plansAdminApi.squads().then((r) => setSquads(r.internal)).catch(() => setSquads([]));
   }, []);
+
+  // Проверяем сквад при открытии страницы и при каждой смене выбора: ошибку настройки
+  // надо показывать здесь, а не через неделю в жалобе. Ручки нет у адаптера поверх
+  // чужого бота — тогда просто ничего не показываем.
+  const squadUuid = cfg?.squad_uuid ?? "";
+  useEffect(() => {
+    if (!squadUuid) {
+      setSquadCheck(null);
+      return;
+    }
+    let stale = false;
+    reserveAdminApi
+      .squadCheck(squadUuid)
+      .then((r) => !stale && setSquadCheck(r))
+      .catch(() => !stale && setSquadCheck(null));
+    return () => {
+      stale = true;
+    };
+  }, [squadUuid]);
 
   const patch = (p: Partial<ReserveConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
 
@@ -740,6 +762,13 @@ export function ReserveCard() {
             <input type="text" disabled={!!why("squad_uuid")} value={cfg.squad_uuid} onChange={(e) => patch({ squad_uuid: e.target.value })} placeholder="напр. 03542796-2d7d-…" className={`${inputCls} ${why("squad_uuid") ? "cursor-not-allowed opacity-60" : ""}`} />
           )}
           {squadHint && <p className="mt-1 text-xs leading-snug text-fg-muted">{squadHint}</p>}
+          {squadCheck?.checked && (
+            <p className={`mt-1 text-xs leading-snug ${squadCheck.ok ? "text-fg-muted" : "text-warning"}`}>
+              {squadCheck.ok
+                ? `Проверено: сквад отдаёт серверов — ${squadCheck.hosts}.`
+                : `Не сможет выдать сервер: ${squadCheck.problems.join("; ")}.`}
+            </p>
+          )}
         </div>
       )}
       {cfg.squad_uuid_limited !== undefined && can("squad_uuid_limited") && (
