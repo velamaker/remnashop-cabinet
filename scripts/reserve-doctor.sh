@@ -103,11 +103,15 @@ host = (os.environ.get("REMNAWAVE_HOST") or "").strip()
 token = (os.environ.get("REMNAWAVE_TOKEN") or "").strip()
 if not host or not token:
     sys.exit("REMNAWAVE_HOST/REMNAWAVE_TOKEN не заданы в окружении контейнера")
-# Нормализуем так же, как это делает бот: имя без порта → :3000, без схемы → http.
+# Нормализуем ровно как adapter/main.py:_panel_url: без схемы → http, и :3000
+# ТОЛЬКО голому имени контейнера (нет ни двоеточия, ни точки). Домен трогать нельзя:
+# «https://panel.example.com» с дописанным :3000 никуда не достучится.
+host = host.rstrip("/")
 if "://" not in host:
     host = "http://" + host
-if not host.rsplit(":", 1)[-1].isdigit():
-    host += ":3000"
+_hostname = host.split("://", 1)[1].split("/", 1)[0]
+if ":" not in _hostname and "." not in _hostname:
+    host = host.replace(_hostname, _hostname + ":3000", 1)
 
 GB = 1024 ** 3
 uuids = [l.strip() for l in sys.stdin if l.strip()]
