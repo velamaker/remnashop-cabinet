@@ -639,9 +639,6 @@ export function ReserveCard() {
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
   const modes = cfg.modes ?? [];
   const modeDesc = modes.find((m) => m.value === cfg.mode)?.desc;
-  // У нашего бэкенда сквад-резерв необязателен (пусто = оставить текущий), у бота
-  // с режимами — наоборот, без него резерв не запустится. Подпись обязана
-  // говорить правду того бэкенда, который сейчас отвечает.
   // У обоих бэкендов сквад обязателен, но по разным причинам: у чужого бота без него
   // не запускается их grace, у нас — резерв потерял бы смысл (человек остался бы на
   // обычных серверах, то есть с полным доступом бесплатно).
