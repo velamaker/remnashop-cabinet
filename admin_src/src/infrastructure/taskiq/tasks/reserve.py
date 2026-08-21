@@ -24,6 +24,13 @@
 ответ панели и пишем в reserve_grants только то, что реально применилось. Иначе админка
 показывает «резерв выдан» там, где у клиента ничего не работает.
 
+ОБСЛУЖИВАНИЕ УЖЕ ВЫДАННОГО идёт каждым проходом и НЕ зависит от тумблера — эти люди на
+резерве уже сидят: закрываем вышедшие окна (ended) и перепроверяем действующие резервы,
+доводя до рабочего состояния те, что остались без сквадов (см. _broken_reserve — там же
+объяснено, почему израсходованный гигабайт чинить нельзя). Без этого исправленная выдача
+помогала бы только новым, а те, кому резерв уже «выдали» пустым, не получили бы его
+никогда: строка в reserve_grants блокирует повторную выдачу навсегда.
+
 Окончание НЕ требует отдельной логики: резерв ставит expireAt = now + window_days,
 который сам истекает в конце окна → панель авто-помечает EXPIRED → «подписка
 закончилась». (Панель ЗАПРЕЩАЕТ ставить expireAt в прошлое, так что ручное истечение
@@ -126,6 +133,128 @@ def _not_applied(user: object) -> Optional[str]:
     return None
 
 
+async def _apply_reserve(
+    sdk: object,
+    session: AsyncSession,
+    user_id: int,
+    uuid: object,
+    expire_at: datetime,
+    gb: int,
+    squad: str,
+) -> Optional[str]:
+    """Ставит человеку резервный доступ в панели.
+
+    None — резерв реально применился; строка — причина, по которой он бесполезен.
+    Через этот же путь идёт и починка уже выданных резервов, поэтому срок передаётся
+    снаружи: починка НЕ должна продлевать окно, она возвращает доступ в прежних рамках.
+    """
+    from remnapy.enums.users import UserStatus
+    from remnapy.models import UpdateUserRequestDto
+
+    uuid_s = str(uuid)
+
+    # Сброс расхода — ПЕРВЫМ шагом: если следующий сорвётся, человек останется
+    # просто истёкшим, а не «активным с лимитом 1 ГБ поверх израсходованных».
+    await sdk.users.reset_user_traffic(uuid_s)
+
+    # Сквад-резерв задан — переносим на него. Не задан — панель сквады не тронет,
+    # и это правильно ровно до тех пор, пока сквады у человека ЕСТЬ.
+    squads = [squad] if squad else []
+    if not squads and not _squad_uuids(await sdk.users.get_user_by_uuid(uuid_s)):
+        squads = await _plan_squads(session, user_id)
+        if not squads:
+            return (
+                "у юзера нет активных сквадов, а сквад-резерв в настройках не задан — "
+                "резерв дал бы «активную» подписку без единого сервера"
+            )
+
+    body = UpdateUserRequestDto(
+        uuid=uuid,
+        status=UserStatus.ACTIVE,
+        expire_at=expire_at,
+        traffic_limit_bytes=gb * _GB,
+    )
+    if squads:
+        body.active_internal_squads = squads
+    # Панель отвечает юзером целиком — сверяем, что получилось именно то, что нужно.
+    return _not_applied(await sdk.users.update_user(body))
+
+
+def _broken_reserve(user: object) -> Optional[str]:
+    """Резерв ВЫДАН, но пользоваться им нельзя — то, что чинится повторной выдачей.
+
+    Условие намеренно уже, чем у _not_applied: LIMITED здесь НЕ поломка, а штатный
+    конец резерва («израсходовал гигабайт»). Чинить его повторной выдачей значило бы
+    раздавать по свежему гигабайту каждый час — резерв перестал бы кончаться вовсе.
+    Чиним ровно один случай: активен, но сквадов нет, то есть подписка пустая.
+    """
+    status = getattr(user, "status", None)
+    if status is None:
+        return None
+    if str(getattr(status, "value", status)) != "ACTIVE":
+        return None
+    if not _squad_uuids(user):
+        return "активен, но без сквадов — подписка отдаёт пустой список серверов"
+    return None
+
+
+async def _close_finished(session: AsyncSession) -> int:
+    """Закрывает резервы, чьё окно вышло: колонка ended до сих пор не выставлялась.
+
+    Сам доступ гасить не нужно — expireAt истекает в панели сам. Отметка нужна нам:
+    по ней видно, кто на резерве СЕЙЧАС, и по ней же не перепроверяется то, что уже
+    закончилось.
+    """
+    result = await session.execute(
+        text("UPDATE reserve_grants SET ended = true WHERE ended = false AND reserve_expire_at < now()")
+    )
+    await session.commit()
+    return result.rowcount or 0
+
+
+async def _repair_active(session: AsyncSession, sdk: object, gb: int, squad: str) -> int:
+    """Доводит до рабочего состояния резервы, которые уже выданы, но ничего не дают.
+
+    Раньше строка в reserve_grants писалась по факту вызова панели, без проверки
+    результата, — и человек мог остаться ACTIVE без сквадов (в приложении пусто).
+    Такая строка блокирует повторную выдачу навсегда, поэтому чинить их обязательно:
+    иначе исправленная выдача помогает только новым, а уже пострадавшим — никогда.
+
+    Идёт и при ВЫКЛЮЧЕННОЙ фиче: у этих людей резерв уже есть, и бросать их на
+    полпути нельзя (тот же принцип, что у авто-возобновления пауз в freeze.py).
+    """
+    rows = (
+        await session.execute(
+            text(
+                "SELECT user_id, remna_uuid, reserve_expire_at FROM reserve_grants "
+                "WHERE ended = false AND reserve_expire_at > now()"
+            )
+        )
+    ).all()
+
+    fixed = 0
+    for uid, uuid, expire_at in rows:
+        try:
+            problem = _broken_reserve(await sdk.users.get_user_by_uuid(str(uuid)))
+        except Exception as exc:  # noqa: BLE001 — один недоступный юзер не роняет проход
+            logger.warning(f"reserve: проверка user_id={uid} ({uuid}) не удалась: {exc}")
+            continue
+        if not problem:
+            continue
+
+        logger.warning(f"reserve: у user_id={uid} ({uuid}) резерв не работает ({problem}) — чиню")
+        try:
+            still = await _apply_reserve(sdk, session, uid, uuid, expire_at, gb, squad)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"reserve: починка user_id={uid} ({uuid}) не удалась: {exc}")
+            continue
+        if still:
+            logger.warning(f"reserve: user_id={uid} ({uuid}) починить не вышло: {still}")
+        else:
+            fixed += 1
+    return fixed
+
+
 @broker.task(schedule=[{"cron": "27 * * * *"}], retry_on_error=False)
 @inject(patch_module=True)
 async def run_reserve(
@@ -133,20 +262,27 @@ async def run_reserve(
     remnawave: FromDishka[Remnawave],
 ) -> None:
     cfg = load_config()
-    if not cfg["enabled"]:
-        return
+    gb = cfg["reserve_gb"]
+    window = cfg["window_days"]
+    squad = cfg["squad_uuid"]
+
+    # Обслуживание уже выданных резервов — ДО проверки тумблера: эти люди на резерве
+    # уже сидят, и выключенная фича не повод оставлять их в поломанном состоянии.
+    closed = await _close_finished(session)
+    if closed:
+        logger.info(f"reserve: закрыто окон резерва {closed}")
 
     sdk = getattr(remnawave, "sdk", None)
     if sdk is None:
         logger.warning("reserve: Remnawave SDK недоступен — пропуск")
         return
 
-    from remnapy.enums.users import UserStatus
-    from remnapy.models import UpdateUserRequestDto
+    fixed = await _repair_active(session, sdk, gb, squad)
+    if fixed:
+        logger.info(f"reserve: починено нерабочих резервов {fixed}")
 
-    gb = cfg["reserve_gb"]
-    window = cfg["window_days"]
-    squad = cfg["squad_uuid"]
+    if not cfg["enabled"]:
+        return
 
     rows = (
         await session.execute(
@@ -169,44 +305,16 @@ async def run_reserve(
     reserve_expire = datetime.now(timezone.utc) + timedelta(days=window)
     granted = 0
     for uid, uuid, lang in rows:
-        uuid_s = str(uuid)
         try:
-            # Сброс расхода — ПЕРВЫМ шагом: если следующий сорвётся, человек останется
-            # просто истёкшим, а не «активным с лимитом 1 ГБ поверх израсходованных».
-            await sdk.users.reset_user_traffic(uuid_s)
-
-            # Сквад-резерв задан — переносим на него. Не задан — панель сквады не
-            # тронет, и это правильно ровно до тех пор, пока сквады у человека ЕСТЬ.
-            squads = [squad] if squad else []
-            if not squads and not _squad_uuids(await sdk.users.get_user_by_uuid(uuid_s)):
-                squads = await _plan_squads(session, uid)
-                if not squads:
-                    logger.warning(
-                        f"reserve: user_id={uid} ({uuid_s}) пропущен — у юзера нет активных "
-                        "сквадов, а сквад-резерв в настройках не задан. Резерв дал бы "
-                        "«активную» подписку без единого сервера (в приложении пусто)"
-                    )
-                    continue
-
-            body = UpdateUserRequestDto(
-                uuid=uuid,
-                status=UserStatus.ACTIVE,
-                expire_at=reserve_expire,
-                traffic_limit_bytes=gb * _GB,
-            )
-            if squads:
-                body.active_internal_squads = squads
-            applied = await sdk.users.update_user(body)
+            problem = await _apply_reserve(sdk, session, uid, uuid, reserve_expire, gb, squad)
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"reserve: выдача user_id={uid} ({uuid_s}) не удалась: {e}")
+            logger.warning(f"reserve: выдача user_id={uid} ({uuid}) не удалась: {e}")
             continue
 
-        # Панель ответила юзером целиком — сверяем, что получилось именно то, что нужно.
-        # Не сошлось — строку не пишем: следующий проход попробует снова, а владелец
+        # Не применилось — строку НЕ пишем: следующий проход попробует снова, а владелец
         # видит причину в логе, а не «резерв выдан» при неработающем доступе.
-        problem = _not_applied(applied)
         if problem:
-            logger.warning(f"reserve: user_id={uid} ({uuid_s}) — резерв не применился: {problem}")
+            logger.warning(f"reserve: user_id={uid} ({uuid}) — резерв не выдан: {problem}")
             continue
 
         await session.execute(
