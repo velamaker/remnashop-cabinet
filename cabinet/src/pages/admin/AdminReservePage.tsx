@@ -117,7 +117,7 @@ function ReserveGrantsCard() {
                 </thead>
                 <tbody>
                   {sorted.map((g) => (
-                    <tr key={g.user_id} className="border-t border-border-subtle align-top">
+                    <tr key={g.id} className="border-t border-border-subtle align-top">
                       <td className="py-2 pr-3">
                         <div className="text-fg">{g.username || `id ${g.user_id}`}</div>
                         {g.telegram_id && <div className="text-fg-muted">tg {g.telegram_id}</div>}

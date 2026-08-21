@@ -875,6 +875,9 @@ export interface ReserveConfig {
 // или нет, знает панель — поэтому у активных резервов бэкенд подмешивает их реальное
 // состояние (panel) и готовую причину, если доступа по факту нет (problem).
 export interface ReserveGrant {
+  // Выдач у одного человека может быть несколько — резерв положен на каждое
+  // истечение подписки, поэтому строку различает id, а не user_id.
+  id: number;
   user_id: number;
   telegram_id: number | null;
   username: string | null;

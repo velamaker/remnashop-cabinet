@@ -3,8 +3,14 @@
 Крон (почасовой): находит USER, у кого подписка истекла недавно (в пределах окна) и
 кому резерв ещё не выдавали, через Remnawave SDK делает их ACTIVE на `window_days`
 дней с лимитом `reserve_gb` ГБ (сброс использованного) — на текущем скваде или на
-отдельном сквад-резерве (squad_uuid). Пишет строку в reserve_grants (дедуп: ОДИН
-резерв на юзера). Шлёт goodwill-уведомление (Web Push).
+отдельном сквад-резерве (squad_uuid). Пишет строку в reserve_grants. Шлёт
+goodwill-уведомление (Web Push).
+
+ДЕДУП — НА ЦИКЛ ПОДПИСКИ, а не на человека: резерв положен на КАЖДОЕ истечение.
+Пропускаем того, у кого резерв сейчас действует или уже выдавался за текущее истечение
+(granted_at не раньше subscriptions.expire_at). Продлился — срок подписки уехал вперёд,
+и следующее истечение снова даёт право на резерв. В схеме это держит частичный
+уникальный индекс по user_id среди незакрытых строк (миграция 0005).
 
 СКВАДЫ — почему им отдельная забота. Панель меняет сквады юзера ТОЛЬКО если в PATCH
 пришло поле activeInternalSquads (users.service: `if (newActiveInternalSquadsUuids)`);
@@ -226,8 +232,18 @@ async def _repair_active(session: AsyncSession, sdk: object, gb: int, squad: str
     rows = (
         await session.execute(
             text(
-                "SELECT user_id, remna_uuid, reserve_expire_at FROM reserve_grants "
-                "WHERE ended = false AND reserve_expire_at > now()"
+                # s.expire_at < now() — обязательное условие, а не украшение: резерв
+                # НЕ двигает локальный срок подписки, поэтому «в прошлом» означает «ещё
+                # не продлился». Без этой проверки человек, который уже оплатил, но
+                # оказался в панели без сквадов (например, у тарифа их не задали), был
+                # бы «починен» до резервного гигабайта — то есть у оплатившего отобрали
+                # бы подписку.
+                "SELECT r.user_id, r.remna_uuid, r.reserve_expire_at "
+                "FROM reserve_grants r "
+                "JOIN users u ON u.id = r.user_id "
+                "JOIN subscriptions s ON u.current_subscription_id = s.id "
+                "WHERE r.ended = false AND r.reserve_expire_at > now() "
+                "AND s.expire_at < now()"
             )
         )
     ).all()
@@ -287,14 +303,22 @@ async def run_reserve(
     rows = (
         await session.execute(
             text(
+                # Дедуп — НА ЦИКЛ ПОДПИСКИ, а не на человека: резерв положен на каждое
+                # истечение. Пропускаем, если резерв сейчас действует (ended = false)
+                # либо уже выдавался за ТЕКУЩЕЕ истечение (granted_at не раньше
+                # s.expire_at). После продления s.expire_at уезжает вперёд, и старая
+                # выдача перестаёт закрывать дорогу следующей.
                 "SELECT u.id, s.user_remna_id, lower(u.language::text) "
                 "FROM users u "
                 "JOIN subscriptions s ON u.current_subscription_id = s.id "
-                "LEFT JOIN reserve_grants r ON r.user_id = u.id "
                 "WHERE u.role = 'USER' AND s.user_remna_id IS NOT NULL "
                 "AND s.expire_at < now() "
                 "AND s.expire_at > now() - make_interval(days => :w) "
-                "AND r.user_id IS NULL"
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM reserve_grants r "
+                "  WHERE r.user_id = u.id "
+                "    AND (r.ended = false OR r.granted_at >= s.expire_at)"
+                ")"
             ),
             {"w": window},
         )
@@ -319,8 +343,12 @@ async def run_reserve(
 
         await session.execute(
             text(
+                # Конфликт ловим по частичному уникальному индексу (миграция 0005):
+                # действующая выдача у человека может быть только одна, закрытые копятся
+                # историей. Страхует от гонки, если проходов вдруг окажется два.
                 "INSERT INTO reserve_grants (user_id, remna_uuid, granted_at, reserve_expire_at, ended) "
-                "VALUES (:u, :ru, now(), :re, false) ON CONFLICT (user_id) DO NOTHING"
+                "VALUES (:u, :ru, now(), :re, false) "
+                "ON CONFLICT (user_id) WHERE ended = false DO NOTHING"
             ),
             {"u": uid, "ru": str(uuid), "re": reserve_expire},
         )

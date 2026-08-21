@@ -68,7 +68,9 @@ async def list_grants(
     rows = (
         await session.execute(
             text(
-                "SELECT r.user_id, r.remna_uuid, r.granted_at, r.reserve_expire_at, r.ended, "
+                # У человека теперь может быть несколько выдач (резерв положен на каждое
+                # истечение) — отдаём id строки, иначе список нечем различать.
+                "SELECT r.id, r.user_id, r.remna_uuid, r.granted_at, r.reserve_expire_at, r.ended, "
                 "       u.telegram_id, u.username "
                 "FROM reserve_grants r JOIN users u ON u.id = r.user_id "
                 "ORDER BY r.granted_at DESC LIMIT :n"
@@ -79,8 +81,9 @@ async def list_grants(
 
     sdk = getattr(remnawave, "sdk", None)
     items: list[dict[str, Any]] = []
-    for uid, uuid, granted_at, expire_at, ended, tg_id, username in rows:
+    for grant_id, uid, uuid, granted_at, expire_at, ended, tg_id, username in rows:
         item: dict[str, Any] = {
+            "id": grant_id,
             "user_id": uid,
             "telegram_id": tg_id,
             "username": username,
