@@ -11,9 +11,13 @@ let grants: () => Promise<unknown> = () => Promise.resolve({ items: [], active: 
 vi.mock("@/api/admin", () => ({
   reserveAdminApi: {
     // Карточка настроек не предмет этих тестов — отдаём минимум, чтобы она отрисовалась.
-    get: () => Promise.resolve({ enabled: true, reserve_gb: 1, window_days: 7, squad_uuid: "" }),
+    get: () => Promise.resolve({ enabled: true, reserve_gb: 1, window_days: 7, squad_uuid: "sq-tg" }),
     update: (data: unknown) => Promise.resolve(data),
     grants: () => grants(),
+  },
+  // Карточка настроек подтягивает сквады панели для выбора сквад-резерва.
+  plansAdminApi: {
+    squads: () => Promise.resolve({ internal: [{ uuid: "sq-tg", name: "Telegram-only" }], external: [], available: true }),
   },
 }));
 

@@ -1,10 +1,13 @@
-"""Резервный доступ истёкшим подпискам: 1 ГБ на N дней (overlay).
+"""Резервный доступ истёкшим: сервер для входа в Telegram на N дней (overlay).
+
+Кому кончилась подписка и кто не успел продлить — оставляем не «немного интернета», а
+дорогу обратно к боту: сажаем человека на сквад-резерв (сервер, пускающий только в
+Telegram), чтобы он дошёл до бота и продлил подписку.
 
 Крон (почасовой): находит USER, у кого подписка истекла недавно (в пределах окна) и
-кому резерв ещё не выдавали, через Remnawave SDK делает их ACTIVE на `window_days`
-дней с лимитом `reserve_gb` ГБ (сброс использованного) — на текущем скваде или на
-отдельном сквад-резерве (squad_uuid). Пишет строку в reserve_grants. Шлёт
-goodwill-уведомление (Web Push).
+кому резерв за это истечение ещё не выдавали, через Remnawave SDK делает их ACTIVE на
+`window_days` дней с лимитом `reserve_gb` ГБ (сброс использованного) НА СКВАД-РЕЗЕРВЕ
+(squad_uuid). Пишет строку в reserve_grants. Шлёт уведомление (Web Push).
 
 ДЕДУП — НА ЦИКЛ ПОДПИСКИ, а не на человека: резерв положен на КАЖДОЕ истечение.
 Пропускаем того, у кого резерв сейчас действует или уже выдавался за текущее истечение
@@ -12,14 +15,18 @@ goodwill-уведомление (Web Push).
 и следующее истечение снова даёт право на резерв. В схеме это держит частичный
 уникальный индекс по user_id среди незакрытых строк (миграция 0005).
 
-СКВАДЫ — почему им отдельная забота. Панель меняет сквады юзера ТОЛЬКО если в PATCH
-пришло поле activeInternalSquads (users.service: `if (newActiveInternalSquadsUuids)`);
-при пустом squad_uuid мы его не шлём вовсе. А подписка отдаёт клиенту серверы именно
-через сквады: юзер без сквадов — ACTIVE, со сроком и лимитом, но в приложении ПУСТО.
-Поэтому при пустом squad_uuid сначала смотрим, что у человека в панели, и если сквадов
-нет — возвращаем те, что были у его подписки (subscriptions.internal_squads). Совсем
-нечего вернуть — резерв НЕ выдаём и говорим об этом в логе: «активен, но подключиться
-некуда» хуже честного отказа, потому что выглядит как рабочий резерв.
+СКВАД-РЕЗЕРВ ОБЯЗАТЕЛЕН, и это главное в фиче. Смысл резерва — не «немного интернета
+на прощание», а СЕРВЕР ДЛЯ ВХОДА В TELEGRAM, чтобы человек дошёл до бота и продлил
+подписку. Такой сервер — это отдельный сквад, чьи ноды пускают только в Telegram;
+маршрутизацию задаёт панель, кабинет её не контролирует и контролировать не может.
+Наше дело — посадить человека на ЭТОТ сквад и убедиться, что он там оказался.
+
+Поэтому squad_uuid не имеет разумного значения по умолчанию: оставить человеку его
+прежние сквады значит выдать полный доступ ко всем серверам, то есть ровно то, за что
+он больше не платит. Пусто — резерв НЕ выдаём и пишем причину в лог.
+
+Панель меняет сквады ТОЛЬКО если в PATCH пришло поле activeInternalSquads
+(users.service: `if (newActiveInternalSquadsUuids)`) — поэтому шлём его всегда.
 
 ПОРЯДОК ВЫЗОВОВ. Сброс трафика идёт ПЕРВЫМ, PATCH — вторым. Если между ними что-то
 падает, человек остаётся просто истёкшим (безобидно). В обратном порядке сорвавшийся
@@ -32,8 +39,8 @@ goodwill-уведомление (Web Push).
 
 ОБСЛУЖИВАНИЕ УЖЕ ВЫДАННОГО идёт каждым проходом и НЕ зависит от тумблера — эти люди на
 резерве уже сидят: закрываем вышедшие окна (ended) и перепроверяем действующие резервы,
-доводя до рабочего состояния те, что остались без сквадов (см. _broken_reserve — там же
-объяснено, почему израсходованный гигабайт чинить нельзя). Без этого исправленная выдача
+доводя до рабочего состояния те, что остались без сквадов ИЛИ на чужих сквадах (см.
+_broken_reserve — там же объяснено, почему израсходованный гигабайт чинить нельзя). Без этого исправленная выдача
 помогала бы только новым, а те, кому резерв уже «выдали» пустым, не получили бы его
 никогда: строка в reserve_grants блокирует повторную выдачу навсегда.
 
@@ -49,7 +56,6 @@ LIMITED «кончился трафик»; окно вышло → EXPIRED «п�
 меняем срок/лимит/сквад юзера в панели. Best-effort: ошибка по одному не роняет проход.
 """
 
-import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Optional
@@ -68,14 +74,14 @@ _GB = 1024 ** 3
 
 _MSG = {
     "ru": (
-        "🛟 Резервный доступ включён",
-        "Подписка закончилась. Мы оставили резервный доступ {gb} ГБ на {days} дн. — "
-        "продлите в кабинете, чтобы не потерять сервис.",
+        "🛟 Оставили доступ к Telegram",
+        "Подписка закончилась. На {days} дн. оставили сервер для входа в Telegram "
+        "({gb} ГБ) — продлите подписку, чтобы вернуть остальные серверы.",
     ),
     "en": (
-        "🛟 Reserve access granted",
-        "Your subscription ended. We left you {gb} GB reserve for {days} days — "
-        "renew in the cabinet to keep your service.",
+        "🛟 Telegram access kept",
+        "Your subscription ended. For {days} days we left a server that reaches "
+        "Telegram ({gb} GB) — renew to get the rest back.",
     ),
 }
 
@@ -92,38 +98,12 @@ def _squad_uuids(user: object) -> list[str]:
     return out
 
 
-async def _plan_squads(session: AsyncSession, user_id: int) -> list[str]:
-    """Сквады подписки человека — чтобы вернуть его на ЕГО ЖЕ серверы, а не в никуда.
-
-    Колонка есть не во всех версиях базового образа, поэтому запрос защищённый: нет
-    колонки — просто нет фолбэка, проход от этого не падает. Ошибка ломает транзакцию
-    сессии, отсюда rollback.
-    """
-    try:
-        raw = (
-            await session.execute(
-                text(
-                    "SELECT s.internal_squads FROM users u "
-                    "JOIN subscriptions s ON u.current_subscription_id = s.id "
-                    "WHERE u.id = :u"
-                ),
-                {"u": user_id},
-            )
-        ).scalar()
-    except Exception as exc:  # noqa: BLE001 — фолбэк опциональный
-        await session.rollback()
-        logger.debug(f"reserve: сквады подписки недоступны ({exc})")
-        return []
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except ValueError:
-            return []
-    return [str(x) for x in (raw or []) if x]
-
-
-def _not_applied(user: object) -> Optional[str]:
+def _not_applied(user: object, squad: str) -> Optional[str]:
     """None — резерв реально применился; иначе причина, по которой он бесполезен.
+
+    Проверяем не только «активен», но и «сидит именно на сквад-резерве»: человек с
+    прежними сквадами получил бы полный доступ вместо входа в Telegram, а человек без
+    сквадов — пустую подписку. И то и другое означает, что резерв не сработал.
 
     Формат ответа SDK неизвестен (база может обновиться) → отсутствие поля статуса
     считаем «проверить не смогли» и грант не блокируем: молча ломать рабочую установку
@@ -134,21 +114,22 @@ def _not_applied(user: object) -> Optional[str]:
         return None
     if str(getattr(status, "value", status)) != "ACTIVE":
         return f"панель оставила статус {status}"
-    if not _squad_uuids(user):
+    squads = _squad_uuids(user)
+    if not squads:
         return "у юзера нет активных сквадов — подписка отдаст пустой список серверов"
+    if squad and [s.lower() for s in squads] != [squad.lower()]:
+        return f"юзер не на сквад-резерве, а на {squads} — это не вход в Telegram"
     return None
 
 
 async def _apply_reserve(
     sdk: object,
-    session: AsyncSession,
-    user_id: int,
     uuid: object,
     expire_at: datetime,
     gb: int,
     squad: str,
 ) -> Optional[str]:
-    """Ставит человеку резервный доступ в панели.
+    """Сажает человека на сквад-резерв — сервер для входа в Telegram.
 
     None — резерв реально применился; строка — причина, по которой он бесполезен.
     Через этот же путь идёт и починка уже выданных резервов, поэтому срок передаётся
@@ -157,22 +138,17 @@ async def _apply_reserve(
     from remnapy.enums.users import UserStatus
     from remnapy.models import UpdateUserRequestDto
 
+    if not squad:
+        return (
+            "не задан сквад-резерв: без него человек остался бы на прежних серверах "
+            "(полный доступ) или вовсе без сквадов — задайте его в админке"
+        )
+
     uuid_s = str(uuid)
 
     # Сброс расхода — ПЕРВЫМ шагом: если следующий сорвётся, человек останется
     # просто истёкшим, а не «активным с лимитом 1 ГБ поверх израсходованных».
     await sdk.users.reset_user_traffic(uuid_s)
-
-    # Сквад-резерв задан — переносим на него. Не задан — панель сквады не тронет,
-    # и это правильно ровно до тех пор, пока сквады у человека ЕСТЬ.
-    squads = [squad] if squad else []
-    if not squads and not _squad_uuids(await sdk.users.get_user_by_uuid(uuid_s)):
-        squads = await _plan_squads(session, user_id)
-        if not squads:
-            return (
-                "у юзера нет активных сквадов, а сквад-резерв в настройках не задан — "
-                "резерв дал бы «активную» подписку без единого сервера"
-            )
 
     body = UpdateUserRequestDto(
         uuid=uuid,
@@ -180,27 +156,35 @@ async def _apply_reserve(
         expire_at=expire_at,
         traffic_limit_bytes=gb * _GB,
     )
-    if squads:
-        body.active_internal_squads = squads
+    # Шлём сквад ВСЕГДА: без этого поля панель оставит прежние сквады, то есть полный
+    # доступ к сервису, за который человек уже не платит.
+    body.active_internal_squads = [squad]
     # Панель отвечает юзером целиком — сверяем, что получилось именно то, что нужно.
-    return _not_applied(await sdk.users.update_user(body))
+    return _not_applied(await sdk.users.update_user(body), squad)
 
 
-def _broken_reserve(user: object) -> Optional[str]:
+def _broken_reserve(user: object, squad: str) -> Optional[str]:
     """Резерв ВЫДАН, но пользоваться им нельзя — то, что чинится повторной выдачей.
 
     Условие намеренно уже, чем у _not_applied: LIMITED здесь НЕ поломка, а штатный
     конец резерва («израсходовал гигабайт»). Чинить его повторной выдачей значило бы
     раздавать по свежему гигабайту каждый час — резерв перестал бы кончаться вовсе.
-    Чиним ровно один случай: активен, но сквадов нет, то есть подписка пустая.
+
+    Чиним два случая, и оба — про сквады. Сквадов нет: подписка пустая, в приложении
+    ничего. Сквады чужие: человек сидит на обычных серверах, то есть пользуется полным
+    сервисом бесплатно — это и не резерв, и убыток. Второй случай не теоретический:
+    до появления обязательного сквад-резерва крон возвращал людям их прежние сквады.
     """
     status = getattr(user, "status", None)
     if status is None:
         return None
     if str(getattr(status, "value", status)) != "ACTIVE":
         return None
-    if not _squad_uuids(user):
+    squads = _squad_uuids(user)
+    if not squads:
         return "активен, но без сквадов — подписка отдаёт пустой список серверов"
+    if squad and [s.lower() for s in squads] != [squad.lower()]:
+        return f"активен на чужих сквадах {squads} вместо сквад-резерва — это полный доступ"
     return None
 
 
@@ -251,7 +235,7 @@ async def _repair_active(session: AsyncSession, sdk: object, gb: int, squad: str
     fixed = 0
     for uid, uuid, expire_at in rows:
         try:
-            problem = _broken_reserve(await sdk.users.get_user_by_uuid(str(uuid)))
+            problem = _broken_reserve(await sdk.users.get_user_by_uuid(str(uuid)), squad)
         except Exception as exc:  # noqa: BLE001 — один недоступный юзер не роняет проход
             logger.warning(f"reserve: проверка user_id={uid} ({uuid}) не удалась: {exc}")
             continue
@@ -260,7 +244,7 @@ async def _repair_active(session: AsyncSession, sdk: object, gb: int, squad: str
 
         logger.warning(f"reserve: у user_id={uid} ({uuid}) резерв не работает ({problem}) — чиню")
         try:
-            still = await _apply_reserve(sdk, session, uid, uuid, expire_at, gb, squad)
+            still = await _apply_reserve(sdk, uuid, expire_at, gb, squad)
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"reserve: починка user_id={uid} ({uuid}) не удалась: {exc}")
             continue
@@ -330,7 +314,7 @@ async def run_reserve(
     granted = 0
     for uid, uuid, lang in rows:
         try:
-            problem = await _apply_reserve(sdk, session, uid, uuid, reserve_expire, gb, squad)
+            problem = await _apply_reserve(sdk, uuid, reserve_expire, gb, squad)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"reserve: выдача user_id={uid} ({uuid}) не удалась: {e}")
             continue
