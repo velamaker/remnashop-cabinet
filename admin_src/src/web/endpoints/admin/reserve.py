@@ -25,6 +25,95 @@ router = APIRouter(prefix="/reserve", tags=["Admin - Reserve"])
 _GB = 1024 ** 3
 
 
+async def _diagnose_squad(remnawave: object, squad_uuid: str) -> dict[str, Any]:
+    """Может ли сквад-резерв реально дать человеку сервер — проверка ДО включения.
+
+    Сам по себе выбранный сквад ничего не гарантирует: у него может не быть инбаундов,
+    а его хосты могут быть выключены или спрятаны от него (host.excludedInternalSquads).
+    Во всех трёх случаях резерв «выдаётся», а в приложении пусто — то есть ровно тот
+    отказ, который у владельца никак не проявляется, пока не пожалуется клиент.
+    Поэтому ловим его в момент настройки, а не через неделю.
+
+    checked=False — панель недоступна: это НЕ приговор скваду, просто мы не смогли
+    посмотреть. Такой ответ не должен ничего блокировать.
+    """
+    out: dict[str, Any] = {"checked": False, "ok": False, "name": None, "hosts": 0, "problems": []}
+    if not squad_uuid:
+        out["problems"].append("сквад-резерв не выбран")
+        out["checked"] = True
+        return out
+
+    sdk = getattr(remnawave, "sdk", None)
+    if sdk is None:
+        out["problems"].append("панель недоступна — проверить сквад не смогли")
+        return out
+
+    want = squad_uuid.strip().lower()
+    try:
+        squads = getattr(await sdk.internal_squads.get_internal_squads(), "internal_squads", None) or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"reserve/squad-check: список сквадов не получен: {exc}")
+        out["problems"].append("панель недоступна — проверить сквад не смогли")
+        return out
+
+    out["checked"] = True
+    squad = next((s for s in squads if str(getattr(s, "uuid", "")).lower() == want), None)
+    if squad is None:
+        out["problems"].append("такого сквада нет в панели — возможно, он удалён или UUID неверный")
+        return out
+
+    out["name"] = getattr(squad, "name", None)
+    inbounds = {
+        str(getattr(inb, "uuid", inb) or "")
+        for inb in (getattr(squad, "inbounds", None) or [])
+    } - {""}
+    if not inbounds:
+        out["problems"].append("у сквада нет ни одного инбаунда — подписка будет пустой")
+        return out
+
+    # Хосты: считаем те, что реально отдадутся этому скваду. Логика та же, что в
+    # public/service_status.py — хост виден, если он включён, не скрыт, отдаёт инбаунд
+    # сквада и сам сквад не в его списке исключений.
+    try:
+        hres = await sdk.hosts.get_all_hosts()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"reserve/squad-check: хосты не получены: {exc}")
+        out["problems"].append("инбаунды у сквада есть, но список хостов панель не отдала")
+        return out
+
+    hraw = getattr(hres, "root", None)
+    if hraw is None:
+        hraw = getattr(hres, "response", None)
+    if hraw is None:
+        hraw = hres or []
+    try:
+        hosts = list(hraw)
+    except Exception:  # noqa: BLE001
+        hosts = []
+
+    visible = 0
+    for h in hosts:
+        if getattr(h, "is_disabled", False) or getattr(h, "is_hidden", False):
+            continue
+        if str(getattr(h, "inbound_uuid", "") or "") not in inbounds:
+            continue
+        excluded = {str(x).lower() for x in (getattr(h, "excluded_internal_squads", None) or [])}
+        if want in excluded:
+            continue
+        visible += 1
+
+    out["hosts"] = visible
+    if not visible:
+        out["problems"].append(
+            "ни один сервер не отдаётся этому скваду — хосты выключены, скрыты "
+            "или сквад у них в исключениях"
+        )
+        return out
+
+    out["ok"] = True
+    return out
+
+
 class ReserveUpdate(BaseModel):
     enabled: Optional[bool] = None
     reserve_gb: Optional[int] = None
@@ -37,26 +126,59 @@ async def get_reserve(_admin: AdminUser) -> dict[str, Any]:
     return load_config()
 
 
+@router.get("/squad-check")
+@inject
+async def squad_check(
+    _admin: AdminUser,
+    remnawave: FromDishka[Remnawave],
+    squad_uuid: str = "",
+) -> dict[str, Any]:
+    """Вердикт по сквад-резерву для админки: отдаст он серверы или нет.
+
+    Без параметра проверяет тот, что сейчас в настройках, — чтобы страница показывала
+    состояние сразу при открытии, а не только после попытки сохранить.
+    """
+    return await _diagnose_squad(remnawave, squad_uuid or load_config()["squad_uuid"])
+
+
 @router.put("")
-async def update_reserve(body: ReserveUpdate, _admin: AdminUser) -> dict[str, Any]:
+@inject
+async def update_reserve(
+    body: ReserveUpdate,
+    _admin: AdminUser,
+    remnawave: FromDishka[Remnawave],
+) -> dict[str, Any]:
     current = load_config()
     for field in ("enabled", "reserve_gb", "window_days", "squad_uuid"):
         val = getattr(body, field)
         if val is not None:
             current[field] = val
 
-    # Резерв без сквада включить нельзя. Смысл фичи — посадить истёкшего на сервер,
-    # пускающий в Telegram; без сквада крон либо оставил бы человеку прежние серверы
-    # (полный доступ бесплатно), либо не дал бы ничего. Молчаливое «сохранено» тут
-    # хуже отказа: тумблер стоит «вкл», а не работает ничего — именно так фича и
-    # выглядела сломанной.
-    if current["enabled"] and not current["squad_uuid"]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Укажите сквад-резерв: это сервер, который пускает только в Telegram. "
-                   "Без него резерв включить нельзя.",
-        )
-    return save_config(current)
+    # Резерв без рабочего сквада включить нельзя. Смысл фичи — посадить истёкшего на
+    # сервер, пускающий в Telegram; без сквада крон не даст ничего, а со сломанным
+    # сквадом человек получит «активную» подписку, в которой пусто. Молчаливое
+    # «сохранено» тут хуже отказа: тумблер стоит «вкл», а не работает ничего — именно
+    # так фича и выглядела сломанной у владельца.
+    if current["enabled"]:
+        if not current["squad_uuid"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Укажите сквад-резерв: это сервер, который пускает только в Telegram. "
+                       "Без него резерв включить нельзя.",
+            )
+        diagnosis = await _diagnose_squad(remnawave, current["squad_uuid"])
+        # checked=False — панель просто не ответила; блокировать настройку из-за этого
+        # нельзя, иначе временная недоступность панели запирает админку.
+        if diagnosis["checked"] and not diagnosis["ok"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Сквад-резерв не сможет выдать сервер: "
+                       + "; ".join(diagnosis["problems"])
+                       + ". Поправьте сквад в панели Remnawave и попробуйте снова.",
+            )
+
+    saved = save_config(current)
+    return saved
 
 
 @router.get("/grants")
