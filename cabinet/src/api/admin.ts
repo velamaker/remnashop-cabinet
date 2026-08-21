@@ -871,9 +871,35 @@ export interface ReserveConfig {
   locked?: Record<string, string>;
 }
 
+// Кто сейчас на резерве. Своя таблица знает только «резерв выдавали»; работает он
+// или нет, знает панель — поэтому у активных резервов бэкенд подмешивает их реальное
+// состояние (panel) и готовую причину, если доступа по факту нет (problem).
+export interface ReserveGrant {
+  user_id: number;
+  telegram_id: number | null;
+  username: string | null;
+  remna_uuid: string;
+  granted_at: string | null;
+  reserve_expire_at: string | null;
+  ended: boolean;
+  panel: { status: string; squads: string[]; traffic_limit_gb: number; used_traffic_gb: number } | null;
+  problem: string | null;
+  // Штатное состояние, не поломка (например «резерв израсходован») — рисуется
+  // обычным текстом, без предупреждающего значка.
+  note: string | null;
+}
+
+export interface ReserveGrants {
+  items: ReserveGrant[];
+  active: number;
+  broken: number;
+}
+
 export const reserveAdminApi = {
   get: () => adminApi.get<ReserveConfig>("/reserve"),
   update: (data: Partial<ReserveConfig>) => adminApi.put<ReserveConfig>("/reserve", data),
+  // Ручки нет у адаптера поверх чужого бота — вызывающий обязан молча прятать блок.
+  grants: () => adminApi.get<ReserveGrants>("/reserve/grants"),
 };
 
 // ---------- Промо-баннер в кабинете ----------
