@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 from dishka import FromDishka
 from dishka.integrations.fastapi import inject
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -44,6 +44,18 @@ async def update_reserve(body: ReserveUpdate, _admin: AdminUser) -> dict[str, An
         val = getattr(body, field)
         if val is not None:
             current[field] = val
+
+    # Резерв без сквада включить нельзя. Смысл фичи — посадить истёкшего на сервер,
+    # пускающий в Telegram; без сквада крон либо оставил бы человеку прежние серверы
+    # (полный доступ бесплатно), либо не дал бы ничего. Молчаливое «сохранено» тут
+    # хуже отказа: тумблер стоит «вкл», а не работает ничего — именно так фича и
+    # выглядела сломанной.
+    if current["enabled"] and not current["squad_uuid"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Укажите сквад-резерв: это сервер, который пускает только в Telegram. "
+                   "Без него резерв включить нельзя.",
+        )
     return save_config(current)
 
 

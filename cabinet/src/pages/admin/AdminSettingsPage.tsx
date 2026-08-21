@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Save, AlertCircle, CheckCircle2, Bell, Lock, SlidersHorizontal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { settingsAdminApi, topupAdminApi, morningSummaryAdminApi, trialDiscountAdminApi, reserveAdminApi, promoBannerAdminApi, winbackAdminApi, digestAdminApi, trafficAlertAdminApi, newDeviceAdminApi, loginAlertAdminApi, emailGateAdminApi, freezeAdminApi, type AdminSettings, type TopupAdminConfig, type TopupApplicability, type MorningSummaryConfig, type TrialDiscountConfig, type TrialDiscountDryRun, type ReserveConfig, type PromoBannerConfig, type WinbackConfig, type DigestConfig, type TrafficAlertConfig, type NewDeviceConfig, type LoginAlertConfig, type FreezeConfig } from "@/api/admin";
+import { settingsAdminApi, topupAdminApi, morningSummaryAdminApi, trialDiscountAdminApi, reserveAdminApi, plansAdminApi, promoBannerAdminApi, winbackAdminApi, digestAdminApi, trafficAlertAdminApi, newDeviceAdminApi, loginAlertAdminApi, emailGateAdminApi, freezeAdminApi, type AdminSettings, type TopupAdminConfig, type TopupApplicability, type MorningSummaryConfig, type TrialDiscountConfig, type TrialDiscountDryRun, type ReserveConfig, type AdminSquad, type PromoBannerConfig, type WinbackConfig, type DigestConfig, type TrafficAlertConfig, type NewDeviceConfig, type LoginAlertConfig, type FreezeConfig } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -567,9 +567,15 @@ export function ReserveCard() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Сквады панели — чтобы выбирать из списка, а не вклеивать UUID руками. Опечатка в
+  // UUID означала бы «резерв включён, а сервера нет», причём молча.
+  const [squads, setSquads] = useState<AdminSquad[] | null>(null);
 
   useEffect(() => {
     reserveAdminApi.get().then(setCfg).catch((e) => setError(loadError(e))).finally(() => setLoading(false));
+    // Панель может быть недоступна (или бэкенд — чужой): тогда просто оставим поле
+    // ручного ввода, вместо того чтобы ломать карточку.
+    plansAdminApi.squads().then((r) => setSquads(r.internal)).catch(() => setSquads([]));
   }, []);
 
   const patch = (p: Partial<ReserveConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
@@ -636,7 +642,14 @@ export function ReserveCard() {
   // У нашего бэкенда сквад-резерв необязателен (пусто = оставить текущий), у бота
   // с режимами — наоборот, без него резерв не запустится. Подпись обязана
   // говорить правду того бэкенда, который сейчас отвечает.
-  const squadHint = why("squad_uuid") ?? (graceMode ? "Обязателен для режима «Включён»: резерв выдаётся только на этом скваде." : "");
+  // У обоих бэкендов сквад обязателен, но по разным причинам: у чужого бота без него
+  // не запускается их grace, у нас — резерв потерял бы смысл (человек остался бы на
+  // обычных серверах, то есть с полным доступом бесплатно).
+  const squadHint =
+    why("squad_uuid") ??
+    (graceMode
+      ? "Обязателен для режима «Включён»: резерв выдаётся только на этом скваде."
+      : "Обязателен. Это сервер, через который истёкший заходит в Telegram и продлевает подписку. Куда именно он пускает — задаётся в панели Remnawave: сделайте сквад, чьи ноды ходят только в Telegram.");
 
   return (
     <Section
@@ -644,7 +657,7 @@ export function ReserveCard() {
       desc={
         graceMode
           ? "Когда подписка заканчивается или кончается трафик, человек ещё какое-то время сохраняет небольшой лимит («спасательный круг»), чтобы успеть продлить. Дальше доступ отключается. Экран правит настройки самого бота — срок у него считается в ЧАСАХ, а резерв выдаётся на отдельных сквадах."
-          : "Когда подписка заканчивается, юзер N дней сохраняет небольшой лимит трафика («спасательный круг»), чтобы успеть продлить. Дальше — доступ отключается. Надпись «подписка закончилась / продлите» приходит из настроек панели (уже по-русски)."
+          : "Кому кончилась подписка и кто не успел продлить — на N дней остаётся сервер из сквад-резерва, чтобы зайти в Telegram и продлить. Остальные серверы недоступны. Дальше доступ отключается, а надпись «подписка закончилась / продлите» приходит из настроек панели (уже по-русски)."
       }
     >
       {can("enabled") && (
@@ -707,9 +720,28 @@ export function ReserveCard() {
       {can("squad_uuid") && (
         <div>
           <label className="mb-1 block text-xs text-fg-muted">
-            {graceMode ? "Сквад для истёкших (UUID)" : "Сквад-резерв (UUID, необязательно — пусто = оставить текущий)"}
+            {graceMode ? "Сквад для истёкших" : "Сквад-резерв (доступ к Telegram)"}
           </label>
-          <input type="text" disabled={!!why("squad_uuid")} value={cfg.squad_uuid} onChange={(e) => patch({ squad_uuid: e.target.value })} placeholder="напр. 03542796-2d7d-…" className={`${inputCls} ${why("squad_uuid") ? "cursor-not-allowed opacity-60" : ""}`} />
+          {squads && squads.length > 0 ? (
+            <select
+              disabled={!!why("squad_uuid")}
+              value={cfg.squad_uuid}
+              onChange={(e) => patch({ squad_uuid: e.target.value })}
+              className={`${inputCls} ${why("squad_uuid") ? "cursor-not-allowed opacity-60" : ""}`}
+            >
+              <option value="">— не выбран —</option>
+              {/* Сквад из конфига может быть удалён из панели — показываем его отдельной
+                  строкой, иначе select молча сбросил бы значение на «не выбран». */}
+              {!squads.some((sq) => sq.uuid === cfg.squad_uuid) && cfg.squad_uuid && (
+                <option value={cfg.squad_uuid}>{cfg.squad_uuid} (нет в панели)</option>
+              )}
+              {squads.map((sq) => (
+                <option key={sq.uuid} value={sq.uuid}>{sq.name}</option>
+              ))}
+            </select>
+          ) : (
+            <input type="text" disabled={!!why("squad_uuid")} value={cfg.squad_uuid} onChange={(e) => patch({ squad_uuid: e.target.value })} placeholder="напр. 03542796-2d7d-…" className={`${inputCls} ${why("squad_uuid") ? "cursor-not-allowed opacity-60" : ""}`} />
+          )}
           {squadHint && <p className="mt-1 text-xs leading-snug text-fg-muted">{squadHint}</p>}
         </div>
       )}

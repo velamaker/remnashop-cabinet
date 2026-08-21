@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 #
-# reserve-doctor.sh — почему резервный доступ не даёт рабочую подписку.
+# reserve-doctor.sh — почему резервный доступ не даёт человеку зайти в Telegram.
 #
-# Типовая жалоба: «в панели у человека стоят 7 дней резерва, а в приложении пусто».
-# Подписка Remnawave отдаёт серверы ЧЕРЕЗ СКВАДЫ: юзер без сквадов — ACTIVE, со сроком
-# и лимитом, но список конфигов пустой. Ещё один способ получить ту же пустоту —
-# остаться в статусе LIMITED (расход больше выданного лимита). Скрипт показывает обе
-# величины рядом с настройками резерва и записями о выдачах.
+# Резерв должен сажать истёкшего на сквад-резерв: сервер, пускающий только в Telegram,
+# чтобы человек дошёл до бота и продлил подписку. Подписка Remnawave отдаёт серверы
+# ЧЕРЕЗ СКВАДЫ, поэтому сбоев ровно три, и все видны в панели: сквадов нет (ACTIVE, но
+# в приложении пусто), сквады ЧУЖИЕ (человек на обычных серверах — это полный доступ,
+# а не вход в Telegram) и статус не ACTIVE (например LIMITED — расход больше лимита).
+# Скрипт показывает все три величины рядом с настройками резерва и записями о выдачах.
 #
 #   scripts/reserve-doctor.sh              # общая картина по установке
 #   scripts/reserve-doctor.sh 123          # разбор одного клиента (user_id из БД бота)
@@ -45,7 +46,7 @@ else
   printf '%s\n' "$CFG" | grep -q '"enabled": *true' \
     || warn "enabled=false — крон выходит сразу, ничего не выдаётся."
   printf '%s\n' "$CFG" | grep -q '"squad_uuid": *""' \
-    && warn "Сквад-резерв НЕ задан. Тогда панель сквады не меняет — и если у истёкшего их не осталось, подписка будет пустой."
+    && warn "Сквад-резерв НЕ задан — без него резерв не выдаётся вовсе. Это сервер, пускающий в Telegram; задайте его в админке."
 fi
 
 # ── 2. Что говорит сам крон ──────────────────────────────────────────────────
@@ -61,13 +62,17 @@ done
 # ── 3. Состояние в БД бота ───────────────────────────────────────────────────
 head "Кандидаты на резерв прямо сейчас (истёкшие в пределах окна, без выданного резерва)"
 WIN="$(printf '%s\n' "$CFG" | sed -n 's/.*"window_days": *\([0-9]*\).*/\1/p')"; WIN="${WIN:-7}"
+# Правило дедупа ТО ЖЕ, что у крона (reserve.py): пропускаем тех, у кого резерв
+# действует или уже выдавался за текущее истечение. Иначе цифра здесь врала бы.
 psql_t "SELECT count(*) AS кандидатов
         FROM users u
         JOIN subscriptions s ON u.current_subscription_id = s.id
-        LEFT JOIN reserve_grants r ON r.user_id = u.id
         WHERE u.role = 'USER' AND s.user_remna_id IS NOT NULL
           AND s.expire_at < now() AND s.expire_at > now() - make_interval(days => ${WIN})
-          AND r.user_id IS NULL;"
+          AND NOT EXISTS (
+            SELECT 1 FROM reserve_grants r
+            WHERE r.user_id = u.id
+              AND (r.ended = false OR r.granted_at >= s.expire_at));"
 
 head "Последние выдачи резерва (таблица reserve_grants)"
 if [ -n "$USER_ID" ]; then
@@ -94,7 +99,11 @@ UUIDS="$(printf '%s\n' "$UUIDS" | grep -Eo '[0-9a-fA-F-]{36}')"
 if [ -z "$UUIDS" ]; then
   warn "Нет ни одного UUID для проверки (резерв никому не выдан либо неверный user_id)."
 else
-  printf '%s\n' "$UUIDS" | docker exec -i "$APP_CONTAINER" /opt/remnashop/.venv/bin/python - <<'PY'
+  # Сквад-резерв передаём внутрь: без него нельзя отличить «человек на ТГ-скваде»
+  # от «человек на обычных серверах», а это разные диагнозы.
+  SQUAD="$(printf '%s\n' "$CFG" | sed -n 's/.*"squad_uuid": *"\([^"]*\)".*/\1/p')"
+  printf '%s\n' "$UUIDS" | docker exec -i -e "RESERVE_SQUAD=${SQUAD}" "$APP_CONTAINER" \
+    /opt/remnashop/.venv/bin/python - <<'PY'
 import asyncio, os, sys
 
 import httpx
@@ -114,6 +123,7 @@ if ":" not in _hostname and "." not in _hostname:
     host = host.replace(_hostname, _hostname + ":3000", 1)
 
 GB = 1024 ** 3
+reserve_squad = (os.environ.get("RESERVE_SQUAD") or "").strip().lower()
 uuids = [l.strip() for l in sys.stdin if l.strip()]
 
 
@@ -128,7 +138,9 @@ async def main() -> None:
             except Exception as exc:  # noqa: BLE001
                 print(f"  {u}: ОШИБКА запроса к панели: {exc}")
                 continue
-            squads = [s.get("name") or s.get("uuid") for s in (d.get("activeInternalSquads") or [])]
+            squad_list = d.get("activeInternalSquads") or []
+            squads = [s.get("name") or s.get("uuid") for s in squad_list]
+            squad_uuids = [str(s.get("uuid") or "").lower() for s in squad_list]
             limit = int(d.get("trafficLimitBytes") or 0)
             used = int((d.get("userTraffic") or {}).get("usedTrafficBytes") or d.get("usedTrafficBytes") or 0)
             status = d.get("status")
@@ -139,7 +151,11 @@ async def main() -> None:
             print(f"    сквады   : {squads or 'ПУСТО'}")
             if not squads:
                 print("    ► ПРИЧИНА: сквадов нет — подписка отдаст пустой список серверов.")
-                print("      Задайте «Сквад-резерв» в админке (или верните человеку его сквады).")
+                print("      Задайте «Сквад-резерв» в админке — это сервер для входа в Telegram.")
+            elif reserve_squad and squad_uuids != [reserve_squad]:
+                print("    ► ПРИЧИНА: человек НЕ на сквад-резерве, а на обычных серверах.")
+                print("      Это полный доступ вместо входа в Telegram. Почасовой крон")
+                print("      переведёт его сам; если не перевёл — ищите «reserve:» в логах.")
             elif status != "ACTIVE":
                 print(f"    ► ПРИЧИНА: статус {status}, а не ACTIVE — панель не отдаёт конфиги.")
             elif limit and used >= limit:
