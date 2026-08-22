@@ -258,7 +258,30 @@ async def grant_subscription(
             if user.telegram_id:
                 candidates = await remnawave.get_users_by_telegram_id(user.telegram_id)
             if not candidates and user.email:
-                candidates = await remnawave.get_users_by_email(user.email)
+                # ВНИМАНИЕ: в службе метод называется get_user_by_email — в
+                # ЕДИНСТВЕННОМ числе, хотя в протоколе объявлен во множественном.
+                # Здесь звали множественный, получали AttributeError, и вся ветка
+                # спасения обрывалась: у веб-пользователя без телеграма это
+                # единственный способ найти его в панели, поэтому выдача подписки
+                # падала с «Не удалось создать пользователя в Remnawave», хотя
+                # пользователь в панели был.
+                by_email = getattr(remnawave, "get_user_by_email", None) or getattr(
+                    remnawave, "get_users_by_email", None
+                )
+                if by_email is not None:
+                    candidates = await by_email(user.email) or []
+            if not candidates:
+                # Последняя и самая надёжная попытка — по имени. Оно у нас
+                # детерминированное (rs_web_<id> для веб-пользователей), поэтому
+                # находит даже тех, у кого ни телеграма, ни совпадения по почте.
+                try:
+                    found = await remnawave.sdk.users.get_user_by_username(
+                        f"rs_web_{user.id}"
+                    )
+                    if found is not None:
+                        candidates = [found]
+                except Exception:  # noqa: BLE001 — нет такого имени, идём дальше
+                    candidates = []
             if candidates:
                 remna_user = await remnawave.update_user(
                     user=user, uuid=candidates[0].uuid, plan=snapshot, reset_traffic=True,

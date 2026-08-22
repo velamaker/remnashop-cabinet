@@ -1406,6 +1406,17 @@ export default function AdminUsersPage() {
         <h1 className="text-2xl font-bold tracking-tight text-fg">Пользователи</h1>
         <div className="flex items-center gap-3">
           <span className="hidden text-sm text-fg-muted sm:inline">{total} всего</span>
+          {/* Обновить список. Без неё оставалось только перезагружать страницу
+              целиком — а это сбрасывает фильтры, поиск и позицию в списке. */}
+          <button
+            onClick={load}
+            disabled={loading}
+            className="inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-overlay disabled:opacity-50"
+            title="Обновить список (фильтры и поиск сохранятся)"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            <span className="hidden sm:inline">Обновить</span>
+          </button>
           {can("users.export") && (
           <button
             onClick={handleExport}
