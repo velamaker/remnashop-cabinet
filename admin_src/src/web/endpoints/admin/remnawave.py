@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from remnapy.models.nodes import RestartAllNodesRequestBodyDto
 
 from src.application.common import Remnawave
+from src.infrastructure.services.overlay_panel_compat import empty_body_ok
 from src.web.endpoints.public.appearance import ASSETS_DIR
 
 from ._common import AdminUser
@@ -120,7 +121,11 @@ async def restart_node(
     try:
         sdk = _sdk(remnawave)
         # Параметр SDK — `uuid` (path). С `node_uuid=` был TypeError → 502.
-        await sdk.nodes.restart_node(uuid=node_uuid)
+        # В 3.x рестарт принят асинхронно: 202 БЕЗ тела, и разбор JSON падает
+        # уже ПОСЛЕ успешного статуса — иначе оператор видел бы 502 на удавшийся
+        # рестарт. На 2.x тело есть, поведение прежнее.
+        async with empty_body_ok(sdk):
+            await sdk.nodes.restart_node(uuid=node_uuid)
         return {"success": True}
     except HTTPException:
         raise
@@ -137,7 +142,9 @@ async def restart_all_nodes(
     try:
         sdk = _sdk(remnawave)
         # SDK требует body (forceRestart, по умолчанию false) — без него TypeError → 502.
-        await sdk.nodes.restart_all_nodes(body=RestartAllNodesRequestBodyDto())
+        # В 3.x массовый рестарт отвечает 202 без тела (см. restart_node выше).
+        async with empty_body_ok(sdk):
+            await sdk.nodes.restart_all_nodes(body=RestartAllNodesRequestBodyDto())
         return {"success": True}
     except HTTPException:
         raise

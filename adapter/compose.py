@@ -2345,7 +2345,17 @@ def _short_uuid(url: str) -> str:
 
 
 async def _panel_uuid(ctx: Ctx) -> str | None:
-    """UUID пользователя в панели. None = панели нет, подписки нет или ссылка пустая."""
+    """Идентификатор пользователя для маршрутов панели. None = сопоставить нечем.
+
+    Значение уходит ровно в один путь — `/api/bandwidth-stats/users/{...}`, и от
+    версии панели зависит, что там должно стоять. До Remnawave 3.0 это `uuid`,
+    начиная с 3.0 колонка `users.uuid` дропнута и все маршруты берут числовой `id`.
+
+    Ветвимся по ФАКТУ наличия поля, а не по опрошенной версии: панель адаптера
+    настраивается отдельно от нашей и может быть любой из двух. Читать `uuid`
+    безусловно нельзя — на 3.x его просто нет, мы вернули бы None, и у человека
+    молча пропал бы график расхода при полностью исправной панели.
+    """
     if not ctx.has_panel:
         return None
     sub = (await ctx.json("/cabinet/subscription", {}) or {}).get("subscription") or {}
@@ -2357,11 +2367,13 @@ async def _panel_uuid(ctx: Ctx) -> str | None:
     if hit and now - hit[0] < _UUID_TTL:
         return hit[1]
     user = await ctx.panel_json(f"/api/users/by-short-uuid/{short}", {}) or {}
-    uuid = user.get("uuid") if isinstance(user, dict) else None
-    if not uuid:
+    if not isinstance(user, dict):
         return None
-    _uuid_cache[short] = (now, str(uuid))
-    return str(uuid)
+    ident = user.get("uuid") or user.get("id")
+    if not ident:
+        return None
+    _uuid_cache[short] = (now, str(ident))
+    return str(ident)
 
 
 async def _panel_usage(ctx: Ctx) -> dict[str, Any]:

@@ -383,8 +383,8 @@ async def _bot_users(ctx: Ctx) -> list[dict[str, Any]]:
 
 
 async def _panel_index(ctx: Ctx) -> dict[str, dict[str, Any]]:
-    """Записи панели, разложенные по `shortUuid`: uuid (по нему берётся расход) и
-    статус подписки.
+    """Записи панели, разложенные по `shortUuid`: идентификатор (по нему берётся
+    расход) и статус подписки.
 
     `ctx.panel_json` любую беду превращает в default, поэтому пустой ответ на
     ПЕРВОЙ странице разбираем отдельно: «панель не ответила» и «в панели нет
@@ -418,7 +418,13 @@ async def _panel_index(ctx: Ctx) -> dict[str, dict[str, Any]]:
             key = str(row.get("shortUuid") or "")
             if key:
                 found[key] = {
-                    "uuid": str(row.get("uuid") or ""),
+                    # Идентификатор для маршрутов панели: до Remnawave 3.0 это
+                    # `uuid`, с 3.0 колонка дропнута и остался числовой `id`.
+                    # Ветвимся по наличию поля — панель адаптера настраивается
+                    # отдельно и может быть любой из двух версий. Читать один лишь
+                    # `uuid` нельзя: на 3.x он пуст у ВСЕХ, и месячная сводка молча
+                    # перестала бы уходить кому бы то ни было.
+                    "uuid": str(row.get("uuid") or row.get("id") or ""),
                     "status": str(row.get("status") or "").upper(),
                 }
         start += len(rows)
@@ -536,7 +542,7 @@ def _examine(
         elif entry["status"] != "ACTIVE":
             record["skip"] = "подписка в панели не активна"
         elif not entry["uuid"]:
-            record["skip"] = "в панели нет uuid"
+            record["skip"] = "в панели нет идентификатора"
         elif not user.get("telegram_id"):
             # Канал у дайджеста один — телеграм бота. Web Push тут нет и взяться
             # ему неоткуда, поэтому человек с одной лишь почтой недостижим.

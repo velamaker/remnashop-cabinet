@@ -38,6 +38,7 @@ from src.application.common import Notifier, Remnawave
 from src.application.dto import MessagePayloadDto
 from src.core.config import AppConfig
 from src.core.enums import Role
+from src.infrastructure.services.overlay_panel_compat import empty_body_ok
 from src.infrastructure.taskiq.broker import broker
 
 ASSETS_DIR = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets"))
@@ -116,7 +117,10 @@ async def _restart_node_via_sdk(remnawave: Remnawave, uuid: str) -> bool:
             return False
         # ВАЖНО: параметр SDK называется `uuid` (path-параметр). С `node_uuid=`
         # вызов падал TypeError ещё до запроса — авто-рестарт молча не работал.
-        await sdk.nodes.restart_node(uuid=uuid)
+        # В 3.x рестарт отвечает 202 без тела: без этой обёртки удавшийся рестарт
+        # уходил бы в лог как «не удался», а владельцу — алерт о неудаче.
+        async with empty_body_ok(sdk):
+            await sdk.nodes.restart_node(uuid=uuid)
         return True
     except Exception as e:  # noqa: BLE001
         logger.warning(f"node_health: авто-рестарт {uuid} не удался: {e}")
