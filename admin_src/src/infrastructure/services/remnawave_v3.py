@@ -98,7 +98,6 @@ from remnapy.models import (
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from src.core.constants import REMNASHOP_PREFIX, WEB_PREFIX
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Синтетический uuid
@@ -364,7 +363,22 @@ class RemnaIdentityMap:
         return panel_id
 
     async def _recover(self, key: UUID) -> Optional[int]:
-        """Довосстановление промаха: наша база → живая ручка панели → запомнить."""
+        """Довосстановление промаха: наша база → живая ручка панели → запомнить.
+
+        ТОЛЬКО ПО КОРОТКОМУ UUID. Имя в панели (`rs_<telegram_id>`) сюда просится, но
+        оно опознаёт ЧЕЛОВЕКА, а не ту запись панели, на которую ссылалась наша строка.
+        Репетиция на копии боевой базы показала цену этой разницы: из 317 наших uuid
+        десять — осколки старых подписок людей, которых в панели давно завели заново.
+        По имени они «восстанавливались» и указывали на ДЕЙСТВУЮЩУЮ запись владельца
+        (четыре разных наших uuid сошлись на одном id), то есть операция по мёртвой
+        строке — снятие доступа, удаление, выдача резерва — прилетела бы живой подписке.
+        Сегодня такая строка честно получает 404, и это правильное поведение.
+
+        Короткий uuid уникален для КОНКРЕТНОЙ записи панели и меняется при отзыве
+        подписки, поэтому совпадение по нему — совпадение записи, а не однофамильца.
+        Легитимный случай, ради которого ступень и нужна (человек заведён на 2.8.x уже
+        ПОСЛЕ снятия снимка), им покрывается полностью: ссылка подписки у него свежая.
+        """
         hints = await self._hints(key)
         if hints is None:
             logger.warning(
@@ -373,46 +387,48 @@ class RemnaIdentityMap:
             )
             return None
 
-        short_uuid, username = hints
-
-        # Короткий uuid берём первым: он приходит из сохранённой ссылки подписки, и мы
-        # сами её переписываем при отзыве — значит он актуален. Имя в панели владелец
-        # мог поменять руками, поэтому оно запасное.
-        attempts = [
-            (f"/users/by-short-uuid/{short_uuid}", f"shortUuid={short_uuid}", short_uuid),
-            (f"/users/by-username/{username}", f"username={username}", username),
-        ]
-
-        for path, hint, value in attempts:
-            if not value:
-                continue
-            try:
-                found = _unwrap(await _call(self._client, "GET", path))
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(f"remnawave-3x: восстановление '{key}' по {hint} не вышло: {exc}")
-                continue
-
-            panel_id = (found or {}).get("id")
-            if panel_id is None:
-                continue
-
-            panel_id = int(panel_id)
+        short_uuid = hints
+        if not short_uuid:
             logger.warning(
-                f"remnawave-3x: uuid '{key}' отсутствовал в снимке и восстановлен "
-                f"по {hint} → id={panel_id}; пара сохранена"
+                f"remnawave-3x: у uuid '{key}' нет сохранённой ссылки подписки — "
+                f"опознать запись панели нечем"
             )
-            await self.remember(
-                key,
-                panel_id,
-                username=found.get("username"),
-                short_uuid=found.get("shortUuid"),
+            return None
+
+        try:
+            found = _unwrap(
+                await _call(self._client, "GET", f"/users/by-short-uuid/{short_uuid}")
             )
-            return panel_id
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                f"remnawave-3x: восстановление '{key}' по shortUuid={short_uuid} "
+                f"не вышло: {exc}"
+            )
+            return None
 
-        return None
+        panel_id = (found or {}).get("id")
+        if panel_id is None:
+            return None
 
-    async def _hints(self, key: UUID) -> Optional[tuple[str, str]]:
-        """Короткий uuid и ожидаемое имя в панели — по нашим собственным таблицам."""
+        panel_id = int(panel_id)
+        logger.warning(
+            f"remnawave-3x: uuid '{key}' отсутствовал в снимке и восстановлен "
+            f"по shortUuid={short_uuid} → id={panel_id}; пара сохранена"
+        )
+        await self.remember(
+            key,
+            panel_id,
+            username=found.get("username"),
+            short_uuid=found.get("shortUuid"),
+        )
+        return panel_id
+
+    async def _hints(self, key: UUID) -> Optional[str]:
+        """Короткий uuid ЭТОЙ записи — из сохранённой у нас ссылки подписки.
+
+        Имя в панели тут не строится сознательно: см. docstring `_recover` — оно
+        опознаёт человека, а не запись, и уводит старые строки на чужую подписку.
+        """
         # ДВА разных параметра под одно и то же значение — не дублирование, а
         # необходимость. `subscriptions.user_remna_id` имеет тип uuid, а
         # `reserve_grants.remna_uuid` и `subscription_freezes.remna_uuid` — varchar.
@@ -462,15 +478,8 @@ class RemnaIdentityMap:
         if row is None:
             return None
 
-        user_id, telegram_id, sub_url = row
-        short_uuid = str(sub_url or "").rstrip("/").rsplit("/", 1)[-1]
-        # Имя строим ровно так же, как UserDto.remna_name, иначе искать бесполезно.
-        if telegram_id is not None:
-            username = f"{REMNASHOP_PREFIX}{telegram_id}"
-        else:
-            username = f"{REMNASHOP_PREFIX}{WEB_PREFIX}{user_id}"
-
-        return short_uuid, username
+        _user_id, _telegram_id, sub_url = row
+        return str(sub_url or "").rstrip("/").rsplit("/", 1)[-1]
 
     # ── запись ───────────────────────────────────────────────────────────────
 
