@@ -200,13 +200,33 @@ def _healthcheck_urls() -> list[str]:
 
 
 async def _check_url(url: str) -> Optional[int]:
-    """HTTP-код URL-а (None — если недоступен/таймаут)."""
-    try:
-        async with AsyncClient(timeout=Timeout(10.0), follow_redirects=True) as cl:
-            r = await cl.get(url)
-            return r.status_code
-    except Exception:
-        return None
+    """HTTP-код URL-а (None — если недоступен/таймаут).
+
+    [OVERLAY] Пробуем НЕСКОЛЬКО раз, а не один. Раньше одной сорвавшейся попытки
+    хватало, чтобы разбудить владельца: в ленте уведомлений каждый такой случай
+    длился ровно один цикл проверки (5 минут) и закрывался «снова отвечает» —
+    то есть кабинет не падал, а моргал один запрос. Причины моргания житейские:
+    перезапуск контейнера при выкатке, секундная заминка Caddy, потеря пакета.
+    Живой замер с сервера бота: 12 запросов подряд — 0 провалов, среднее 0.01 с.
+
+    Настоящее падение переживёт все попытки и всё равно приедет алертом, просто
+    на десяток секунд позже.
+    """
+    attempts = max(1, _env_int("NODE_HEALTH_URL_RETRIES", 3))
+    last: Optional[int] = None
+    for i in range(attempts):
+        try:
+            async with AsyncClient(timeout=Timeout(10.0), follow_redirects=True) as cl:
+                r = await cl.get(url)
+                # 5xx — тоже беда, но повторяем: сервис мог перезапускаться.
+                if r.status_code < 500:
+                    return r.status_code
+                last = r.status_code
+        except Exception:
+            last = None
+        if i + 1 < attempts:
+            await asyncio.sleep(3)
+    return last
 
 
 # ── Диагностика «что именно не работает» ────────────────────────────────────
