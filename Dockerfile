@@ -35,13 +35,19 @@ RUN pip --python /opt/remnashop/.venv/bin/python install --no-cache-dir --upgrad
       "python-dotenv==1.2.2"
 
 # aiohttp/cryptography упирались в КОНСЕРВАТИВНЫЕ пины (aiogram<3.14, remnapy<47).
-# Проверено в рантайме: aiogram 3.25 работает с aiohttp 3.14, remnapy — с cryptography 49
+# Проверено в рантайме: aiogram 3.25 работает с aiohttp 3.14, remnapy — с cryptography 50
 # (импорты + aiohttp-клиент + app-фабрика + доставка сообщений/Remnawave-вызовы ок).
 # Ставим НОВЕЙШИЕ (0 CVE), обходя пины через --no-deps (их sub-deps уже удовлетворены).
 # pip печатает warning о нарушении пина — это ожидаемо, установка успешна.
+#
+# cryptography 50: в 49 остаётся GHSA-g6cj-pr64-35w5 — расшифровка PKCS#7 EnvelopedData
+# отвечала различимо и по тексту ошибки, и по времени, давая оракул Блайхенбахера.
+# У нас эта ветка не вызывается ни своим кодом, ни зависимостями (проверено поиском
+# `pkcs7` по всему venv), то есть дыра неэксплуатируема — но держать заведомо
+# уязвимую версию в образе, который ставят себе другие, незачем.
 RUN pip --python /opt/remnashop/.venv/bin/python install --no-cache-dir --no-deps --upgrade \
       "aiohttp==3.14.3" \
-      "cryptography==49.0.0"
+      "cryptography==50.0.0"
 
 # Совместимость с Remnawave 2.8+: панель сменила контракты (hwid userUuid→userId,
 # host tag→tags и регистр xHttpExtraParams) → remnapy 2.7.0 роняет ValidationError
