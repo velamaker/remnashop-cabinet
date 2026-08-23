@@ -33,11 +33,6 @@
       "reason": "правки меню бота"
     },
     {
-      "path": "src/telegram/routers/subscription/promocode_handlers.py",
-      "base_sha256": "406a1813fe113dcd0194df765362c807fd72605c3bf99cda5e79cf6212f4aa38",
-      "reason": "двойное подтверждение при активации промокода на подарок"
-    },
-    {
       "path": "src/web/endpoints/public/subscription.py",
       "base_sha256": "6bb615b43cb2f9086fc0bf763cda8df31239a7fd5d65751433e03380253a3e2f",
       "reason": "выдача подписки веб-пользователю, резервный доступ, алиасы ссылок"

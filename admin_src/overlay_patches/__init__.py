@@ -36,7 +36,7 @@ taskiq и pip, и падение на старте превратило бы п�
 from __future__ import annotations
 
 import hashlib
-import inspect
+import pathlib
 import sys
 import textwrap
 from typing import Any, Callable
@@ -59,24 +59,57 @@ def applied() -> list[str]:
     return list(_applied)
 
 
-def expect_source(func: Any, sha256_hex: str, what: str) -> None:
+def expect_source(module: Any, qualname: str, sha256_hex: str, what: str) -> None:
     """Убедиться, что код бота, который мы собираемся заменить, тот самый.
 
-    Замена метода целиком повторяет и те строки, которых мы не меняли, — ровно как
-    копия файла, только объёмом в один метод вместо трёхсот строк. Значит остаётся
-    та же опасность: апстрим поправит что-то ВНУТРИ метода, а наша версия это
-    затрёт. Отличие в том, что здесь мы это ловим: сверяем исходник по хэшу и, если
-    он другой, отказываемся молча подменять.
+    Замена метода повторяет и те строки, которых мы не меняли, — ровно как копия
+    файла, только объёмом в один метод. Значит остаётся та же опасность: апстрим
+    поправит что-то ВНУТРИ, а наша версия это затрёт. Отличие в том, что здесь мы
+    это ловим — и отказываемся подменять молча.
 
-    Отступы снимаем — метод внутри класса иначе даёт разный текст в зависимости от
-    вложенности, а нас интересует его содержимое, а не место в файле.
+    Читаем ИСХОДНЫЙ ФАЙЛ модуля и достаём функцию разбором, а не `inspect` по
+    объекту. Причина конкретная: обработчики бота обёрнуты декоратором `@inject`
+    из dishka, который подменяет функцию своей и НЕ проставляет `__wrapped__`, —
+    `inspect.getsource` в таком случае показывает код самой dishka, а не бота,
+    и сверять было бы нечего.
+
+    Декораторы включаем в текст: они часть контракта (сменится `@inject` на что-то
+    другое — нам это тоже важно знать). Отступы снимаем, чтобы метод внутри класса
+    сверялся по содержимому, а не по месту в файле.
     """
-    try:
-        source = textwrap.dedent(inspect.getsource(func))
-    except (OSError, TypeError) as exc:
-        raise PatchTargetChanged(f"{what}: не удалось прочитать исходник ({exc})") from exc
+    import ast
 
-    actual = hashlib.sha256(source.encode()).hexdigest()
+    path = getattr(module, "__file__", None)
+    if not path:
+        raise PatchTargetChanged(f"{what}: у модуля нет файла, сверить исходник нечем")
+
+    try:
+        source = pathlib.Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise PatchTargetChanged(f"{what}: не удалось прочитать {path} ({exc})") from exc
+
+    lines = source.splitlines(keepends=True)
+    want = qualname.split(".")
+    found: str | None = None
+
+    def walk(nodes: list, prefix: list[str]) -> None:
+        nonlocal found
+        for node in nodes:
+            if isinstance(node, ast.ClassDef):
+                walk(node.body, prefix + [node.name])
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if prefix + [node.name] == want:
+                    first = min([d.lineno for d in node.decorator_list] + [node.lineno])
+                    found = textwrap.dedent("".join(lines[first - 1 : node.end_lineno]))
+
+    walk(ast.parse(source).body, [])
+
+    if found is None:
+        raise PatchTargetChanged(
+            f"{what}: в {path} больше нет {qualname} — база перестроила этот код"
+        )
+
+    actual = hashlib.sha256(found.encode()).hexdigest()
     if actual != sha256_hex:
         raise PatchTargetChanged(
             f"{what}: апстрим ИЗМЕНИЛ этот код. Ожидался {sha256_hex[:12]}…, "
@@ -129,6 +162,11 @@ def install() -> None:
             "подарок не сжигает дни",
             "src.application.use_cases.promocode.commands.activate",
             "promocode_gift_days",
+        ),
+        (
+            "второе подтверждение подарка",
+            "src.telegram.routers.subscription.promocode_handlers",
+            "promocode_gift_confirm",
         ),
     )
 

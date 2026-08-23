@@ -57,7 +57,14 @@ def apply() -> str:
     if getattr(original, "_overlay_wrapped", False):
         return "уже заменён"
 
-    expect_source(original, BASE_METHOD_SHA256, "ActivatePromocode._apply_subscription")
+    import src.application.use_cases.promocode.commands.activate as target
+
+    expect_source(
+        target,
+        "ActivatePromocode._apply_subscription",
+        BASE_METHOD_SHA256,
+        "ActivatePromocode._apply_subscription",
+    )
 
     async def _apply_subscription(
         self,
