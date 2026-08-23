@@ -3,19 +3,9 @@
   "comment": "Файлы базового образа, которые overlay ЗАМЕЩАЕТ своей копией. Всё остальное в admin_src/src — чистые добавления, базы они не касаются. Список проверяет scripts/check-base-contact.py: новый замещённый файл без записи здесь и любое изменение файла в апстриме роняют проверку, чтобы правка не потерялась молча.",
   "files": [
     {
-      "path": "src/application/use_cases/gateways/commands/payment.py",
-      "base_sha256": "6e0636950bd4bb6119ee058863db93ba93a5a524a2caf81894dd95a7a625e78a",
-      "reason": "ветка пополнения ₽-баланса через шлюз и подарок, оплаченный шлюзом"
-    },
-    {
       "path": "src/infrastructure/services/command.py",
       "base_sha256": "62db06394b1bf86515293df973da8003e508eb4f3ffcc6401c47b7a644e6881f",
       "reason": "команда /gift в меню бота — ОСТАВЛЕНА КОПИЕЙ по решению владельца (не трогать)"
-    },
-    {
-      "path": "src/infrastructure/services/email_sender.py",
-      "base_sha256": "c38449c8df0ea704f8bd13d64c2cbe02d5f5ab03791e28df76ff6c2dbe58c970",
-      "reason": "логотип сервиса в шапке письма, свои шаблоны"
     },
     {
       "path": "src/infrastructure/services/notification.py",

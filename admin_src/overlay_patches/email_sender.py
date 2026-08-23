@@ -1,12 +1,32 @@
+"""Своя отправка почты: письма в фирменном оформлении и запасной канал Brevo.
+
+ЧТО ДЕЛАЕМ. Базовый отправитель шлёт обычным SMTP простой текст. У нас письмо
+подтверждения — свёрстанное, с логотипом сервиса в шапке и переводом по языку
+получателя; плюс есть второй канал через API Brevo, когда SMTP-порты закрыты
+хостером. Настройки при этом читаются не только из окружения, но и из админки.
+
+ПОЧЕМУ ПОДКЛАСС, А НЕ КОПИЯ ФАЙЛА И НЕ НАБОР ПРАВОК. Здесь переписан почти весь
+класс — набор правок выродился бы в ту же копию, только раскиданную по методам.
+Зато отправитель создаётся через DI: база объявляет
+`provide(source=SmtpEmailSender, provides=EmailSender)`, то есть берёт класс ПО
+ИМЕНИ в момент, когда выполняется её модуль провайдеров. Значит достаточно
+подставить своё имя раньше — и наследоваться от базового, чтобы всё, чего мы не
+трогали, продолжало приезжать из базы.
+
+СВЕРКА ИСХОДНИКА нужна и подклассу: мы переопределяем `is_enabled` и `send`, и
+если апстрим изменит их смысл, наши версии это молча перекроют. Конструктор
+сверяем тоже — от него зависит, какие зависимости просит dishka.
+"""
+
+from __future__ import annotations
+
 import asyncio
 import os
 import re
 import smtplib
 from email.message import EmailMessage
-
 import httpx
 from loguru import logger
-
 from src.application.common.email_sender import EmailSender
 from src.core.config import AppConfig
 from src.core.constants import EMAIL_VERIFICATION_SUBJECT
@@ -14,18 +34,24 @@ from src.core.exceptions import EmailDeliveryError
 from src.infrastructure.services.email_settings import load_email_settings
 from src.infrastructure.services.email_template_config import fill, load_email_template
 
-# На этом хостинге исходящие SMTP-порты (25/465/587) заблокированы провайдером,
-# поэтому письма уходят через HTTP API Brevo (порт 443, всегда открыт).
-# Если EMAIL_BREVO_API_KEY задан — используем Brevo; иначе откатываемся на SMTP.
+from src.infrastructure.services.email_sender import SmtpEmailSender as BaseSmtpEmailSender
+
+from . import PatchTargetChanged, expect_source
+
+# sha256 методов базы v0.8.2, которые мы перекрываем.
+BASE_METHODS = {
+    "SmtpEmailSender.__init__": "f0096fd15ac848ca959600e14e3ba04bcc6f440b7bcbc2f942247072d2ac76ab",
+    "SmtpEmailSender.is_enabled": "e33dba68668af84eadd1ee3debcc3903e7cda28a490841011823689745b24fe7",
+    "SmtpEmailSender.send": "c73e2d69d17214fce61d75d93f64b2074ce76bf5add8bf0b53253bd6fb9cf0e9",
+}
+
+
 BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
 
-# Русские тексты письма с кодом подтверждения (без хардкода бренда — он резолвится).
 RU_VERIFICATION_SUBJECT = "Код подтверждения"
-
 
 def _brevo_api_key() -> str:
     return (os.environ.get("EMAIL_BREVO_API_KEY") or "").strip()
-
 
 def _logo_src() -> str:
     """Абсолютный URL логотипа сервиса для письма (или '' — если логотип не задан).
@@ -47,12 +73,10 @@ def _logo_src() -> str:
     except Exception:
         return ""
 
-
 def _escape(text: str) -> str:
     return (
         text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     )
-
 
 def _text_to_html(body: str) -> str:
     """Простейшая обёртка plain-text → HTML."""
@@ -63,7 +87,6 @@ def _text_to_html(body: str) -> str:
         f"{safe}"
         "</div>"
     )
-
 
 def _render_verification(body: str, from_name: str) -> tuple[str, str, str]:
     """
@@ -145,7 +168,9 @@ def _render_verification(body: str, from_name: str) -> tuple[str, str, str]:
     return subject, text, html
 
 
-class SmtpEmailSender(EmailSender):
+class OverlaySmtpEmailSender(BaseSmtpEmailSender):
+    """Отправитель писем кабинета. Всё, что не переопределено, — поведение базы."""
+
     def __init__(self, config: AppConfig) -> None:
         self._config = config
 
@@ -244,3 +269,24 @@ class SmtpEmailSender(EmailSender):
                 client.ehlo()
             client.login(smtp_user, smtp_password)
             client.send_message(message)
+
+
+def apply() -> str:
+    import src.infrastructure.services as services
+
+    current = getattr(services, "SmtpEmailSender", None)
+    if current is None:
+        raise PatchTargetChanged(
+            "в src.infrastructure.services нет имени SmtpEmailSender — база "
+            "перестроила отправку почты, письма кабинета потеряют оформление"
+        )
+    if current is OverlaySmtpEmailSender:
+        return "уже подставлен"
+
+    import src.infrastructure.services.email_sender as target
+
+    for qualname, sha in BASE_METHODS.items():
+        expect_source(target, qualname, sha, qualname)
+
+    services.SmtpEmailSender = OverlaySmtpEmailSender
+    return "письма в оформлении кабинета (+ запасной канал Brevo)"

@@ -164,6 +164,16 @@ def install() -> None:
             "promocode_gift_days",
         ),
         (
+            "пополнение и подарок через шлюз",
+            "src.application.use_cases.gateways.commands.payment",
+            "gateway_payment",
+        ),
+        (
+            "письма в оформлении кабинета",
+            "src.infrastructure.services",
+            "email_sender",
+        ),
+        (
             "баллы рефералки и кэшбэк",
             "src.application.use_cases.referral.commands.rewards",
             "referral_rewards",
