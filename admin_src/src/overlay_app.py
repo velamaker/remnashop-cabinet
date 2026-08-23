@@ -28,7 +28,18 @@ from loguru import logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from src.__main__ import application as _base_application
+import src.__main__ as _base_entry
+
+# Базовую фабрику берём из тайника, который оставляет overlay_patches/entrypoint.py.
+# Прямой импорт `application` тут больше нельзя: это имя ПОДМЕНЕНО нашей же обёрткой
+# (так `src.__main__:application` из скрипта запуска отдаёт кабинет, не трогая сам
+# скрипт), и вызов по нему увёл бы приложение в бесконечную рекурсию.
+_base_application = getattr(_base_entry, "_overlay_base_application", None)
+if _base_application is None:  # правка не применилась — падаем громко, а не тихо
+    raise RuntimeError(
+        "overlay: базовая фабрика приложения не найдена. Правка entrypoint не "
+        "применилась — см. overlay_patches/entrypoint.py"
+    )
 from src.core.config import AppConfig
 from src.core.constants import API_V1
 

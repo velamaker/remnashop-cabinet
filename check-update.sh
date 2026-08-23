@@ -50,9 +50,41 @@ fi
 info "Контакт overlay с исходниками бота…"
 ./scripts/check-base-contact.py "$TAG" || die "Контакт с базой разошёлся с манифестом (см. выше)"
 
-info "Сборка образа (sed-патч точки входа проверяется здесь же)…"
-docker build -f "$DF" --build-arg BASE_TAG="$TAG" -t "$IMG" . >/dev/null || die "Сборка упала (возможно, sed точки входа не сматчился на новом base)"
-ok "Образ собран, точка входа overlay на месте"
+info "Сборка образа…"
+docker build -f "$DF" --build-arg BASE_TAG="$TAG" -t "$IMG" . >/dev/null || die "Сборка упала"
+ok "Образ собран"
+
+# Скрипт запуска бота мы больше не переписываем: он зовёт src.__main__:application,
+# а эта фабрика сама отдаёт кабинет. Проверяем оба конца — что файл побайтово равен
+# базовому И что через него поднимается именно наше приложение. Одного мало: файл
+# может совпасть при неприменившейся правке, и тогда вместо кабинета встанет голый бот.
+info "Точка входа: скрипт бота не тронут, приложение — наше…"
+BASE_SUM="$(docker run --rm --entrypoint sh "ghcr.io/snoups/remnashop:${TAG}" -c 'sha256sum docker-entrypoint.sh' | awk '{print $1}')"
+OURS_SUM="$(docker run --rm --entrypoint sh "$IMG" -c 'sha256sum docker-entrypoint.sh' | awk '{print $1}')"
+[ "$BASE_SUM" = "$OURS_SUM" ] || die "docker-entrypoint.sh отличается от базового — кто-то снова его правит"
+docker run --rm --env-file .env --network remnawave-network "$IMG" \
+  sh -c 'python -c "
+import src.__main__ as entry
+paths = entry.application().openapi()[\"paths\"]
+assert any(p.startswith(\"/api/v1/admin/\") for p in paths), \"через src.__main__ поднялся НЕ кабинет\"
+"' >/dev/null || die "src.__main__:application не отдаёт кабинет — правка точки входа не применилась"
+ok "Скрипт запуска базовый, приложение наше"
+
+# Ни один файл бота не должен отличаться от базового образа. Проверка по всему
+# образу, а не по одним исходникам: раньше сборка правила и скрипт запуска, и
+# переводы, и это было видно только глазами. Библиотеки в venv исключены сознательно —
+# их мы обновляем ради безопасности, это отдельное решение.
+info "Образ: файлы бота не изменены…"
+docker run --rm --entrypoint sh "ghcr.io/snoups/remnashop:${TAG}" -c \
+  'find /opt/remnashop -type f -not -path "*/.venv/*" -not -path "*/__pycache__/*" -not -name "*.pyc" -not -path "*/logs/*" -not -path "*/backups/*" -exec sha256sum {} \;' 2>/dev/null | sort -k2 > /tmp/_base_files.txt
+docker run --rm --entrypoint sh "$IMG" -c \
+  'find /opt/remnashop -type f -not -path "*/.venv/*" -not -path "*/__pycache__/*" -not -name "*.pyc" -not -path "*/logs/*" -not -path "*/backups/*" -exec sha256sum {} \;' 2>/dev/null | sort -k2 > /tmp/_ours_files.txt
+CHANGED="$(join -j 2 /tmp/_base_files.txt /tmp/_ours_files.txt | awk '$2 != $3 {print $1}')"
+if [ -n "$CHANGED" ]; then
+  printf '%s\n' "$CHANGED" | sed 's/^/    /' >&2
+  die "перечисленные файлы бота изменены сборкой — кабинет должен ставиться ПОВЕРХ, не трогая их"
+fi
+ok "Файлы бота совпадают с базовым образом"
 
 info "Проверка alembic: должен быть РОВНО один head…"
 HEADS="$(docker run --rm "$IMG" sh -c 'alembic -c src/infrastructure/database/alembic.ini heads 2>/dev/null' | grep -c '(head)')"

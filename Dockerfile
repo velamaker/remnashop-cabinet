@@ -64,17 +64,12 @@ RUN pip --python /opt/remnashop/.venv/bin/python install --no-cache-dir --no-dep
 COPY scripts/patch-remnapy-2.8.py /opt/remnashop/scripts/patch-remnapy-2.8.py
 RUN /opt/remnashop/.venv/bin/python /opt/remnashop/scripts/patch-remnapy-2.8.py
 
-# Русские переводы базы, разделители тысяч и пустая почта: Fluent печатал числа как
-# «123 456 789» прямо внутри tg://user?id= (тап по @нику не открывал профиль) и в
-# адресе узла в алертах («example.com:2 222»), а у людей из панели выводилась
-# бессмысленная строка «Почта: 0». Через assets/translations/ru/custom.ftl это
-# НЕ чинится: фрагменты подставляются в event-*/msg-* на этапе компиляции внутри
-# базового бандла, оверрайд отдельным бандлом их не перебивает. Патчим сами
-# assets.default (fail-closed: блок не найден — билд падает). scripts/patch-translations-ru.py.
-COPY scripts/patch-translations-ru.py /opt/remnashop/scripts/patch-translations-ru.py
-RUN /opt/remnashop/.venv/bin/python /opt/remnashop/scripts/patch-translations-ru.py
+# Переводы бота НЕ правим на диске. Раньше здесь работал скрипт, который менял
+# assets.default/translations/ru/*.ftl прямо в образе. Те же исправления теперь
+# вносятся в памяти, в момент сборки бандла переводов — см.
+# admin_src/overlay_patches/translations_ru.py. Файлы бота остаются базовыми.
 
-# Правки поведения бота, которые НЕ замещают его файлы (см. overlay_patches/__init__.py).
+# Правки поведения бота, которые НЕ трогают его файлы (см. overlay_patches/__init__.py).
 # Подключаются через sitecustomize.py — его импортирует сам интерпретатор, до любого
 # кода приложения, поэтому правки видят ВСЕ процессы: бот, веб, taskiq-воркер и
 # планировщик (у них разные точки входа, общего места в коде приложения нет).
@@ -91,9 +86,7 @@ COPY VERSION /opt/remnashop/VERSION
 # Курируемый список изменений — его читает лента обновлений в админке.
 COPY CHANGELOG.md /opt/remnashop/CHANGELOG.md
 
-# Точку входа uvicorn переключаем на overlay-обёртку (src/overlay_app.py),
-# которая вызывает базовый application() и добавляет admin/public-роуты + таблицы
-# поддержки. Если строка точки входа в base изменится и sed не сматчится —
-# grep уронит билд сразу (а не молча в рантайме).
-RUN sed -i 's#src\.__main__:application#src.overlay_app:application#g' docker-entrypoint.sh \
- && grep -q 'src.overlay_app:application' docker-entrypoint.sh
+# Точку входа НЕ переписываем: `docker-entrypoint.sh` бота остаётся побайтово таким
+# же, как в базовом образе. Он зовёт `src.__main__:application`, а эта фабрика сама
+# отдаёт кабинет — см. admin_src/overlay_patches/entrypoint.py. Раньше здесь стоял
+# sed по строке запуска, то есть сборка меняла файл бота.
