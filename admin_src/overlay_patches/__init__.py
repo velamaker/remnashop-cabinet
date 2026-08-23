@@ -215,11 +215,27 @@ def install() -> None:
         ),
     )
 
+    # Правки запасной копии бэкенда: у них по три разные цели, поэтому идут
+    # отдельным списком с явным именем функции.
+    replica = (
+        ("запасная копия: без дублей о боте", "src.infrastructure.services.event_bus", "apply"),
+        ("запасная копия: меню команд", "src.infrastructure.services.command", "apply_commands"),
+        ("запасная копия: вебхук", "src.infrastructure.services.webhook", "apply_webhook"),
+    )
+
     for name, target, patch_module in plan:
         on_import(
             target,
             lambda n=name, m=patch_module: _run(
                 n, lambda: import_module(f".{m}", __package__).apply()
+            ),
+        )
+
+    for name, target, func in replica:
+        on_import(
+            target,
+            lambda n=name, f=func: _run(
+                n, lambda: getattr(import_module(".web_replica", __package__), f)()
             ),
         )
 
