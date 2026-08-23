@@ -174,6 +174,11 @@ def install() -> None:
             "email_sender",
         ),
         (
+            "уведомления в стиле кабинета",
+            "src.infrastructure.services.notification",
+            "notifications",
+        ),
+        (
             "баллы рефералки и кэшбэк",
             "src.application.use_cases.referral.commands.rewards",
             "referral_rewards",

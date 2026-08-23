@@ -8,11 +8,6 @@
       "reason": "команда /gift в меню бота — ОСТАВЛЕНА КОПИЕЙ по решению владельца (не трогать)"
     },
     {
-      "path": "src/infrastructure/services/notification.py",
-      "base_sha256": "e68d15e6c30ef949e77290bce31a024fc93b3da30a5e9c1f2750bdf867eb9ddd",
-      "reason": "уведомления в стиле кабинета (rich HTML) + тумблер возврата к старым"
-    },
-    {
       "path": "src/telegram/routers/menu/dialog.py",
       "base_sha256": "3a27e094d1ccb82a9a1f30d86e4c8fb73c032c41927c86963f48b5e8a24dcccf",
       "reason": "правки меню бота"

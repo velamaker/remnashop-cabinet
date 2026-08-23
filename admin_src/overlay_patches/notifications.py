@@ -1,3 +1,33 @@
+"""Уведомления в стиле кабинета и защита от «дребезга» узлов.
+
+ЧТО ДЕЛАЕМ, три вещи:
+
+  • сообщения владельцу и пользователям верстаются в оформлении кабинета
+    (rich-HTML телеграма) вместо простого текста базы, с тумблером возврата к
+    прежнему виду из админки;
+  • пользовательские события дублируются в web-push (PWA/iOS) — телеграма и почты
+    базы для человека, поставившего кабинет на телефон, недостаточно;
+  • алерт «узел отвалился» выдерживает паузу: узел, моргнувший на секунды,
+    поднимает и гасит тревогу быстрее, чем владелец успеет её прочитать, поэтому
+    сообщение уходит, только если узел не вернулся за отведённое время.
+
+ПОЧЕМУ ПОДКЛАСС, НО НЕ ПОДМЕНА КЛАССА. Перекрываются три метода и добавляются два
+своих — набор точечных правок был бы тут ничем не лучше копии файла, поэтому пишем
+наследника: так видно, что наше, а что базовое. Но НА МЕСТО базового класса он не
+встаёт, а отдаёт ему свои методы.
+
+Причина конкретная. База объявляет службу как
+`provide(NotificationService, provides=AnyOf[Notifier, NotificationService])` —
+то есть КЛАСС стоит и в источнике, и в списке предоставляемых типов. Подставь мы
+своё имя, контейнер начал бы выдавать наследника под типом наследника, а
+`notification_queue.py` запрашивает у контейнера именно БАЗОВЫЙ
+`NotificationService` — и получил бы отказ «нет такой фабрики», то есть очередь
+уведомлений встала бы целиком. Перенос методов оставляет тип нетронутым: снаружи
+класс тот же самый, меняется только его поведение.
+"""
+
+from __future__ import annotations
+
 import asyncio
 import base64
 import os
@@ -6,7 +36,6 @@ import traceback
 from dataclasses import asdict
 from datetime import datetime, timezone  # [OVERLAY] заглушка Message для rich-ветки
 from typing import Any, Callable, Optional, Sequence, Union
-
 from aiogram import Bot
 from aiogram.exceptions import (
     TelegramBadRequest,
@@ -27,7 +56,6 @@ from aiogram.types import (
 from aiogram.utils.formatting import Text
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from loguru import logger
-
 from src.application.common import EventPublisher, Notifier, TranslatorHub
 from src.application.common.dao import SettingsDao, UserDao
 from src.application.dto import (
@@ -95,6 +123,19 @@ from src.telegram.keyboards import (
 )
 from src.telegram.widgets import extract_tg_emoji
 
+from src.infrastructure.services.notification import (
+    NotificationService as BaseNotificationService,
+)
+
+from . import PatchTargetChanged, expect_source
+
+# sha256 методов базы v0.8.2, которые мы перекрываем.
+BASE_METHODS = {
+    "NotificationService.on_user_event": "288045e0707c3c101372583cb48a2c825c167aa07585f0601797530ba7b4ef92",
+    "NotificationService.on_system_event": "17c0d9b309384a8367a4459910325a1bd31de6614fbe69330c4a1bc1a4791a0a",
+    "NotificationService._send_message": "e18747c6c6cfd21c2b37394bc44a9b2ebecfdf90e6b77b910453a52c387ea306",
+}
+
 
 def _push_title_body(raw: str) -> tuple[str, str]:
     """[OVERLAY] Из отрендеренного (HTML) текста уведомления делает title/body для
@@ -109,27 +150,14 @@ def _push_title_body(raw: str) -> tuple[str, str]:
     body = " ".join(parts[1:])[:180] if len(parts) > 1 else ""
     return (title, body)
 
-
-# [OVERLAY] Терпимость к коротким флапам нод.
-#
-# Панель считает ноду потерянной, если та не ответила за 15 секунд, и шлёт вебхук
-# CONNECTION_LOST. На плохом транзите (случай Германии 4 августа: пачки потерь по
-# 40-60 секунд) это даёт десяток пар «потеряна/восстановлена» в час, хотя нода жива
-# и юзеры работают. Поэтому сообщение о потере придерживаем: если связь вернулась
-# в течение NODE_FLAP_GRACE_SEC, владелец не узнаёт ни о потере, ни о восстановлении.
-# Реальное падение (связь не вернулась) доезжает как раньше, только с задержкой.
-#
-# Состояние держим на уровне модуля, а не инстанса: DI может пересоздать сервис,
-# а отложенная задача должна видеть тот же словарь.
 _NODE_FLAP_STATE: dict[str, dict[str, Any]] = {}
-_NODE_FLAP_LOCK = asyncio.Lock()
 
+_NODE_FLAP_LOCK = asyncio.Lock()
 
 def _node_flap_enabled() -> bool:
     return (os.environ.get("NODE_FLAP_TOLERANCE") or "true").strip().lower() in (
         "1", "true", "yes", "on", "да",
     )
-
 
 def _node_flap_grace_sec() -> int:
     """Сколько секунд ждать восстановления, прежде чем будить владельца."""
@@ -138,106 +166,11 @@ def _node_flap_grace_sec() -> int:
     except ValueError:
         return 180
 
-
-# [OVERLAY] Сколько минимум живёт самоудаляющееся уведомление. База ставит
-# delete_after=5 по умолчанию — за пять секунд фразу вроде «Синхронизация
-# подписки выполнена» не успеваешь прочитать, остаётся ощущение, что что-то
-# мелькнуло и пропало. Владелец попросил 30.
 _MIN_DELETE_AFTER = 30
 
 
-class NotificationService(Notifier):
-    def __init__(
-        self,
-        bot: Bot,
-        config: AppConfig,
-        translator_hub: TranslatorHub,
-        user_dao: UserDao,
-        settings_dao: SettingsDao,
-        worker: NotificationWorker,
-        event_publisher: EventPublisher,
-    ) -> None:
-        self.bot = bot
-        self.config = config
-        self.translator_hub = translator_hub
-        self.user_dao = user_dao
-        self.settings_dao = settings_dao
-        self.worker = worker
-        self.event_publisher = event_publisher
-
-    async def notify_user(
-        self,
-        user: Union[TempUserDto, UserDto],
-        payload: Optional[MessagePayloadDto] = None,
-        i18n_key: Optional[str] = None,
-    ) -> Optional[Message]:
-        if not payload and i18n_key:
-            payload = MessagePayloadDto(i18n_key=i18n_key)
-
-        if not payload:
-            raise ValueError(
-                f"Failed to notify user '{user.telegram_id}' because no payload or key provided"
-            )
-
-        return await self._send_message(user, payload)
-
-    async def notify_admins(
-        self,
-        payload: MessagePayloadDto,
-        roles: list[Role] = [Role.OWNER, Role.DEV, Role.ADMIN],
-    ) -> None:
-        await self.worker.enqueue(NotificationTaskDto(payload=payload, roles=roles))
-
-    def _resolve_keyboard(self, event: "BaseEvent") -> "Optional[AnyKeyboard]":
-        if isinstance(
-            event,
-            (
-                SubscriptionLimitedEvent,
-                SubscriptionExpiredEvent,
-                SubscriptionExpiredAgoEvent,
-                SubscriptionExpiresEvent,
-            ),
-        ):
-            return get_buy_keyboard() if event.is_trial else get_renew_keyboard()
-        if isinstance(event, UserNotConnectedEvent):
-            return get_contact_support_keyboard(event.support_url)
-        if isinstance(event, TorrentBlockedEvent):
-            return get_contact_support_keyboard(event.support_url)
-        if isinstance(event, TorrentBlockerReportEvent):
-            return get_user_keyboard(event.user_id)
-        if isinstance(event, RemnashopWelcomeEvent):
-            return get_remnashop_keyboard()
-        if isinstance(event, BotUpdateEvent):
-            return get_remnashop_update_keyboard()
-        if isinstance(event, UserRegisteredEvent):
-            return get_user_keyboard(event.user_id, event.referrer_user_id)
-        if isinstance(event, BlacklistRegistrationAttemptEvent):
-            return get_user_keyboard(event.user_id)
-        if isinstance(
-            event,
-            (
-                UserFirstConnectionEvent,
-                UserDevicesUpdatedEvent,
-                UserPurchaseEvent,
-                TrialActivatedEvent,
-                SubscriptionRevokedEvent,
-                PromocodeActivatedEvent,
-            ),
-        ):
-            return get_user_keyboard(event.user_id)
-        return None
-
-    @on_event(RemnashopWelcomeEvent)
-    async def on_remnashop_welcome_event(self, event: RemnashopWelcomeEvent) -> None:
-        logger.info(f"Received '{event.event_type}' event")
-        payload = event.as_payload()
-        payload.reply_markup = self._resolve_keyboard(event)
-        await self.notify_admins(payload, roles=[Role.OWNER, Role.DEV])
-
-    @on_event(NotificationErrorEvent)
-    async def on_notification_error_event(self, event: NotificationErrorEvent) -> None:
-        logger.info(f"Received '{event.event_type}' event")
-        await self.notify_admins(event.as_payload(), roles=[Role.OWNER, Role.DEV])
+class OverlayNotificationService(BaseNotificationService):
+    """Уведомления кабинета. Всё, что не перекрыто, — поведение базы."""
 
     @on_event(UserEvent)
     async def on_user_event(self, event: UserEvent) -> None:
@@ -294,234 +227,6 @@ class NotificationService(Notifier):
         payload = event.as_payload()
         payload.reply_markup = self._resolve_keyboard(event)
         await self.notify_system(payload, notification_type=event.notification_type)
-
-    # ── [OVERLAY] Терпимость к флапам нод ────────────────────────────────────────
-    async def _node_flap_gate(
-        self,
-        event: Union[NodeConnectionLostEvent, NodeConnectionRestoredEvent],
-    ) -> bool:
-        """True — отправлять сейчас, False — придержать/проглотить.
-
-        «Потеряна» откладывается на NODE_FLAP_GRACE_SEC: если за это время придёт
-        «восстановлена», обе новости выбрасываем. Если не придёт — отложенная задача
-        отправит сообщение о потере, и тогда последующее «восстановлена» уйдёт как
-        обычно (иначе владелец остался бы с ноды, которая «упала и не вернулась»).
-        """
-        if not _node_flap_enabled():
-            return True
-
-        key = f"{event.name}|{event.address}"
-
-        async with _NODE_FLAP_LOCK:
-            state = _NODE_FLAP_STATE.get(key)
-
-            if isinstance(event, NodeConnectionLostEvent):
-                if state is not None:
-                    # Нода уже числится проблемной: либо ждём выдержку, либо о ней
-                    # уже сообщено. Повторные «потеряна» — шум, глушим.
-                    return False
-                task = asyncio.create_task(self._node_flap_deferred_alert(key, event))
-                _NODE_FLAP_STATE[key] = {"alerted": False, "task": task}
-                logger.info(
-                    f"[OVERLAY] Node '{event.name}' lost, holding alert for "
-                    f"{_node_flap_grace_sec()}s"
-                )
-                return False
-
-            # NodeConnectionRestoredEvent
-            if state is None:
-                # Про потерю не сообщали (перезапуск процесса, тумблер был выключен) —
-                # молча пропускаем: «восстановлена» без «потеряна» только путает.
-                return False
-
-            _NODE_FLAP_STATE.pop(key, None)
-            task = state.get("task")
-            if task is not None and not task.done():
-                task.cancel()
-
-            if not state.get("alerted"):
-                logger.info(f"[OVERLAY] Node '{event.name}' recovered within grace, alert dropped")
-                return False
-
-            return True
-
-    async def _node_flap_deferred_alert(
-        self,
-        key: str,
-        event: NodeConnectionLostEvent,
-    ) -> None:
-        """Ждёт выдержку и, если связь не вернулась, всё-таки сообщает о потере."""
-        try:
-            await asyncio.sleep(_node_flap_grace_sec())
-        except asyncio.CancelledError:
-            return
-
-        async with _NODE_FLAP_LOCK:
-            state = _NODE_FLAP_STATE.get(key)
-            if state is None:
-                return
-            state["alerted"] = True
-            state["task"] = None
-
-        try:
-            settings: SettingsDto = await self.settings_dao.get()
-            if not settings.notifications.is_enabled(event.notification_type):
-                return
-            payload = event.as_payload()
-            payload.reply_markup = self._resolve_keyboard(event)
-            await self.notify_system(payload, notification_type=event.notification_type)
-            logger.info(f"[OVERLAY] Node '{event.name}' still down after grace, alert sent")
-        except Exception as exc:  # noqa: BLE001 — задача фоновая, падать молча нельзя
-            logger.error(f"[OVERLAY] Deferred node alert failed for '{event.name}': {exc}")
-
-    @on_event(ErrorEvent)
-    async def on_error_event(self, event: ErrorEvent) -> None:
-        logger.info(f"Received '{event.event_type}' event")
-
-        error_type = type(event.exception).__name__
-        error_message = Text(str(event.exception)[:512])
-
-        traceback_str = "".join(
-            traceback.format_exception(
-                type(event.exception),
-                event.exception,
-                event.exception.__traceback__,
-            )
-        )
-
-        from src.core.logger import log_buffer  # noqa: PLC0415
-
-        log_context = log_buffer.get_context()
-        file_content = (
-            "=== LOG CONTEXT (last 100 lines) ===\n\n"
-            f"{log_context}\n\n"
-            "=== EXCEPTION ===\n\n"
-            f"{traceback_str}"
-        )
-
-        media = MediaDescriptorDto(
-            kind="bytes",
-            value=base64.b64encode(file_content.encode("utf-8")).decode(),
-            filename=f"error_{event.event_id}.txt",
-        )
-
-        await self.notify_system(
-            event.as_payload(media, error_type, error_message),
-            roles=[Role.OWNER, Role.DEV],
-            notification_type=event.notification_type,
-        )
-
-    async def notify_system(
-        self,
-        payload: MessagePayloadDto,
-        roles: list[Role] = [Role.OWNER, Role.DEV, Role.ADMIN],
-        notification_type: Optional[NotificationType] = None,
-    ) -> None:
-        route = None
-        if notification_type:
-            settings: SettingsDto = await self.settings_dao.get()
-            route = settings.notifications.resolve_route(notification_type)
-
-        if route and route.is_configured:
-            await self._send_to_route(payload, route)
-        else:
-            await self.notify_admins(payload, roles=roles)
-
-    async def _send_to_route(
-        self,
-        payload: MessagePayloadDto,
-        route: SystemNotificationRouteDto,
-    ) -> None:
-        chat_id = route.chat_id
-        thread_id = route.effective_thread_id
-
-        locale = self.config.default_locale
-        text = self._get_translated_text(
-            locale=locale,
-            i18n_key=payload.i18n_key,
-            i18n_kwargs=payload.i18n_kwargs,
-        )
-
-        reply_markup = (
-            self._translate_keyboard_text(payload.reply_markup, locale)
-            if payload.reply_markup is not None
-            else None
-        )
-
-        try:
-            if payload.is_text:
-                await self.bot.send_message(
-                    chat_id=chat_id,  # type:ignore[arg-type]
-                    text=text,
-                    message_thread_id=thread_id,
-                    disable_web_page_preview=True,
-                    disable_notification=payload.disable_notification,
-                    reply_markup=reply_markup,
-                )
-            elif payload.media:
-                method = self._get_media_method(payload)
-                if not method:
-                    logger.warning(f"Unknown media type for payload '{payload}'")
-                    return
-                media = self._build_media(payload.media)
-                await method(
-                    chat_id,
-                    media,
-                    caption=text,
-                    message_thread_id=thread_id,
-                    disable_notification=payload.disable_notification,
-                    reply_markup=reply_markup,
-                )
-            else:
-                logger.error(f"Payload must contain text or media for route {chat_id}:{thread_id}")
-
-        except (
-            TelegramForbiddenError,
-            TelegramBadRequest,
-            TelegramNotFound,
-            TelegramMigrateToChat,
-            TelegramUnauthorizedError,
-        ) as e:
-            logger.error(f"Failed to send system notification to route {chat_id}:{thread_id}: {e}")
-            await self.event_publisher.publish(
-                NotificationErrorEvent(
-                    chat_id=chat_id,
-                    thread_id=thread_id,
-                    reason=str(e),
-                )
-            )
-
-    async def delete_notification(self, chat_id: int, message_id: int) -> None:
-        try:
-            await self.bot.delete_message(chat_id=chat_id, message_id=message_id)
-            logger.debug(f"Notification '{message_id}' for chat '{chat_id}' deleted")
-        except Exception as e:
-            logger.error(f"Failed to delete notification '{message_id}': {e}")
-            await self._clear_reply_markup(chat_id, message_id)
-
-    async def _process_task(self, task: NotificationTaskDto) -> None:
-        users = await self.user_dao.filter_by_role(task.roles)
-
-        if not users:
-            temp_owner = [TempUserDto.as_temp_owner(telegram_id=self.config.bot.owner_id)]
-
-        await self._broadcast(users or temp_owner, task.payload)
-
-    async def _broadcast(
-        self,
-        users: Sequence[Union[TempUserDto, UserDto]],
-        payload: MessagePayloadDto,
-    ) -> None:
-        logger.debug(f"Starting broadcast to '{len(users)}' users")
-
-        results = await asyncio.gather(
-            *(self._send_message(user, payload) for user in users),
-            return_exceptions=True,
-        )
-
-        for user, result in zip(users, results):
-            if isinstance(result, Exception):
-                logger.error(f"Broadcast failed for user {user.log}: {result}")
 
     async def _send_message(
         self,
@@ -751,135 +456,105 @@ class NotificationService(Notifier):
             logger.exception(f"Failed to send notification to {user.log}: {e}")
             raise
 
-    def _get_media_method(self, payload: MessagePayloadDto) -> Optional[Callable[..., Any]]:
-        if payload.is_photo:
-            return self.bot.send_photo
-
-        if payload.is_video:
-            return self.bot.send_video
-
-        if payload.is_document:
-            return self.bot.send_document
-
-        if payload.is_animation:
-            return self.bot.send_animation
-
-        return None
-
-    def _get_translated_text(
+    async def _node_flap_gate(
         self,
-        locale: Locale,
-        i18n_key: str,
-        i18n_kwargs: dict[str, Any] = {},
-    ) -> str:
-        if not i18n_key:
-            return ""
+        event: Union[NodeConnectionLostEvent, NodeConnectionRestoredEvent],
+    ) -> bool:
+        """True — отправлять сейчас, False — придержать/проглотить.
 
-        i18n = self.translator_hub.get_translator_by_locale(locale)
-        translated_text = i18n.get(i18n_key, **i18n_kwargs)
+        «Потеряна» откладывается на NODE_FLAP_GRACE_SEC: если за это время придёт
+        «восстановлена», обе новости выбрасываем. Если не придёт — отложенная задача
+        отправит сообщение о потере, и тогда последующее «восстановлена» уйдёт как
+        обычно (иначе владелец остался бы с ноды, которая «упала и не вернулась»).
+        """
+        if not _node_flap_enabled():
+            return True
 
-        if i18n_key == "raw-message":
-            if "$" in translated_text and i18n_kwargs:
-                template = string.Template(translated_text)
-                return template.safe_substitute(i18n_kwargs)
+        key = f"{event.name}|{event.address}"
 
-        return translated_text
+        async with _NODE_FLAP_LOCK:
+            state = _NODE_FLAP_STATE.get(key)
 
-    def _prepare_reply_markup(
+            if isinstance(event, NodeConnectionLostEvent):
+                if state is not None:
+                    # Нода уже числится проблемной: либо ждём выдержку, либо о ней
+                    # уже сообщено. Повторные «потеряна» — шум, глушим.
+                    return False
+                task = asyncio.create_task(self._node_flap_deferred_alert(key, event))
+                _NODE_FLAP_STATE[key] = {"alerted": False, "task": task}
+                logger.info(
+                    f"[OVERLAY] Node '{event.name}' lost, holding alert for "
+                    f"{_node_flap_grace_sec()}s"
+                )
+                return False
+
+            # NodeConnectionRestoredEvent
+            if state is None:
+                # Про потерю не сообщали (перезапуск процесса, тумблер был выключен) —
+                # молча пропускаем: «восстановлена» без «потеряна» только путает.
+                return False
+
+            _NODE_FLAP_STATE.pop(key, None)
+            task = state.get("task")
+            if task is not None and not task.done():
+                task.cancel()
+
+            if not state.get("alerted"):
+                logger.info(f"[OVERLAY] Node '{event.name}' recovered within grace, alert dropped")
+                return False
+
+            return True
+
+    async def _node_flap_deferred_alert(
         self,
-        reply_markup: Optional[AnyKeyboard],
-        disable_default_markup: bool,
-        delete_after: Optional[int],
-        locale: Locale,
-        chat_id: int,
-    ) -> Optional[AnyKeyboard]:
-        close_keyboard = self._get_default_keyboard(get_close_notification_button())
-
-        if reply_markup is None:
-            if not disable_default_markup and delete_after is None:
-                return self._translate_keyboard_text(close_keyboard, locale)
-            return None
-
-        translated_markup = self._translate_keyboard_text(reply_markup, locale)
-
-        if disable_default_markup or delete_after is not None:
-            return translated_markup
-
-        if isinstance(translated_markup, InlineKeyboardMarkup):
-            builder = InlineKeyboardBuilder.from_markup(translated_markup)
-            builder.row(get_close_notification_button())
-            return self._translate_keyboard_text(builder.as_markup(), locale)
-
-        logger.warning(
-            f"Unsupported reply_markup type '{type(reply_markup).__name__}' "
-            f"for chat '{chat_id}', close button skipped"
-        )
-        return translated_markup
-
-    def _get_default_keyboard(self, button: InlineKeyboardButton) -> InlineKeyboardMarkup:
-        builder = InlineKeyboardBuilder([[button]])
-        return builder.as_markup()
-
-    def _translate_keyboard_text(self, keyboard: AnyKeyboard, locale: Locale) -> AnyKeyboard:
-        if isinstance(keyboard, InlineKeyboardMarkup):
-            i_rows = []
-            for i_row in keyboard.inline_keyboard:
-                i_buttons = []
-                for i_btn in i_row:
-                    btn_dict = i_btn.model_dump()
-                    translated = self._get_translated_text(locale, i_btn.text) or i_btn.text
-                    clean_text, emoji_id = extract_tg_emoji(translated)
-                    btn_dict["text"] = clean_text
-                    if emoji_id and not btn_dict.get("icon_custom_emoji_id"):
-                        btn_dict["icon_custom_emoji_id"] = emoji_id
-                    i_buttons.append(InlineKeyboardButton(**btn_dict))
-                i_rows.append(i_buttons)
-            return InlineKeyboardMarkup(inline_keyboard=i_rows)
-
-        if isinstance(keyboard, ReplyKeyboardMarkup):
-            r_rows = []
-            for r_row in keyboard.keyboard:
-                r_buttons = []
-                for r_btn in r_row:
-                    btn_dict = r_btn.model_dump()
-                    btn_dict["text"] = self._get_translated_text(locale, r_btn.text) or r_btn.text
-                    r_buttons.append(type(r_btn)(**btn_dict))
-                r_rows.append(r_buttons)
-            return ReplyKeyboardMarkup(keyboard=r_rows, **keyboard.model_dump(exclude={"keyboard"}))
-
-        return keyboard
-
-    async def _schedule_message_deletion(self, chat_id: int, message_id: int, delay: int) -> None:
-        logger.debug(f"Schedule msg '{message_id}' deletion in chat '{chat_id}' after '{delay}'s")
-        await asyncio.sleep(delay)
-        await self.delete_notification(chat_id, message_id)
-
-    async def _clear_reply_markup(self, chat_id: int, message_id: int) -> None:
+        key: str,
+        event: NodeConnectionLostEvent,
+    ) -> None:
+        """Ждёт выдержку и, если связь не вернулась, всё-таки сообщает о потере."""
         try:
-            logger.debug(f"Attempting to remove keyboard from notification '{message_id}'")
-            await self.bot.edit_message_reply_markup(
-                chat_id=chat_id,
-                message_id=message_id,
-                reply_markup=None,
-            )
-            logger.debug(f"Keyboard removed from notification '{message_id}'")
-        except Exception as e:
-            logger.error(f"Failed to remove keyboard from '{message_id}': {e}")
+            await asyncio.sleep(_node_flap_grace_sec())
+        except asyncio.CancelledError:
+            return
 
-    def _build_media(self, media: MediaDescriptorDto) -> Union[str, BufferedInputFile, FSInputFile]:
-        if media.kind == "file_id":
-            return media.value
+        async with _NODE_FLAP_LOCK:
+            state = _NODE_FLAP_STATE.get(key)
+            if state is None:
+                return
+            state["alerted"] = True
+            state["task"] = None
 
-        if media.kind == "fs":
-            return FSInputFile(
-                path=media.value,
-                filename=media.filename,
-            )
+        try:
+            settings: SettingsDto = await self.settings_dao.get()
+            if not settings.notifications.is_enabled(event.notification_type):
+                return
+            payload = event.as_payload()
+            payload.reply_markup = self._resolve_keyboard(event)
+            await self.notify_system(payload, notification_type=event.notification_type)
+            logger.info(f"[OVERLAY] Node '{event.name}' still down after grace, alert sent")
+        except Exception as exc:  # noqa: BLE001 — задача фоновая, падать молча нельзя
+            logger.error(f"[OVERLAY] Deferred node alert failed for '{event.name}': {exc}")
 
-        if media.kind == "bytes":
-            return BufferedInputFile(
-                file=base64.b64decode(media.value),
-                filename=media.filename or "file.bin",
-            )
 
-        raise ValueError(f"Unsupported media kind '{media.kind}'")
+def apply() -> str:
+    import src.infrastructure.services.notification as target
+
+    if not hasattr(target, "NotificationService"):
+        raise PatchTargetChanged(
+            "в src.infrastructure.services.notification нет NotificationService — "
+            "база перестроила уведомления, оформление кабинета и web-push пропадут"
+        )
+    if getattr(target.NotificationService, "_overlay_wrapped", False):
+        return "уже применены"
+
+    for qualname, sha in BASE_METHODS.items():
+        expect_source(target, qualname, sha, qualname)
+
+    # Переносим методы на БАЗОВЫЙ класс, а не подставляем свой (см. docstring).
+    # super() в них не используется — иначе перенос сломал бы разрешение предка.
+    for name, value in vars(OverlayNotificationService).items():
+        if name.startswith("__"):
+            continue
+        setattr(target.NotificationService, name, value)
+
+    target.NotificationService._overlay_wrapped = True
+    return "оформление кабинета, web-push, пауза перед алертом об узле"
