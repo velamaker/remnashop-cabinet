@@ -78,6 +78,8 @@ def install() -> None:
         return
     _done = True
 
-    from . import panel_version
+    from . import bot_routers, panel_version, remnawave_sdk
 
     _run("потолок версии панели", panel_version.apply)
+    _run("свои разделы бота", bot_routers.apply)
+    _run("SDK панели по её версии", remnawave_sdk.apply)

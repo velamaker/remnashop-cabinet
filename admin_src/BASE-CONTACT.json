@@ -18,14 +18,9 @@
       "reason": "реф-награда POINTS начисляется баллами по курсу, кэшбэк покупателю, web-push рефереру"
     },
     {
-      "path": "src/infrastructure/di/providers/remnawave.py",
-      "base_sha256": "e5de9a88b4155794ca534bca62c252bf99845272039773556c177892967f065e",
-      "reason": "выбор SDK по версии панели: 2.x — базовый, 3.x — слой совместимости"
-    },
-    {
       "path": "src/infrastructure/services/command.py",
       "base_sha256": "62db06394b1bf86515293df973da8003e508eb4f3ffcc6401c47b7a644e6881f",
-      "reason": "команда /gift в меню бота"
+      "reason": "команда /gift в меню бота — ОСТАВЛЕНА КОПИЕЙ по решению владельца (не трогать)"
     },
     {
       "path": "src/infrastructure/services/email_sender.py",
@@ -36,11 +31,6 @@
       "path": "src/infrastructure/services/notification.py",
       "base_sha256": "e68d15e6c30ef949e77290bce31a024fc93b3da30a5e9c1f2750bdf867eb9ddd",
       "reason": "уведомления в стиле кабинета (rich HTML) + тумблер возврата к старым"
-    },
-    {
-      "path": "src/telegram/dispatcher.py",
-      "base_sha256": "37bab73270dd7782f8069490ae3578a3ff3c3d0284dc0d9f8b47e0e84f32ebde",
-      "reason": "подключение приватного раздела абьюза (команда /abuse, только владельцу)"
     },
     {
       "path": "src/telegram/routers/menu/dialog.py",
