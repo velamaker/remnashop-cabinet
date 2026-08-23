@@ -74,6 +74,13 @@ RUN /opt/remnashop/.venv/bin/python /opt/remnashop/scripts/patch-remnapy-2.8.py
 COPY scripts/patch-translations-ru.py /opt/remnashop/scripts/patch-translations-ru.py
 RUN /opt/remnashop/.venv/bin/python /opt/remnashop/scripts/patch-translations-ru.py
 
+# Правки поведения бота, которые НЕ замещают его файлы (см. overlay_patches/__init__.py).
+# Подключаются через sitecustomize.py — его импортирует сам интерпретатор, до любого
+# кода приложения, поэтому правки видят ВСЕ процессы: бот, веб, taskiq-воркер и
+# планировщик (у них разные точки входа, общего места в коде приложения нет).
+COPY admin_src/overlay_patches/ /opt/remnashop/overlay_patches/
+COPY scripts/sitecustomize.py /opt/remnashop/.venv/lib/python3.12/site-packages/sitecustomize.py
+
 # Overlay admin API files on top of the base image
 COPY admin_src/src/ /opt/remnashop/src/
 

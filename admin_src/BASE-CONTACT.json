@@ -18,11 +18,6 @@
       "reason": "реф-награда POINTS начисляется баллами по курсу, кэшбэк покупателю, web-push рефереру"
     },
     {
-      "path": "src/core/constants.py",
-      "base_sha256": "9bde800d61af39db4e65fbdf62a761ab0a0b236e0b5819e346462a75adba9d8e",
-      "reason": "REMNAWAVE_MAX_VERSION поднят до 3.4.0 (иначе алерт о несовместимости на каждом старте)"
-    },
-    {
       "path": "src/infrastructure/di/providers/remnawave.py",
       "base_sha256": "e5de9a88b4155794ca534bca62c252bf99845272039773556c177892967f065e",
       "reason": "выбор SDK по версии панели: 2.x — базовый, 3.x — слой совместимости"

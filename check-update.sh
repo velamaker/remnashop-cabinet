@@ -59,6 +59,19 @@ HEADS="$(docker run --rm "$IMG" sh -c 'alembic -c src/infrastructure/database/al
 [ "$HEADS" = "1" ] || die "Ожидался один alembic head, найдено: ${HEADS} (конфликт миграций base/overlay)"
 ok "alembic heads = 1"
 
+info "Правки поведения бота (overlay_patches)…"
+# Правка, которая не применилась, НЕ роняет интерпретатор (иначе сломались бы pip и
+# alembic), поэтому её отсутствие надо ловить именно здесь — иначе бот уедет в прод
+# на исходном поведении базы, и заметит это только владелец по симптомам.
+docker run --rm --env-file .env "$IMG" sh -c 'python -c "
+import overlay_patches as op, sys
+for line in op.applied(): print(\"  \" + line)
+if op.failures():
+    for name, why in op.failures(): print(f\"НЕ ПРИМЕНИЛАСЬ: {name}: {why}\", file=sys.stderr)
+    sys.exit(1)
+"' || die "overlay-правки не применились к этому base (подробности выше)"
+ok "Правки применились"
+
 info "Сборка FastAPI-приложения (импорты overlay против base)…"
 # Роуты считаем по openapi(), а НЕ обходом app.routes. С FastAPI 0.140 включённые
 # роутеры лежат в app.routes обёртками `_IncludedRouter` и плоского `path` у них нет —

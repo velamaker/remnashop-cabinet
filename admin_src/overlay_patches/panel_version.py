@@ -1,0 +1,60 @@
+"""Потолок поддерживаемой версии панели Remnawave.
+
+ЧТО ДЕЛАЕМ. База считает несовместимой любую панель `>= REMNAWAVE_MAX_VERSION` и
+на каждом старте шлёт владельцу `RemnawaveVersionWarningEvent`. Значение в базе —
+2.8.0, а кабинет с версии 1.2.0 умеет и 3.x (слой совместимости в
+`src/infrastructure/di/providers/remnawave.py`). Без правки владелец после апгрейда
+панели получал бы предупреждение о несовместимости там, где её нет, — при каждом
+запуске бота, то есть после каждого обновления и перезапуска.
+
+Гейт снизу (`REMNAWAVE_MIN_VERSION`) не трогаем: он настоящий, ниже 2.7 мы не
+работаем.
+
+ПОЧЕМУ ПРАВКОЙ, А НЕ КОПИЕЙ ФАЙЛА. Раньше ради этой одной строки overlay держал
+свою копию всего `src/core/constants.py` — 114 строк чужого кода, где остальные
+113 обязаны были совпадать с базой до буквы. Любая правка апстрима в этом файле
+(новая константа, изменённый паттерн, другой путь к ассетам) молча пропадала бы
+при обновлении базы. Здесь меняется ровно одно имя.
+
+ПОЧЕМУ ЭТО РАБОТАЕТ ДЛЯ ТЕХ, КТО ЧИТАЕТ КОНСТАНТУ ЧЕРЕЗ `from … import`.
+`src/lifespan.py` и `src/application/events/system.py` берут значение по имени в
+момент СВОЕГО импорта. Правка выполняется из `sitecustomize`, то есть до любого
+кода приложения, — к моменту их импорта в модуле уже лежит новое значение.
+"""
+
+from __future__ import annotations
+
+from packaging.version import Version
+
+from . import PatchTargetChanged
+
+# До какой версии панели кабинет проверен. Поднимать вместе с проверкой на стенде.
+SUPPORTED_MAX = Version("3.4.0")
+
+# Что мы ожидаем увидеть в базе. Совпадение — доказательство, что правим то самое
+# место и оно не переехало. Апстрим поднял потолок сам — тоже узнаем отсюда.
+EXPECTED_BASE_MAX = Version("2.8.0")
+
+
+def apply() -> str:
+    import src.core.constants as constants
+
+    current = getattr(constants, "REMNAWAVE_MAX_VERSION", None)
+    if current is None:
+        raise PatchTargetChanged(
+            "в src.core.constants больше нет REMNAWAVE_MAX_VERSION — "
+            "проверьте, как база теперь ограничивает версию панели"
+        )
+
+    if current == SUPPORTED_MAX:
+        return f"уже {SUPPORTED_MAX} (правка не понадобилась)"
+
+    if current != EXPECTED_BASE_MAX:
+        raise PatchTargetChanged(
+            f"в базе REMNAWAVE_MAX_VERSION = {current}, ожидалось {EXPECTED_BASE_MAX}. "
+            f"Апстрим менял потолок сам — сверьте, до какой версии панели проверен "
+            f"кабинет, и поправьте SUPPORTED_MAX/EXPECTED_BASE_MAX здесь"
+        )
+
+    constants.REMNAWAVE_MAX_VERSION = SUPPORTED_MAX
+    return f"{current} → {SUPPORTED_MAX}"
