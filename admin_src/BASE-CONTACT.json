@@ -8,11 +8,6 @@
       "reason": "ветка пополнения ₽-баланса через шлюз и подарок, оплаченный шлюзом"
     },
     {
-      "path": "src/application/use_cases/referral/commands/rewards.py",
-      "base_sha256": "52f9d3864438b1da5d8ca40220ee1824f02f80cad31f1eb97c2fec98f498a90a",
-      "reason": "реф-награда POINTS начисляется баллами по курсу, кэшбэк покупателю, web-push рефереру"
-    },
-    {
       "path": "src/infrastructure/services/command.py",
       "base_sha256": "62db06394b1bf86515293df973da8003e508eb4f3ffcc6401c47b7a644e6881f",
       "reason": "команда /gift в меню бота — ОСТАВЛЕНА КОПИЕЙ по решению владельца (не трогать)"

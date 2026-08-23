@@ -164,6 +164,11 @@ def install() -> None:
             "promocode_gift_days",
         ),
         (
+            "баллы рефералки и кэшбэк",
+            "src.application.use_cases.referral.commands.rewards",
+            "referral_rewards",
+        ),
+        (
             "второе подтверждение подарка",
             "src.telegram.routers.subscription.promocode_handlers",
             "promocode_gift_confirm",

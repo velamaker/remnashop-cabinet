@@ -1,11 +1,36 @@
-# OVERLAY (RемнаShop): реф-награда типа POINTS начисляется в БАЛЛАХ по курсу
+"""Реферальные награды баллами и кэшбэк покупателю.
+
+ЧТО ДЕЛАЕМ, две независимые вещи:
+
+  • Награда рефереру типа POINTS начисляется в БАЛЛАХ по курсу из настроек кэшбэка
+    (1 балл = N ₽, по умолчанию 7). База клала в баллы рублёвую сумму как есть, а у
+    нас балл дороже рубля — человек получал бы в разы больше положенного. Плюс
+    рефереру уходит web-push (PWA/iOS) вдобавок к телеграму и почте базы;
+    best-effort, наружу ничего не бросает.
+
+  • Кэшбэк ПОКУПАТЕЛЮ. Он к рефералке отношения не имеет, поэтому начисляется в
+    самом начале — ДО всех реферальных выходов по условию (выключенная рефералка,
+    не первый платёж, отсутствие пригласителя). Иначе покупатель без реферера
+    кэшбэка не получал бы вовсе.
+
+ПОЧЕМУ ЗАМЕНА МЕТОДОВ, А НЕ КОПИЯ ФАЙЛА. Раньше overlay держал копию всего файла;
+теперь заменяются четыре метода двух классов, а всё прочее приезжает из базы.
+
+ПРО КОНСТРУКТОРЫ. Оба класса создаёт dishka по аннотациям `__init__`, а наши
+версии просят на одну зависимость больше (сессию для push и вычисление баллов).
+Аннотации dishka разбирает через get_type_hints, а тот ищет имена в ГЛОБАЛЯХ
+модуля, где объявлена функция, — поэтому импорты ниже обязаны быть модульными,
+а не внутри apply(). Сам модуль подгружается лениво, когда бот дошёл до рефералки,
+так что на старте интерпретатора это ничего не стоит.
+"""
+
+from __future__ import annotations
+
 # 1 балл = 7 ₽. reward.amount при PERCENT = сумма_платежа × % (в ₽), поэтому в
 # баллы переводим делением на 7: points = round(reward.amount / 7).
 # Пример: платёж 700 ₽, L1=15% → 105 ₽ / 7 = 15 баллов (=105 ₽ при конвертации).
 # Дальше юзер сам конвертирует баллы в ₽-баланс в кабинете. Меняется ТОЛЬКО
 # коэффициент в ветке POINTS GiveReferrerReward. Остальное — как в базе.
-# ВНИМАНИЕ: файл перекрывает базовый — при обновлении базы сверять с оригиналом.
-from dataclasses import dataclass
 
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,17 +57,37 @@ from src.infrastructure.services.overlay_push import notify_user_push
 from src.core.enums import PurchaseType, ReferralAccrualStrategy, ReferralLevel, ReferralRewardType
 
 
-@dataclass(frozen=True)
-class GiveReferrerRewardDto:
-    user_id: int
-    reward: ReferralRewardDto
-    referred_name: str
+# Классы и DTO объявлены в самом модуле бота — берём их оттуда, а не переобъявляем:
+# у dishka и у вызывающего кода должны быть ТЕ ЖЕ типы, а не наши однофамильцы.
+# GiveReferrerReward здесь нужен как ТИП аргумента второго конструктора: dishka
+# разбирает аннотации по глобалям нашего модуля и без него не соберёт зависимость.
+from src.application.use_cases.referral.commands.rewards import (
+    AssignReferralRewardsDto,
+    GiveReferrerReward,
+    GiveReferrerRewardDto,
+)
+
+from . import PatchTargetChanged, expect_source
+
+# sha256 методов базы v0.8.2. Изменится — правка не применится и скажет, что именно.
+BASE_METHODS = {
+    "GiveReferrerReward.__init__": "588fb617109da364af3585567d5ec85ae1ea4fa71638af8de3c004e37aead9f8",
+    "GiveReferrerReward._execute": "b189f41b25d64f2412b5832a65dcafbd0bfd464c8b172dd2e2a7bcbf0818a8f6",
+    "AssignReferralRewards.__init__": "eb5287cc97e96c8b691cc87794fb333e892381de38b87301e9723694c60c7733",
+    "AssignReferralRewards._execute": "16034f8ac6b28b8f7e733aba703e3fcbbe0cdc3dfb215293cadd42fd00fb77eb",
+}
 
 
-class GiveReferrerReward(Interactor[GiveReferrerRewardDto, None]):
-    required_permission = None
+def apply() -> str:
+    import src.application.use_cases.referral.commands.rewards as target
 
-    def __init__(
+    if getattr(target.GiveReferrerReward.__init__, "_overlay_wrapped", False):
+        return "уже заменены"
+
+    for qualname, sha in BASE_METHODS.items():
+        expect_source(target, qualname, sha, qualname)
+
+    def GiveReferrerReward_init(
         self,
         uow: UnitOfWork,
         user_dao: UserDao,
@@ -63,7 +108,8 @@ class GiveReferrerReward(Interactor[GiveReferrerRewardDto, None]):
         # OVERLAY: сессия для best-effort web-push рефереру (см. конец _execute).
         self.session = session
 
-    async def _execute(self, actor: UserDto, data: GiveReferrerRewardDto) -> None:
+
+    async def GiveReferrerReward_execute(self, actor: UserDto, data: GiveReferrerRewardDto) -> None:
         reward = data.reward
 
         user = await self.user_dao.get_by_id(data.user_id)
@@ -169,16 +215,7 @@ class GiveReferrerReward(Interactor[GiveReferrerRewardDto, None]):
         )
 
 
-@dataclass(frozen=True)
-class AssignReferralRewardsDto:
-    user: UserDto
-    transaction: TransactionDto
-
-
-class AssignReferralRewards(Interactor[AssignReferralRewardsDto, None]):
-    required_permission = None
-
-    def __init__(
+    def AssignReferralRewards_init(
         self,
         uow: UnitOfWork,
         settings_dao: SettingsDao,
@@ -196,7 +233,8 @@ class AssignReferralRewards(Interactor[AssignReferralRewardsDto, None]):
         self.give_referrer_reward = give_referrer_reward
         self.change_user_points = change_user_points
 
-    async def _execute(self, actor: UserDto, data: AssignReferralRewardsDto) -> None:  # noqa: C901
+
+    async def AssignReferralRewards_execute(self, actor: UserDto, data: AssignReferralRewardsDto) -> None:  # noqa: C901
         # OVERLAY: кэшбэк ПОКУПАТЕЛЮ — независим от рефералки, поэтому начисляется
         # в самом начале, ДО всех реферальных early-return (выключенная рефералка,
         # не-NEW платёж, отсутствие реферера). best-effort, наружу не бросает.
@@ -292,3 +330,10 @@ class AssignReferralRewards(Interactor[AssignReferralRewardsDto, None]):
                     f"Failed to assign referral reward for level '{level.name}' "
                     f"to referrer '{referrer.remna_name}' — skipping this level"
                 )
+
+    GiveReferrerReward_init._overlay_wrapped = True  # type: ignore[attr-defined]
+    target.GiveReferrerReward.__init__ = GiveReferrerReward_init
+    target.GiveReferrerReward._execute = GiveReferrerReward_execute
+    target.AssignReferralRewards.__init__ = AssignReferralRewards_init
+    target.AssignReferralRewards._execute = AssignReferralRewards_execute
+    return "баллы по курсу настроек + кэшбэк покупателю"
