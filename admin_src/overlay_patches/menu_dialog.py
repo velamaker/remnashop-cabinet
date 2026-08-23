@@ -1,3 +1,21 @@
+"""Главное меню бота: кнопки доступа в кабинет и подарки.
+
+ЧТО ДЕЛАЕМ. Базовое меню про кабинет ничего не знает. Мы добавляем в него до пяти
+«кнопок доступа» (мини-приложение кабинета, кабинет в браузере, подключение
+устройств, резервная ссылка подписки, своя мини-аппа), кнопку «Подарить подписку»
+и оформление пунктов — какие показывать, в каком порядке и какими подписями,
+задаётся в админке.
+
+ПОЧЕМУ ЦЕЛИКОМ СВОЙ МОДУЛЬ. Здесь переписаны окна и сборка самого диалога, а не
+отдельные функции: точечные правки означали бы подмену почти каждого виджета.
+Зато подключение диалога — одна строка в базе (`menu.dialog.router` в списке
+роутеров), и объект она берёт ПО ИМЕНИ из модуля. Значит достаточно построить свой
+диалог здесь и подставить его на место базового до того, как список соберётся.
+
+Данные окна по-прежнему готовит базовый `menu_getter` из `menu/getters.py` — мы
+его вызываем, а не переписываем, и дополняем результат своими полями.
+"""
+
 from urllib.parse import urlsplit
 
 from aiogram.enums import ButtonStyle
@@ -33,15 +51,15 @@ from src.telegram.widgets.kbd import (
 )
 from src.telegram.window import Window
 
-from .getters import (
+from src.telegram.routers.menu.getters import (
     device_confirm_delete_getter,
     devices_getter,
     invite_about_getter,
     invite_getter,
     menu_getter as _base_menu_getter,
 )
-from .menu_config import DEFAULT_TEXTS, NAV_KEYS, load_menu_config, validate_custom_url
-from .handlers import (
+from src.telegram.routers.menu.menu_config import DEFAULT_TEXTS, NAV_KEYS, load_menu_config, validate_custom_url
+from src.telegram.routers.menu.handlers import (
     on_device_delete_all_confirm,
     on_device_delete_confirm,
     on_device_delete_request,
@@ -565,3 +583,26 @@ router = Dialog(
     invite,
     invite_about,
 )
+
+
+def apply() -> str:
+    """Подставить наш диалог на место базового.
+
+    Патчим сам модуль базы: `src/telegram/routers/__init__.py` читает
+    `menu.dialog.router` при сборке списка роутеров, то есть уже после нас.
+    """
+    from . import PatchTargetChanged
+
+    import src.telegram.routers.menu.dialog as target
+
+    if not hasattr(target, "router"):
+        raise PatchTargetChanged(
+            "в menu/dialog.py нет объекта router — база перестроила главное меню, "
+            "кнопки кабинета и подарков из него пропадут"
+        )
+    if getattr(target, "_overlay_wrapped", False):
+        return "уже подставлен"
+
+    target.router = router
+    target._overlay_wrapped = True
+    return "кнопки кабинета и подарков в главном меню"

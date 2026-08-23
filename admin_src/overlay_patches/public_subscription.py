@@ -1,3 +1,20 @@
+"""Публичные ручки подписки кабинета.
+
+ЧТО ДЕЛАЕМ. Базовый набор ручек рассчитан на пользователя телеграма. Кабинету
+нужно больше: выдать подписку человеку, зарегистрированному почтой (у него нет
+telegram_id, а панель требует имя), отдать резервный доступ истёкшему, подменить
+адрес ссылки подписки на наш алиас, проверить почту перед покупкой через шлюз.
+
+ПОЧЕМУ ЦЕЛИКОМ СВОЙ МОДУЛЬ. Здесь переписаны почти все ручки раздела — точечные
+правки означали бы подмену каждой из двенадцати. Зато подключение — одна строка
+в базе: `public/__init__.py` берёт `router` ПО ИМЕНИ из модуля и включает его.
+Значит достаточно собрать свой роутер здесь и подставить его на место базового
+до того, как выполнится включение.
+
+Пути и модели ответов совпадают с базовыми — снаружи это тот же раздел API,
+поэтому кабинету и мобильным клиентам ничего менять не нужно.
+"""
+
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -79,8 +96,8 @@ from src.web.schemas import (
     TrialActivateResponse,
 )
 
-from ._common import CurrentUser
-from .sub_alias import maybe_alias_url
+from src.web.endpoints.public._common import CurrentUser
+from src.web.endpoints.public.sub_alias import maybe_alias_url
 
 router = APIRouter(prefix="/subscription", tags=["Public - Subscription"])
 
@@ -748,3 +765,26 @@ async def get_subscription_offers(
             current_subscription.current_status.value if current_subscription else None
         ),
     )
+
+
+def apply() -> str:
+    """Подставить наш роутер на место базового.
+
+    Патчим сам модуль базы: `web/endpoints/public/__init__.py` читает из него имя
+    `router` и включает его в общий публичный роутер — то есть уже после нас.
+    """
+    from . import PatchTargetChanged
+
+    import src.web.endpoints.public.subscription as target
+
+    if not hasattr(target, "router"):
+        raise PatchTargetChanged(
+            "в public/subscription.py нет объекта router — база перестроила "
+            "публичные ручки подписки, кабинет потеряет выдачу и резерв"
+        )
+    if getattr(target, "_overlay_wrapped", False):
+        return "уже подставлен"
+
+    target.router = router
+    target._overlay_wrapped = True
+    return "выдача веб-пользователю, резерв, алиасы ссылок"

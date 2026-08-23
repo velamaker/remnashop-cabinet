@@ -131,6 +131,16 @@ def _run(name: str, fn: Callable[[], str]) -> None:
         )
     else:
         _applied.append(f"{name}: {detail}")
+        # Пишем в лог КАЖДОЕ применение, а не только отказы. Правка меняет поведение
+        # бота молча, и «сработала ли она в этом процессе» иначе не проверить ничем:
+        # процессов четыре, каждый импортирует своё, и правка, не нужная одному,
+        # обязана сработать в другом. Один INFO на правку за жизнь процесса.
+        try:
+            from loguru import logger
+
+            logger.info(f"Overlay: правка «{name}» применена — {detail}")
+        except Exception:  # noqa: BLE001 — логгер не обязан быть готов
+            pass
 
 
 def install() -> None:
@@ -157,6 +167,11 @@ def install() -> None:
     plan = (
         ("потолок версии панели", "src.core.constants", "panel_version"),
         ("свои разделы бота", "src.telegram.dispatcher", "bot_routers"),
+        (
+            "команда /gift в меню",
+            "src.infrastructure.services.command",
+            "bot_commands",
+        ),
         ("SDK панели по её версии", "src.infrastructure.di.providers", "remnawave_sdk"),
         (
             "подарок не сжигает дни",
@@ -172,6 +187,16 @@ def install() -> None:
             "письма в оформлении кабинета",
             "src.infrastructure.services",
             "email_sender",
+        ),
+        (
+            "публичные ручки подписки",
+            "src.web.endpoints.public.subscription",
+            "public_subscription",
+        ),
+        (
+            "главное меню бота",
+            "src.telegram.routers.menu.dialog",
+            "menu_dialog",
         ),
         (
             "уведомления в стиле кабинета",

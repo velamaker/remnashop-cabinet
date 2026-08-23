@@ -144,9 +144,11 @@ export function GiftCard() {
           <p className="text-sm text-fg-muted">
             {t("gift.created", { plan: result.plan_name, days: result.duration_days, price: result.price })}
           </p>
-          <div className="mt-2 flex items-center gap-2">
-            <code className="rounded-lg bg-bg px-3 py-1.5 text-base font-bold tracking-wider text-fg">{result.code}</code>
-            <button type="button" onClick={() => copyCode(result.code!)} className={copyBtnCls}>
+          {/* Та же беда, что и в списке ниже, только шрифт крупнее: код в 37 символов
+              без пробелов не переносится сам и вылезал за карточку. */}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <code className="min-w-0 break-all rounded-lg bg-bg px-3 py-1.5 text-base font-bold tracking-wider text-fg">{result.code}</code>
+            <button type="button" onClick={() => copyCode(result.code!)} className={`${copyBtnCls} shrink-0`}>
               {copied === result.code ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
               {copied === result.code ? t("gift.copied") : t("gift.copy")}
             </button>
@@ -206,13 +208,19 @@ export function GiftCard() {
           <ul className="mt-2 space-y-2">
             {history.map((g) => (
               <li key={g.payment_id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border-subtle bg-bg px-3 py-2">
-                <span className="text-xs text-fg-muted">
+                <span className="min-w-0 text-xs text-fg-muted">
                   {g.plan_name} · {t("gift.daysUnit", { days: g.duration_days })} · {g.price} ₽
                 </span>
                 {g.code ? (
-                  <span className="flex items-center gap-2">
-                    <code className="text-xs font-bold tracking-wider text-fg">{g.code}</code>
-                    <button type="button" onClick={() => copyCode(g.code!)} className={copyBtnCls}>
+                  // Код подарка — сплошная строка в 37 символов без пробелов. На узком
+                  // экране она не сжимается и не переносится сама: распирала карточку,
+                  // выталкивала кнопку за край и добавляла всей странице горизонтальную
+                  // прокрутку. `min-w-0` разрешает блоку быть уже содержимого,
+                  // `break-all` — рвать код по любому символу, `shrink-0` держит кнопку
+                  // целой, а перенос по строкам уводит её вниз вместо выхода за экран.
+                  <span className="flex min-w-0 flex-wrap items-center gap-2">
+                    <code className="min-w-0 break-all text-xs font-bold tracking-wider text-fg">{g.code}</code>
+                    <button type="button" onClick={() => copyCode(g.code!)} className={`${copyBtnCls} shrink-0`}>
                       {copied === g.code ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
                       {copied === g.code ? t("gift.copied") : t("gift.copy")}
                     </button>
