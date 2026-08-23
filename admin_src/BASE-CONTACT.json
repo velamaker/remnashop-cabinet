@@ -8,11 +8,6 @@
       "reason": "ветка пополнения ₽-баланса через шлюз и подарок, оплаченный шлюзом"
     },
     {
-      "path": "src/application/use_cases/promocode/commands/activate.py",
-      "base_sha256": "7c6edd0641f4646223846589534120147305fb2d732ab1fdcb6c935346a595e0",
-      "reason": "промокод на подарочную подписку требует второго подтверждения"
-    },
-    {
       "path": "src/application/use_cases/referral/commands/rewards.py",
       "base_sha256": "52f9d3864438b1da5d8ca40220ee1824f02f80cad31f1eb97c2fec98f498a90a",
       "reason": "реф-награда POINTS начисляется баллами по курсу, кэшбэк покупателю, web-push рефереру"

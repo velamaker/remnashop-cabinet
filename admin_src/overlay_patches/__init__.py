@@ -35,8 +35,11 @@ taskiq и pip, и падение на старте превратило бы п�
 
 from __future__ import annotations
 
+import hashlib
+import inspect
 import sys
-from typing import Callable
+import textwrap
+from typing import Any, Callable
 
 # Что не применилось: (имя правки, причина). Пусто — всё в порядке.
 _failures: list[tuple[str, str]] = []
@@ -56,6 +59,32 @@ def applied() -> list[str]:
     return list(_applied)
 
 
+def expect_source(func: Any, sha256_hex: str, what: str) -> None:
+    """Убедиться, что код бота, который мы собираемся заменить, тот самый.
+
+    Замена метода целиком повторяет и те строки, которых мы не меняли, — ровно как
+    копия файла, только объёмом в один метод вместо трёхсот строк. Значит остаётся
+    та же опасность: апстрим поправит что-то ВНУТРИ метода, а наша версия это
+    затрёт. Отличие в том, что здесь мы это ловим: сверяем исходник по хэшу и, если
+    он другой, отказываемся молча подменять.
+
+    Отступы снимаем — метод внутри класса иначе даёт разный текст в зависимости от
+    вложенности, а нас интересует его содержимое, а не место в файле.
+    """
+    try:
+        source = textwrap.dedent(inspect.getsource(func))
+    except (OSError, TypeError) as exc:
+        raise PatchTargetChanged(f"{what}: не удалось прочитать исходник ({exc})") from exc
+
+    actual = hashlib.sha256(source.encode()).hexdigest()
+    if actual != sha256_hex:
+        raise PatchTargetChanged(
+            f"{what}: апстрим ИЗМЕНИЛ этот код. Ожидался {sha256_hex[:12]}…, "
+            f"сейчас {actual[:12]}…. Наша версия затёрла бы их правки — сверьте "
+            f"изменения, перенесите в нашу и обновите хэш на {actual}"
+        )
+
+
 def _run(name: str, fn: Callable[[], str]) -> None:
     try:
         detail = fn()
@@ -72,14 +101,48 @@ def _run(name: str, fn: Callable[[], str]) -> None:
 
 
 def install() -> None:
-    """Применить все правки. Повторный вызов ничего не делает."""
+    """Подписать все правки на импорт их модулей. Повторный вызов ничего не делает.
+
+    Сами правки здесь НЕ выполняются: каждая ждёт, пока бот импортирует её модуль
+    (см. _hooks.py). Поэтому список ниже — это не «что сделано», а «что случится,
+    когда дойдёт дело»; фактически применённое смотрите в applied().
+    """
     global _done
     if _done:
         return
     _done = True
 
-    from . import bot_routers, panel_version, remnawave_sdk
+    from importlib import import_module
 
-    _run("потолок версии панели", panel_version.apply)
-    _run("свои разделы бота", bot_routers.apply)
-    _run("SDK панели по её версии", remnawave_sdk.apply)
+    from ._hooks import on_import
+
+    # (что правим, модуль бота, наш модуль с правкой)
+    #
+    # Свои модули тоже импортируем ЛЕНИВО, уже внутри хука: половина из них тянет
+    # конфигурацию приложения на уровне импорта, а мы находимся на старте
+    # интерпретатора, где её может не быть вовсе (сборка образа, alembic).
+    plan = (
+        ("потолок версии панели", "src.core.constants", "panel_version"),
+        ("свои разделы бота", "src.telegram.dispatcher", "bot_routers"),
+        ("SDK панели по её версии", "src.infrastructure.di.providers", "remnawave_sdk"),
+        (
+            "подарок не сжигает дни",
+            "src.application.use_cases.promocode.commands.activate",
+            "promocode_gift_days",
+        ),
+    )
+
+    for name, target, patch_module in plan:
+        on_import(
+            target,
+            lambda n=name, m=patch_module: _run(
+                n, lambda: import_module(f".{m}", __package__).apply()
+            ),
+        )
+
+
+def pending() -> list[str]:
+    """Модули, чьи правки ещё не сработали (их пока не импортировали)."""
+    from ._hooks import pending as _pending
+
+    return _pending()

@@ -63,12 +63,20 @@ info "Правки поведения бота (overlay_patches)…"
 # Правка, которая не применилась, НЕ роняет интерпретатор (иначе сломались бы pip и
 # alembic), поэтому её отсутствие надо ловить именно здесь — иначе бот уедет в прод
 # на исходном поведении базы, и заметит это только владелец по симптомам.
-docker run --rm --env-file .env "$IMG" sh -c 'python -c "
-import overlay_patches as op, sys
+# Приложение поднимаем ПЕРЕД проверкой: правки отложенные, каждая срабатывает в
+# момент, когда бот импортирует её модуль. Без этого список был бы пуст всегда.
+docker run --rm --env-file .env --network remnawave-network "$IMG" sh -c 'python -c "
+import sys
+import overlay_patches as op
+import src.overlay_app as m
+m.application()
 for line in op.applied(): print(\"  \" + line)
-if op.failures():
-    for name, why in op.failures(): print(f\"НЕ ПРИМЕНИЛАСЬ: {name}: {why}\", file=sys.stderr)
-    sys.exit(1)
+bad = False
+for name, why in op.failures():
+    print(f\"НЕ ПРИМЕНИЛАСЬ: {name}: {why}\", file=sys.stderr); bad = True
+for module in op.pending():
+    print(f\"НЕ СРАБОТАЛА: никто не импортировал {module}\", file=sys.stderr); bad = True
+sys.exit(1 if bad else 0)
 "' || die "overlay-правки не применились к этому base (подробности выше)"
 ok "Правки применились"
 
