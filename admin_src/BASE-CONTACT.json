@@ -1,0 +1,66 @@
+{
+  "base_tag": "v0.8.2",
+  "comment": "Файлы базового образа, которые overlay ЗАМЕЩАЕТ своей копией. Всё остальное в admin_src/src — чистые добавления, базы они не касаются. Список проверяет scripts/check-base-contact.py: новый замещённый файл без записи здесь и любое изменение файла в апстриме роняют проверку, чтобы правка не потерялась молча.",
+  "files": [
+    {
+      "path": "src/application/use_cases/gateways/commands/payment.py",
+      "base_sha256": "6e0636950bd4bb6119ee058863db93ba93a5a524a2caf81894dd95a7a625e78a",
+      "reason": "ветка пополнения ₽-баланса через шлюз и подарок, оплаченный шлюзом"
+    },
+    {
+      "path": "src/application/use_cases/promocode/commands/activate.py",
+      "base_sha256": "7c6edd0641f4646223846589534120147305fb2d732ab1fdcb6c935346a595e0",
+      "reason": "промокод на подарочную подписку требует второго подтверждения"
+    },
+    {
+      "path": "src/application/use_cases/referral/commands/rewards.py",
+      "base_sha256": "52f9d3864438b1da5d8ca40220ee1824f02f80cad31f1eb97c2fec98f498a90a",
+      "reason": "реф-награда POINTS начисляется баллами по курсу, кэшбэк покупателю, web-push рефереру"
+    },
+    {
+      "path": "src/core/constants.py",
+      "base_sha256": "9bde800d61af39db4e65fbdf62a761ab0a0b236e0b5819e346462a75adba9d8e",
+      "reason": "REMNAWAVE_MAX_VERSION поднят до 3.4.0 (иначе алерт о несовместимости на каждом старте)"
+    },
+    {
+      "path": "src/infrastructure/di/providers/remnawave.py",
+      "base_sha256": "e5de9a88b4155794ca534bca62c252bf99845272039773556c177892967f065e",
+      "reason": "выбор SDK по версии панели: 2.x — базовый, 3.x — слой совместимости"
+    },
+    {
+      "path": "src/infrastructure/services/command.py",
+      "base_sha256": "62db06394b1bf86515293df973da8003e508eb4f3ffcc6401c47b7a644e6881f",
+      "reason": "команда /gift в меню бота"
+    },
+    {
+      "path": "src/infrastructure/services/email_sender.py",
+      "base_sha256": "c38449c8df0ea704f8bd13d64c2cbe02d5f5ab03791e28df76ff6c2dbe58c970",
+      "reason": "логотип сервиса в шапке письма, свои шаблоны"
+    },
+    {
+      "path": "src/infrastructure/services/notification.py",
+      "base_sha256": "e68d15e6c30ef949e77290bce31a024fc93b3da30a5e9c1f2750bdf867eb9ddd",
+      "reason": "уведомления в стиле кабинета (rich HTML) + тумблер возврата к старым"
+    },
+    {
+      "path": "src/telegram/dispatcher.py",
+      "base_sha256": "37bab73270dd7782f8069490ae3578a3ff3c3d0284dc0d9f8b47e0e84f32ebde",
+      "reason": "подключение приватного раздела абьюза (команда /abuse, только владельцу)"
+    },
+    {
+      "path": "src/telegram/routers/menu/dialog.py",
+      "base_sha256": "3a27e094d1ccb82a9a1f30d86e4c8fb73c032c41927c86963f48b5e8a24dcccf",
+      "reason": "правки меню бота"
+    },
+    {
+      "path": "src/telegram/routers/subscription/promocode_handlers.py",
+      "base_sha256": "406a1813fe113dcd0194df765362c807fd72605c3bf99cda5e79cf6212f4aa38",
+      "reason": "двойное подтверждение при активации промокода на подарок"
+    },
+    {
+      "path": "src/web/endpoints/public/subscription.py",
+      "base_sha256": "6bb615b43cb2f9086fc0bf763cda8df31239a7fd5d65751433e03380253a3e2f",
+      "reason": "выдача подписки веб-пользователю, резервный доступ, алиасы ссылок"
+    }
+  ]
+}

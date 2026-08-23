@@ -31,12 +31,27 @@ if [ "${1:-}" != "" ]; then
   DF="$(mktemp)"; trap 'rm -f "$DF"' EXIT
   sed "s#^FROM ghcr.io/snoups/remnashop:.*#FROM ghcr.io/snoups/remnashop:${TAG}#" Dockerfile > "$DF"
 else
-  TAG="$(grep -m1 '^FROM ghcr.io/snoups/remnashop:' Dockerfile | sed 's#.*:##')"
-  info "Проверяю overlay на base из Dockerfile (тег: ${TAG})"
+  # Тег базы вынесен в `ARG BASE_TAG`, и строка FROM ссылается на него переменной.
+  # Читать её через sed значит получить литерал «${BASE_TAG}» — проверка тогда
+  # пытается тянуть несуществующий образ и падает ещё до первого теста.
+  # Порядок как при сборке: BASE_TAG из .env перекрывает умолчание Dockerfile.
+  # `|| true` обязателен: при `set -e` присваивание из подстановки, где grep не
+  # нашёл строку, роняет скрипт МОЛЧА — без единого слова в выводе. BASE_TAG в
+  # .env появляется только после `update.sh --base`, так что «не нашёл» — норма.
+  TAG="$(grep -m1 '^BASE_TAG=' .env 2>/dev/null | cut -d= -f2- | tr -d "\"' " || true)"
+  [ -n "$TAG" ] || TAG="$(grep -m1 '^ARG BASE_TAG=' Dockerfile | cut -d= -f2- || true)"
+  [ -n "$TAG" ] || die "Не удалось определить тег базового образа (ни BASE_TAG в .env, ни ARG BASE_TAG в Dockerfile)"
+  info "Проверяю overlay на base (тег: ${TAG})"
 fi
 
+# Контакт с исходниками бота — ПЕРВЫМ делом, до сборки. Смысл проверки в том,
+# что сборка её не заменит: образ соберётся и на изменившемся апстриме, просто
+# наши копии молча затрут чужие правки. Здесь это становится видно поимённо.
+info "Контакт overlay с исходниками бота…"
+./scripts/check-base-contact.py "$TAG" || die "Контакт с базой разошёлся с манифестом (см. выше)"
+
 info "Сборка образа (sed-патч точки входа проверяется здесь же)…"
-docker build -f "$DF" -t "$IMG" . >/dev/null || die "Сборка упала (возможно, sed точки входа не сматчился на новом base)"
+docker build -f "$DF" --build-arg BASE_TAG="$TAG" -t "$IMG" . >/dev/null || die "Сборка упала (возможно, sed точки входа не сматчился на новом base)"
 ok "Образ собран, точка входа overlay на месте"
 
 info "Проверка alembic: должен быть РОВНО один head…"
@@ -45,8 +60,21 @@ HEADS="$(docker run --rm "$IMG" sh -c 'alembic -c src/infrastructure/database/al
 ok "alembic heads = 1"
 
 info "Сборка FastAPI-приложения (импорты overlay против base)…"
+# Роуты считаем по openapi(), а НЕ обходом app.routes. С FastAPI 0.140 включённые
+# роутеры лежат в app.routes обёртками `_IncludedRouter` и плоского `path` у них нет —
+# прежняя проверка «any(... in r.path)» перестала находить что-либо вообще и роняла
+# предсборочный тест на полностью исправном образе. openapi() — публичная поверхность
+# приложения, она переживает такие перестановки внутри фреймворка.
 docker run --rm --env-file .env --network remnawave-network "$IMG" \
-  sh -c 'python -c "import src.overlay_app as m; app=m.application(); assert any(\"/api/v1/admin/\" in getattr(r,\"path\",\"\") for r in app.routes), \"нет admin-роутов\""' >/dev/null \
+  sh -c 'python -c "
+import src.overlay_app as m
+paths = m.application().openapi()[\"paths\"]
+adm = [p for p in paths if p.startswith(\"/api/v1/admin/\")]
+pub = [p for p in paths if p.startswith(\"/api/v1/public/\")]
+assert adm, \"нет admin-роутов\"
+assert pub, \"нет overlay public-роутов\"
+print(f\"admin: {len(adm)}, public: {len(pub)}\")
+"' \
   || die "application() не собрался — overlay несовместим с этим base (проверь переименованные импорты)"
 ok "Приложение собирается, admin/public-роуты на месте"
 
