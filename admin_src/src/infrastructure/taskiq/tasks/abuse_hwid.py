@@ -25,6 +25,8 @@ from loguru import logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from remnapy import RemnawaveSDK
+
 from src.core.config import AppConfig
 from src.infrastructure.taskiq.broker import broker
 
@@ -79,16 +81,49 @@ async def _fetch_all_devices(config: AppConfig) -> list[dict[str, Any]]:
         return await _fetch_paginated(cl, "/hwid/devices", "devices")
 
 
-async def _fetch_tid_to_uuid(config: AppConfig) -> dict[int, str]:
+async def _fetch_tid_to_uuid(
+    config: AppConfig, sdk: Any = None, our_uuids: Any = None
+) -> dict[int, str]:
     """Карта panel numeric id (t_id) → uuid.
 
     С Remnawave 2.8 в /hwid/devices вместо `userUuid` приходит числовой `userId`
     (это users.t_id — новый PK панели). Локально же подписки хранят uuid
-    (user_remna_id), поэтому строим мост t_id → uuid по списку /users.
+    (user_remna_id), поэтому нужен мост t_id → uuid.
+
+    Мост строится ДВУМЯ способами, и порядок здесь важен:
+
+      • На 3.x поля `uuid` у пользователя панели НЕТ ВООБЩЕ — оно дропнуто миграцией.
+        Обход `/users` в этом случае даёт пустую карту, и обе задачи (абьюз и новые
+        устройства) молча пропускают каждый проход: тихо, без ошибок, месяцами.
+        Поэтому спрашиваем карту идентичности слоя 3.x — она переводит наши uuid в
+        числовые id панели без единого запроса к панели.
+
+      • На 2.x такой карты у SDK нет, зато `uuid` в `/users` есть — прежний обход.
+
+    Карту берём С ОБЪЕКТА SDK, а не из глобальной переменной overlay: глобальную
+    заполняет провайдер в момент сборки SDK, и в процессе taskiq-воркера она пуста,
+    пока какая-нибудь задача не обратится к панели первой. Зависеть от порядка
+    задач нельзя — ровно из-за этого обе задачи и молчали.
+
+    `our_uuids` — те uuid, что реально встречаются в наших подписках. Больше и не
+    нужно: устройства пользователей, которых мы не знаем, обе задачи всё равно
+    отбрасывают. Заодно это дешевле полного обхода панели.
     """
+    identity = getattr(sdk, "identity", None)
+    if identity is not None and our_uuids:
+        mapping: dict[int, str] = {}
+        for value in our_uuids:
+            # Тихий вариант: в нашей базе есть и мёртвые подписки, промах по ним —
+            # норма. Громкий `to_id` завалил бы лог ошибками на каждом прогоне.
+            panel_id = await identity.to_id_or_none(value)
+            if panel_id is not None:
+                mapping[panel_id] = str(value)
+        if mapping:
+            return mapping
+
     async with _panel_client(config) as cl:
         users = await _fetch_paginated(cl, "/users", "users")
-    mapping: dict[int, str] = {}
+    mapping = {}
     for u in users:
         uid, uu = u.get("id"), u.get("uuid")
         if uid is not None and uu:
@@ -101,6 +136,7 @@ async def _fetch_tid_to_uuid(config: AppConfig) -> dict[int, str]:
 async def snapshot_hwid_devices(
     session: FromDishka[AsyncSession],
     config: FromDishka[AppConfig],
+    sdk: FromDishka[RemnawaveSDK],
 ) -> None:
     try:
         devices = await _fetch_all_devices(config)
@@ -129,7 +165,7 @@ async def snapshot_hwid_devices(
     tid_to_uuid: dict[int, str] = {}
     if any(d.get("userUuid") is None and d.get("userId") is not None for d in devices):
         try:
-            tid_to_uuid = await _fetch_tid_to_uuid(config)
+            tid_to_uuid = await _fetch_tid_to_uuid(config, sdk, uuid_to_uid.keys())
         except Exception as e:
             logger.warning(f"abuse_hwid: не удалось получить карту t_id→uuid: {e}")
         if not tid_to_uuid:

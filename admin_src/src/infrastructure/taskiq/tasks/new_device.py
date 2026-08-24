@@ -23,6 +23,8 @@ from loguru import logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from remnapy import RemnawaveSDK
+
 from src.core.config import AppConfig
 from src.infrastructure.services.overlay_new_device import load_config
 from src.infrastructure.services.overlay_push import notify_user_push
@@ -104,6 +106,7 @@ async def _fetch_devices(config: AppConfig) -> list[dict[str, Any]]:
 async def run_new_device(
     session: FromDishka[AsyncSession],
     config: FromDishka[AppConfig],
+    sdk: FromDishka[RemnawaveSDK],
 ) -> None:
     cfg = load_config()
     if not cfg["enabled"]:
@@ -133,7 +136,7 @@ async def run_new_device(
     tid_to_uuid: dict[int, str] = {}
     if any(d.get("userUuid") is None and d.get("userId") is not None for d in devices):
         try:
-            tid_to_uuid = await _fetch_tid_to_uuid(config)
+            tid_to_uuid = await _fetch_tid_to_uuid(config, sdk, mine.keys())
         except Exception as e:  # noqa: BLE001
             logger.warning(f"new_device: не получил карту t_id→uuid: {e}")
         if not tid_to_uuid:

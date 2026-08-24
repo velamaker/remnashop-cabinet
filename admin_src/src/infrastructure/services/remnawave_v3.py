@@ -297,17 +297,19 @@ class RemnaIdentityMap:
 
     # ── uuid → id ────────────────────────────────────────────────────────────
 
-    async def to_id(self, value: Union[str, UUID]) -> int:
-        """Числовой id панели по нашему uuid.
+    async def to_id_or_none(self, value: Union[str, UUID]) -> Optional[int]:
+        """То же, что `to_id`, но промах — это None, а не крик в лог и исключение.
 
-        Порядок: снимок → арифметика → свежая строка карты → довосстановление по
-        нашей базе через живые ручки панели. Не нашли — громко в лог и NotFoundError.
+        Нужно там, где uuid перебираются ПАЧКОЙ: в нашей базе живут и мёртвые записи
+        (старые подписки, которых в панели давно нет), и для них промах — норма, а не
+        происшествие. Если бы пакетный обход звал `to_id`, каждый прогон писал бы
+        десяток ERROR про заведомо мёртвые строки — и настоящую ошибку в этом шуме
+        уже никто бы не заметил.
         """
         try:
             key = _as_uuid(value)
-        except (ValueError, AttributeError, TypeError) as exc:
-            logger.error(f"remnawave-3x: '{value}' — не uuid, id не определить ({exc})")
-            raise _not_found(f"Invalid user uuid '{value}'") from exc
+        except (ValueError, AttributeError, TypeError):
+            return None
 
         await self._ensure_loaded()
 
@@ -327,9 +329,25 @@ class RemnaIdentityMap:
         if fresh is not None:
             return fresh
 
-        recovered = await self._recover(key)
-        if recovered is not None:
-            return recovered
+        return await self._recover(key)
+
+    async def to_id(self, value: Union[str, UUID]) -> int:
+        """Числовой id панели по нашему uuid.
+
+        Порядок: снимок → арифметика → свежая строка карты → довосстановление по
+        нашей базе через живые ручки панели. Не нашли — громко в лог и NotFoundError.
+        Громко здесь оправдано: сюда приходят операции над КОНКРЕТНЫМ человеком, и
+        необъяснённый промах означает, что у него что-то сломалось.
+        """
+        try:
+            key = _as_uuid(value)
+        except (ValueError, AttributeError, TypeError) as exc:
+            logger.error(f"remnawave-3x: '{value}' — не uuid, id не определить ({exc})")
+            raise _not_found(f"Invalid user uuid '{value}'") from exc
+
+        found = await self.to_id_or_none(key)
+        if found is not None:
+            return found
 
         logger.error(
             f"remnawave-3x: uuid '{key}' не сопоставлен с id панели — нет в снимке "
