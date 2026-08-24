@@ -127,7 +127,12 @@ class RemnawaveProvider(Provider):
                     f"Remnawave panel version '{version}' — enabling 3.x compatibility layer "
                     f"(numeric user ids, /users/stream, /connections)"
                 )
-                yield RemnawaveSDKv3(client, session_maker, str(version))
+                sdk = RemnawaveSDKv3(client, session_maker, str(version))
+                # Отдаём карту наружу: её просит правка вебхуков (см. webhook_v3.py).
+                from . import set_identity_map
+
+                set_identity_map(sdk.identity)
+                yield sdk
         finally:
             await client.aclose()
             logger.debug("RemnawaveSDK AsyncClient closed")

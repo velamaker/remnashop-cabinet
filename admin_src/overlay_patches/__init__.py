@@ -51,6 +51,21 @@ class PatchTargetChanged(RuntimeError):
     """Цель правки выглядит не так, как мы ожидали, — апстрим её изменил."""
 
 
+# Карта «uuid ↔ числовой id», созданная слоем 3.x. Кладётся сюда провайдером SDK и
+# нужна другим правкам: вебхуки панели 3.x приходят БЕЗ uuid, и восстановить его
+# может только эта карта. На 2.x остаётся None — там uuid приходит сам.
+_identity_map: Any = None
+
+
+def set_identity_map(value: Any) -> None:
+    global _identity_map
+    _identity_map = value
+
+
+def identity_map() -> Any:
+    return _identity_map
+
+
 def failures() -> list[tuple[str, str]]:
     return list(_failures)
 
@@ -227,11 +242,26 @@ def install() -> None:
         ("запасная копия: вебхук", "src.infrastructure.services.webhook", "apply_webhook"),
     )
 
+    # Вебхуки панели: две правки в разных модулях, поэтому отдельным списком
+    # с явным именем функции.
+    webhook = (
+        ("вебхуки: модель события", "remnapy.models.webhook", "apply_model"),
+        ("вебхуки: восстановление uuid", "src.application.services.remnawave", "apply_handlers"),
+    )
+
     for name, target, patch_module in plan:
         on_import(
             target,
             lambda n=name, m=patch_module: _run(
                 n, lambda: import_module(f".{m}", __package__).apply()
+            ),
+        )
+
+    for name, target, func in webhook:
+        on_import(
+            target,
+            lambda n=name, f=func: _run(
+                n, lambda: getattr(import_module(".webhook_v3", __package__), f)()
             ),
         )
 
