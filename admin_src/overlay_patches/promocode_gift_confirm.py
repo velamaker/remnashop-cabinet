@@ -48,6 +48,21 @@ from src.application.use_cases.promocode.commands.activate import (
     ActivatePromocode,
     ActivatePromocodeDto,
 )
+# Исключения промокода — тоже на уровне модуля. Они стоят в `except`, то есть
+# вычисляются, только когда активация И ВПРАВДУ упала: без импорта законная
+# «промокод просрочен» превратилась бы во второй NameError поверх первого.
+from src.core.exceptions import (
+    PromocodeAlreadyActivatedError,
+    PromocodeExpiredError,
+    PromocodeNotAvailableError,
+    PromocodeNotFoundError,
+)
+
+# Отметка «предупреждение уже показано». Ключ НАШ собственный: база про второе
+# подтверждение не знает, а её PENDING_PROMO_REPLACE_KEY занят — он управляет
+# текстом окна. Храним в нём сам код, а не флаг: иначе человек, отменивший один
+# подарок и введший другой, активировал бы второй с первого нажатия.
+PROMO_CONFIRM_STAGE_KEY = "overlay_gift_confirm_stage"
 
 
 # sha256 обработчика on_promocode_confirm в базе v0.8.2 (вместе с декоратором).
@@ -65,6 +80,20 @@ def apply() -> str:
         return "уже заменён"
 
     expect_source(target, "on_promocode_confirm", BASE_HANDLER_SHA256, "on_promocode_confirm")
+
+    # Ключи, под которыми базовый обработчик кладёт промокод в диалог. Берём их У
+    # БАЗЫ, а не повторяем строками: наш обработчик читает ЧУЖОЕ хранилище, и
+    # разъехавшийся ключ дал бы молчаливое «нажал — ничего не произошло».
+    # Через ЛОКАЛЬНЫЕ имена — так они попадают в замыкание и разрешаются; глобали
+    # базового модуля нашей функции недоступны (она объявлена здесь, не там).
+    try:
+        pending_key: str = target.PENDING_PROMO_KEY
+        pending_dto_key: str = target.PENDING_PROMO_DTO_KEY
+    except AttributeError as exc:
+        raise PatchTargetChanged(
+            "в promocode_handlers больше нет PENDING_PROMO_KEY/PENDING_PROMO_DTO_KEY — "
+            "база сменила ключи диалога, второе подтверждение читало бы пустоту"
+        ) from exc
 
     def _fmt_date(value: Any) -> str:
         try:
@@ -115,11 +144,8 @@ def apply() -> str:
         promocode_dao: FromDishka[PromocodeDao],
         subscription_dao: FromDishka[SubscriptionDao],
     ) -> None:
-        if is_double_click(dialog_manager, key="promo_confirm"):
-            return
-
         user: TelegramUserDto = dialog_manager.middleware_data[USER_KEY]
-        code = dialog_manager.dialog_data.get(PENDING_PROMO_KEY)
+        code = dialog_manager.dialog_data.get(pending_key)
 
         if not code:
             return
@@ -127,9 +153,15 @@ def apply() -> str:
         # ── ПРАВКА OVERLAY: второе подтверждение для подарков ────────────────────
         # Подарок меняет подписку и может обнулить остаток дней (если тариф другой),
         # поэтому первое нажатие только показывает последствия, второе — активирует.
-        dto = cast(dict[str, Any], dialog_manager.dialog_data.get(PENDING_PROMO_DTO_KEY) or {})
+        #
+        # Защита от двойного клика стоит НИЖЕ этой ветки, а не выше, как в базе.
+        # У базы нажатие одно, и первое же оно и последнее; у нас их два подряд, а
+        # is_double_click глотает всё, что пришло в течение 10 секунд после
+        # предыдущего. Стой она выше — подтверждающее нажатие уходило бы в пустоту,
+        # и человек ждал бы десять секунд, не понимая, почему кнопка мёртвая.
+        dto = cast(dict[str, Any], dialog_manager.dialog_data.get(pending_dto_key) or {})
         is_gift = dto.get("reward_type") == PromocodeRewardType.SUBSCRIPTION.value
-        if is_gift and not dialog_manager.dialog_data.get(PROMO_CONFIRM_STAGE_KEY):
+        if is_gift and dialog_manager.dialog_data.get(PROMO_CONFIRM_STAGE_KEY) != code:
             try:
                 promo = await promocode_dao.get_by_code(code)
                 plan = getattr(promo, "plan_snapshot", None)
@@ -140,8 +172,11 @@ def apply() -> str:
             except Exception as exc:  # noqa: BLE001 — предупреждение не должно ломать активацию
                 logger.warning(f"{user.log} не смог собрать предупреждение по подарку: {exc}")
                 warning = "Подарок изменит вашу подписку. Нажмите ещё раз для подтверждения."
-            dialog_manager.dialog_data[PROMO_CONFIRM_STAGE_KEY] = 1
+            dialog_manager.dialog_data[PROMO_CONFIRM_STAGE_KEY] = code
             await callback.answer(warning[:200], show_alert=True)
+            return
+
+        if is_double_click(dialog_manager, key="promo_confirm"):
             return
 
         try:

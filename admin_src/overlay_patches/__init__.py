@@ -45,6 +45,10 @@ from typing import Any, Callable
 _failures: list[tuple[str, str]] = []
 _applied: list[str] = []
 _done = False
+# Функции, уже проверенные на разрешимость имён. Одна и та же наша функция видна
+# из нескольких модулей базы (класс, импортированный в чужую шапку, лежит и там),
+# и без этого одна поломка попадала бы в отчёт от имени чужой правки.
+_names_checked: set[int] = set()
 
 
 class PatchTargetChanged(RuntimeError):
@@ -133,7 +137,115 @@ def expect_source(module: Any, qualname: str, sha256_hex: str, what: str) -> Non
         )
 
 
-def _run(name: str, fn: Callable[[], str]) -> None:
+def _overlay_functions(obj: Any, seen: set[int]) -> list[Any]:
+    """Наши функции, до которых можно дойти от подставленного объекта.
+
+    Замена редко лежит в базе голой: обработчики бота обёрнуты `@inject` из dishka,
+    и в модуль попадает ЕЁ функция, а наша спрятана в замыкании обёртки. Поэтому
+    идём не только по самому объекту, но и по ячейкам его `__closure__`.
+    Свои узнаём по модулю, в котором функция объявлена, — это и есть тот модуль,
+    в чьих глобалях она будет искать имена.
+    """
+    import types
+
+    if id(obj) in seen:
+        return []
+    seen.add(id(obj))
+
+    found: list[Any] = []
+    if isinstance(obj, (staticmethod, classmethod)):
+        return _overlay_functions(obj.__func__, seen)
+    if not isinstance(obj, types.FunctionType):
+        return []
+
+    if str(obj.__globals__.get("__name__", "")).startswith(f"{__package__}."):
+        found.append(obj)
+
+    for cell in obj.__closure__ or ():
+        try:
+            value = cell.cell_contents
+        except ValueError:  # noqa: PERF203 — пустая ячейка, идти некуда
+            continue
+        found.extend(_overlay_functions(value, seen))
+    return found
+
+
+def _unresolved_globals(func: Any) -> list[str]:
+    """Имена, которые функция возьмёт из глобалей, но взять их будет неоткуда.
+
+    Смотрим не текст, а байткод: `LOAD_GLOBAL` — это ровно то, что интерпретатор
+    пойдёт искать в `__globals__` и builtins, без ложных срабатываний на атрибуты
+    (`x.foo`) и без ложных обвинений замыканию (те идут через `LOAD_DEREF`).
+    Вложенные функции лежат в `co_consts` — обходим и их.
+    """
+    import builtins
+    import dis
+    import types
+
+    names: set[str] = set()
+
+    def walk(code: Any) -> None:
+        for instruction in dis.get_instructions(code):
+            if instruction.opname == "LOAD_GLOBAL":
+                names.add(str(instruction.argval))
+        for const in code.co_consts:
+            if isinstance(const, types.CodeType):
+                walk(const)
+
+    walk(func.__code__)
+    return sorted(n for n in names if n not in func.__globals__ and not hasattr(builtins, n))
+
+
+def expect_names_resolve(target_module: str, what: str) -> None:
+    """Убедиться, что подставленный код сможет найти все свои имена.
+
+    ЗАЧЕМ ОТДЕЛЬНО ОТ expect_source. Та сверяет ЧУЖОЙ код — тот, который мы
+    собираемся заменить. А эта — НАШ. Разница стоила денег: 29.08 подтверждение
+    подарочного промокода падало на `NameError: PENDING_PROMO_KEY`, потому что
+    функция была объявлена здесь, а имя жило в шапке базового модуля. Сверка
+    исходника прошла, правка «применилась», и сломалось только под живым
+    оплатившим человеком — на нажатии кнопки, куда overlay уже не смотрит.
+
+    Ловится это тем, что функция, объявленная в нашем модуле, ищет глобали ТОЖЕ
+    в нашем модуле: переносить тело из базы можно, а её шапку — нельзя забывать.
+    """
+    import sys
+
+    module = sys.modules.get(target_module)
+    if module is None:  # хук сработал на импорте — модуль обязан быть, но не падаем
+        return
+
+    seen: set[int] = set()
+    broken: list[str] = []
+
+    def check(holder: str, obj: Any) -> None:
+        for func in _overlay_functions(obj, seen):
+            if id(func) in _names_checked:
+                continue
+            _names_checked.add(id(func))
+            missing = _unresolved_globals(func)
+            if missing:
+                # Виновата не та правка, при которой мы наткнулись, а тот файл, где
+                # функция ОБЪЯВЛЕНА: искать имена она будет именно в его глобалях.
+                where = str(func.__globals__.get("__name__", "?")).rpartition(".")[2]
+                broken.append(f"{where}.{holder}{func.__name__}: {', '.join(missing)}")
+
+    for attr, value in list(vars(module).items()):
+        check("", value)
+        if isinstance(value, type):
+            for method in list(vars(value).values()):
+                check(f"{attr}.", method)
+
+    if broken:
+        raise PatchTargetChanged(
+            f"{what}: подставленный код не найдёт свои имена — "
+            + "; ".join(broken)
+            + ". Имя взято из шапки базового модуля, а функция объявлена у нас: "
+            "перенесите импорт/константу в наш модуль или прочитайте её с цели."
+        )
+
+
+def _run(name: str, fn: Callable[[], str], target_module: str = "") -> None:
     try:
         detail = fn()
     except Exception as exc:  # noqa: BLE001 — любая причина одинаково важна
@@ -145,6 +257,29 @@ def _run(name: str, fn: Callable[[], str]) -> None:
             flush=True,
         )
     else:
+        # Правка встала — теперь проверяем НАШ код, а не чужой (см. док-строку
+        # expect_names_resolve). Отдельным try: сорвавшаяся проверка обязана
+        # оказаться в _failures как отказ, а не утонуть в already-applied.
+        if target_module:
+            try:
+                expect_names_resolve(target_module, name)
+            except Exception as exc:  # noqa: BLE001
+                _failures.append((name, f"{type(exc).__name__}: {exc}"))
+                print(
+                    f"\n!!! OVERLAY: правка «{name}» ПРИМЕНИЛАСЬ, НО СЛОМАНА: "
+                    f"{type(exc).__name__}: {exc}\n"
+                    f"!!! Она упадёт под живым пользователем. Разберитесь до деплоя.\n",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                try:
+                    from loguru import logger
+
+                    logger.error(f"Overlay: правка «{name}» применилась, но сломана — {exc}")
+                except Exception:  # noqa: BLE001
+                    pass
+                return
+
         _applied.append(f"{name}: {detail}")
         # Пишем в лог КАЖДОЕ применение, а не только отказы. Правка меняет поведение
         # бота молча, и «сработала ли она в этом процессе» иначе не проверить ничем:
@@ -252,24 +387,24 @@ def install() -> None:
     for name, target, patch_module in plan:
         on_import(
             target,
-            lambda n=name, m=patch_module: _run(
-                n, lambda: import_module(f".{m}", __package__).apply()
+            lambda n=name, m=patch_module, t=target: _run(
+                n, lambda: import_module(f".{m}", __package__).apply(), t
             ),
         )
 
     for name, target, func in webhook:
         on_import(
             target,
-            lambda n=name, f=func: _run(
-                n, lambda: getattr(import_module(".webhook_v3", __package__), f)()
+            lambda n=name, f=func, t=target: _run(
+                n, lambda: getattr(import_module(".webhook_v3", __package__), f)(), t
             ),
         )
 
     for name, target, func in replica:
         on_import(
             target,
-            lambda n=name, f=func: _run(
-                n, lambda: getattr(import_module(".web_replica", __package__), f)()
+            lambda n=name, f=func, t=target: _run(
+                n, lambda: getattr(import_module(".web_replica", __package__), f)(), t
             ),
         )
 

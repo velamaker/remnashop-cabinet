@@ -21,6 +21,12 @@
 
 from __future__ import annotations
 
+# Логгер — на уровне МОДУЛЯ, а не внутри apply(). Метод-замена объявлен здесь,
+# значит и глобали ищет здесь: имя, взятое из шапки базового модуля, в нашей
+# области видимости не появится само (см. `NameError: PENDING_PROMO_KEY`
+# в подтверждении промокода 29.08 — та же ошибка, тот же класс).
+from loguru import logger
+
 from . import PatchTargetChanged, expect_source
 
 # sha256 метода `_apply_subscription` в базе v0.8.2 (с обрезанными отступами).

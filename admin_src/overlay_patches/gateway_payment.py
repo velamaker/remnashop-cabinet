@@ -11,6 +11,16 @@ payment.py (608 строк). Меняются в нём ровно два мес
 нужна сессия базы для наших отметок, и обработчик успешной оплаты. Остальное —
 проверка подписи, идемпотентность, возвраты, события — приезжает из базы как есть.
 
+ТРЕТЬЯ ПРАВКА — ОПОЗДАВШИЙ ПЛАТЁЖ. Счёт живёт 30 минут (крон гасит PENDING), а
+ссылка ЮMoney платится вечно. Заплатил через час — вебхук приходит на CANCELED,
+переход в COMPLETED разрешён только из PENDING/FAILED, и деньги молча пропадают:
+шлюзу отвечено 200, человеку не сказано ничего, владельцу тоже. Реальный случай
+29.08: 929 ₽ пришли на кошелёк, бот их не увидел (транзакция ee0e36b6…).
+Здесь мы НЕ переписываем `_execute`, а оборачиваем: перед вызовом базы поднимаем
+отменённый счёт обратно в PENDING, и дальше отрабатывает её собственная,
+нетронутая логика. Копировать в денежном пути нечего — ровно то, чему научил
+`NameError` в подтверждении подарка.
+
 ЭТО ДЕНЕЖНЫЙ ПУТЬ, поэтому сверка исходника обязательна: апстрим правит что-то
 внутри `_handle_success` — правка не применяется и кричит, а не подменяет молча
 изменившуюся логику зачисления.
@@ -101,6 +111,10 @@ from . import PatchTargetChanged, expect_source
 BASE_METHODS = {
     "ProcessPayment.__init__": "2053f2c9cb98f384efb6968fa059ee966c4010317c0279477d8e2008fc84820f",
     "ProcessPayment._handle_success": "acf75f43ae87e34039923870a8895897da0ab2884ce22a6da3502980a21b52b5",
+    # Оборачиваем, а не заменяем, но сверяем всё равно: наша обёртка опирается на
+    # то, ЧТО база делает со статусами (переход разрешён из PENDING/FAILED).
+    # Апстрим поменяет набор — поднимать счёт в PENDING станет бессмысленно.
+    "ProcessPayment._execute": "a7edbdbbbff93e2c58eee96289a296b5940d1994450004fa8cc3ca4164f1c1e0",
 }
 
 
@@ -319,7 +333,70 @@ def apply() -> str:
         if user.telegram_id is not None:
             await self.redirect.to_success_payment(user.telegram_id, transaction.purchase_type)
 
+    base_execute = target.ProcessPayment._execute
+
+    async def ProcessPayment_execute(self, actor: UserDto, data) -> None:
+        """Поднять отменённый счёт, если по нему ВСЁ-ТАКИ заплатили.
+
+        Идемпотентно по построению: `UPDATE … WHERE status='CANCELED'` совпадает
+        не более одного раза, а уже проведённый счёт в выборку не попадает вовсе.
+        Дальше зовём базу как есть — она сама сделает свой обычный переход
+        PENDING → COMPLETED и выдаст подписку.
+        """
+        if data.new_transaction_status == TransactionStatus.COMPLETED:
+            try:
+                await _revive_canceled(self, data)
+            except Exception:  # noqa: BLE001 — спасение не имеет права ломать обычный путь
+                logger.exception(
+                    f"Опоздавший платёж: не смог поднять счёт '{data.payment_id}'"
+                )
+        await base_execute(self, actor, data)
+
+    async def _revive_canceled(self, data) -> None:
+        async with self.uow:
+            transaction = await self.transaction_dao.get_by_payment_id(data.payment_id)
+            # Нет счёта или не тот шлюз — молчим: база это проверит сама и напишет.
+            if transaction is None or transaction.gateway_type != data.gateway_type:
+                return
+            if transaction.status != TransactionStatus.CANCELED:
+                return
+
+            revived = await self.transaction_dao.transition_status(
+                data.payment_id,
+                TransactionStatus.PENDING,
+                (TransactionStatus.CANCELED,),
+            )
+            if not revived:  # кто-то успел раньше — значит уже спасён
+                return
+            await self.uow.commit()
+
+        user = await self.user_dao.get_by_id(transaction.user_id)
+        logger.warning(
+            f"Опоздавший платёж спасён: счёт '{data.payment_id}' был отменён "
+            f"({transaction.created_at}), но по нему заплатили — поднят в PENDING"
+        )
+        await self.notifier.notify_admins(
+            MessagePayloadDto(
+                i18n_key="raw-message",
+                i18n_kwargs={
+                    "content": (
+                        "💸 <b>Опоздавший платёж принят</b>\n"
+                        f"Счёт <code>{data.payment_id}</code> был автоматически отменён "
+                        "(старше 30 минут), но человек всё равно оплатил по старой ссылке.\n"
+                        f"Шлюз: {transaction.gateway_type}\n"
+                        f"Сумма: {transaction.pricing.final_amount} "
+                        f"{transaction.currency.symbol}\n"
+                        f"Покупатель: {user.log if user else transaction.user_id}\n\n"
+                        "Подписка выдана автоматически — проверьте, что она встала верно."
+                    )
+                },
+                # Без этого сообщение самоуничтожится через 5 секунд (дефолт payload).
+                delete_after=None,
+            )
+        )
+
     ProcessPayment_init._overlay_wrapped = True  # type: ignore[attr-defined]
     target.ProcessPayment.__init__ = ProcessPayment_init
     target.ProcessPayment._handle_success = ProcessPayment_handle_success
-    return "пополнение баланса и подарок через шлюз"
+    target.ProcessPayment._execute = ProcessPayment_execute
+    return "пополнение баланса, подарок через шлюз и спасение опоздавших платежей"

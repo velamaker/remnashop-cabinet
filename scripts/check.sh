@@ -59,7 +59,10 @@ if need_backend; then
     if [ "$STAGED_ONLY" = 1 ]; then
       files="$(printf '%s\n' "$CH" | grep -E '^admin_src/.*\.py$' || true)"
     else
-      files="$(find admin_src/src -name '*.py' 2>/dev/null)"
+      # Именно admin_src, а не admin_src/src: правки поведения бота лежат в
+      # admin_src/overlay_patches, и при старом пути их не проверял никто —
+      # синтаксическую ошибку в денежном патче полный прогон просто не видел.
+      files="$(find admin_src -name '*.py' -not -path '*/__pycache__/*' 2>/dev/null)"
     fi
     [ -n "$files" ] && { printf '%s\n' "$files" | xargs -r "$PY" -m py_compile || fail=1; }
   else
