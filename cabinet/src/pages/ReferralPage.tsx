@@ -230,10 +230,15 @@ export default function ReferralPage() {
       }
     } catch (e) {
       if (e instanceof ApiError && e.status === 403) {
-        if (!user?.is_email_verified && user?.auth_type?.toUpperCase() !== "TELEGRAM") {
-          setUnavailableReason("email");
-        } else if (e.detail.toLowerCase().includes("subscription")) {
+        // Разбираем по ОТВЕТУ сервера, а не по состоянию пользователя. Раньше
+        // телеграм-юзеру, которого не пускал почтовый гейт, писали «программа
+        // отключена» — он не подходил под ветку почты, а причина в тексте ответа
+        // не искалась вовсе. Сервер знает точнее, чем мы можем угадать.
+        const detail = e.detail.toLowerCase();
+        if (detail.includes("subscription")) {
           setUnavailableReason("subscription");
+        } else if (detail.includes("email")) {
+          setUnavailableReason("email");
         } else {
           setUnavailableReason("disabled");
         }

@@ -200,10 +200,13 @@ async def audience_counts(
         "TG_TRIAL": await user_dao.count_with_trial_subscription(),
         "TG_EXPIRED": await user_dao.count_with_expired_subscription(),
     }
-    # TG_PLAN зависит от выбранного тарифа, поэтому появляется в ответе только
-    # когда тариф выбран — фронт перезапрашивает счётчики при его смене.
-    if plan_id:
-        counts["TG_PLAN"] = await subscription_dao.count_active_by_plan(plan_id)
+    # TG_PLAN отдаём ВСЕГДА, даже нулём. Ключ работает и как признак умения: на
+    # отдельном сервере кабинет может оказаться новее бота, и по отсутствию ключа
+    # фронт спрячет сегмент вместо того, чтобы показать кнопку, которая ответит
+    # невнятным «не выбран ни один канал».
+    counts["TG_PLAN"] = (
+        await subscription_dao.count_active_by_plan(plan_id) if plan_id else 0
+    )
 
     for seg in EMAIL_SEGMENT_FROM:
         counts[seg] = await _email_count(session, seg)

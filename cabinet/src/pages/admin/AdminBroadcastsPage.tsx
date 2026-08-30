@@ -136,6 +136,12 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
 
   const recipients = [...selected].reduce((s, k) => s + (counts?.[k] ?? 0), 0);
 
+  // Кабинет может стоять на отдельном сервере и быть новее бота. Сегмент, о
+  // котором бот не знает, не показываем: счётчики — единственный ответ, где
+  // видно, какие каналы он умеет. Ждём загрузки счётчиков, чтобы пункт не мигал.
+  const supported = (c: ChannelItem) =>
+    c.key !== "TG_PLAN" || counts === null || "TG_PLAN" in counts;
+
   const submit = async () => {
     setErr(null);
     setMsg(null);
@@ -212,7 +218,7 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
           <div key={group.title}>
             <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-fg-subtle">{group.title}</p>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {group.items.map((c) => {
+              {group.items.filter(supported).map((c) => {
                 const on = selected.has(c.key);
                 const blocked = !on && conflicts(c.key, selected);
                 const cnt = counts?.[c.key];
