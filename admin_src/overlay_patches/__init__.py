@@ -363,6 +363,11 @@ def install() -> None:
             "referral_rewards",
         ),
         (
+            "рефералка без почтового гейта",
+            "src.web.endpoints.public.referral",
+            "public_referral_gate",
+        ),
+        (
             "второе подтверждение подарка",
             "src.telegram.routers.subscription.promocode_handlers",
             "promocode_gift_confirm",

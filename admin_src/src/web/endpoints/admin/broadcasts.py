@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from dishka import FromDishka
@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common import BroadcastDispatcher
-from src.application.common.dao import BroadcastDao, UserDao
+from src.application.common.dao import BroadcastDao, SubscriptionDao, UserDao
 from src.application.common.uow import UnitOfWork
 from src.application.dto import BroadcastDto, MessagePayloadDto
 from src.core.enums import BroadcastAudience, BroadcastStatus
@@ -26,6 +26,10 @@ from src.infrastructure.taskiq.tasks.broadcast_email import (
 # Каналы формы кабинета → аудитория базового TG-пайплайна.
 _TG_AUDIENCE: dict[str, BroadcastAudience] = {
     "TG_ALL": BroadcastAudience.ALL,
+    # «По плану» из бота: единственная аудитория, которой мало одного ключа —
+    # ей нужен ещё и конкретный тариф (plan_id), поэтому она проходит отдельной
+    # веткой в _tg_count и уходит в диспетчер вторым аргументом.
+    "TG_PLAN": BroadcastAudience.PLAN,
     "TG_SUBSCRIBED": BroadcastAudience.SUBSCRIBED,
     "TG_UNSUBSCRIBED": BroadcastAudience.UNSUBSCRIBED,
     "TG_TRIAL": BroadcastAudience.TRIAL,
@@ -44,7 +48,16 @@ def _brand() -> str:
         return "VPN"
 
 
-async def _tg_count(user_dao: UserDao, audience: BroadcastAudience) -> int:
+async def _tg_count(
+    user_dao: UserDao,
+    audience: BroadcastAudience,
+    subscription_dao: Optional[SubscriptionDao] = None,
+    plan_id: Optional[int] = None,
+) -> int:
+    if audience == BroadcastAudience.PLAN:
+        if subscription_dao is None or not plan_id:
+            return 0
+        return await subscription_dao.count_active_by_plan(plan_id)
     if audience == BroadcastAudience.ALL:
         return await user_dao.count_active_non_blocked()
     if audience == BroadcastAudience.SUBSCRIBED:
@@ -92,6 +105,8 @@ def _email_row_to_dict(r: Any) -> dict[str, Any]:
 class CreateBroadcastBody(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     channels: list[str] = Field(min_length=1)
+    # Нужен только каналу TG_PLAN. Для остальных игнорируется.
+    plan_id: Optional[int] = None
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -103,6 +118,7 @@ async def create_broadcast(
     broadcast_dao: FromDishka[BroadcastDao],
     dispatcher: FromDishka[BroadcastDispatcher],
     user_dao: FromDishka[UserDao],
+    subscription_dao: FromDishka[SubscriptionDao],
     session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     content = body.text.strip()
@@ -113,12 +129,21 @@ async def create_broadcast(
     if not channels:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Не выбран ни один канал")
 
+    # Рассылка по тарифу без тарифа ушла бы в пустоту: аудитория считается нулём,
+    # а задача всё равно создалась бы и легла в историю как отправленная.
+    if "TG_PLAN" in channels and not body.plan_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Для рассылки по тарифу нужно выбрать тариф",
+        )
+
     telegram_tasks: list[str] = []
     for ch in channels:
         audience = _TG_AUDIENCE.get(ch)
         if audience is None:
             continue
-        count = await _tg_count(user_dao, audience)
+        plan_id = body.plan_id if audience == BroadcastAudience.PLAN else None
+        count = await _tg_count(user_dao, audience, subscription_dao, plan_id)
         # delete_after=None ОБЯЗАТЕЛЬНО: у MessagePayloadDto дефолт delete_after=5,
         # из-за чего сообщение рассылки самоудалялось через 5 секунд у всех
         # получателей (в базе SENT+message_id, а в чате физически пусто). Рассылка
@@ -136,7 +161,7 @@ async def create_broadcast(
         async with uow:
             await broadcast_dao.create(broadcast)
             await uow.commit()
-        await dispatcher.start(broadcast, None)
+        await dispatcher.start(broadcast, plan_id)
         telegram_tasks.append(str(broadcast.task_id))
 
     email_tasks: list[int] = []
@@ -164,7 +189,9 @@ async def create_broadcast(
 async def audience_counts(
     _admin: AdminUser,
     user_dao: FromDishka[UserDao],
+    subscription_dao: FromDishka[SubscriptionDao],
     session: FromDishka[AsyncSession],
+    plan_id: Optional[int] = None,
 ) -> dict[str, int]:
     counts: dict[str, int] = {
         "TG_ALL": await user_dao.count_active_non_blocked(),
@@ -173,6 +200,11 @@ async def audience_counts(
         "TG_TRIAL": await user_dao.count_with_trial_subscription(),
         "TG_EXPIRED": await user_dao.count_with_expired_subscription(),
     }
+    # TG_PLAN зависит от выбранного тарифа, поэтому появляется в ответе только
+    # когда тариф выбран — фронт перезапрашивает счётчики при его смене.
+    if plan_id:
+        counts["TG_PLAN"] = await subscription_dao.count_active_by_plan(plan_id)
+
     for seg in EMAIL_SEGMENT_FROM:
         counts[seg] = await _email_count(session, seg)
     return counts

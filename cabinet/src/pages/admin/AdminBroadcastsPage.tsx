@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { RefreshCw, AlertCircle, CheckCircle, XCircle, Clock, Send, Eye, EyeOff } from "lucide-react";
-import { broadcastsAdminApi, type AdminBroadcast, type BroadcastChannel } from "@/api/admin";
+import { broadcastsAdminApi, plansAdminApi, type AdminBroadcast, type AdminPlan, type BroadcastChannel } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { formatDate } from "@/lib/format";
 
@@ -58,6 +58,7 @@ const CHANNEL_GROUPS: { title: string; items: ChannelItem[] }[] = [
     title: "Telegram",
     items: [
       { key: "TG_ALL", label: "Все", hint: "все зарегистрированные в боте" },
+      { key: "TG_PLAN", label: "По тарифу", hint: "активные на выбранном тарифе" },
       { key: "TG_SUBSCRIBED", label: "С подпиской", hint: "активная (вкл. пробные)" },
       { key: "TG_UNSUBSCRIBED", label: "Без подписки", hint: "нет активной подписки" },
       { key: "TG_TRIAL", label: "Пробный период", hint: "сейчас на триале" },
@@ -88,10 +89,28 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [preview, setPreview] = useState(false);
+  const [plans, setPlans] = useState<AdminPlan[]>([]);
+  const [planId, setPlanId] = useState<number | "">("");
 
+  const planSelected = selected.has("TG_PLAN");
+
+  // Счётчик «по тарифу» зависит от выбранного тарифа, поэтому перезапрашиваем
+  // при его смене. Остальные аудитории от него не зависят и не мигают.
   useEffect(() => {
-    broadcastsAdminApi.audienceCounts().then(setCounts).catch(() => {});
-  }, []);
+    broadcastsAdminApi
+      .audienceCounts(typeof planId === "number" ? planId : undefined)
+      .then(setCounts)
+      .catch(() => {});
+  }, [planId]);
+
+  // Тарифы тянем только когда они понадобились — на обычную рассылку лишний запрос ни к чему.
+  useEffect(() => {
+    if (!planSelected || plans.length > 0) return;
+    plansAdminApi
+      .list()
+      .then((r) => setPlans(r.items ?? []))
+      .catch(() => {});
+  }, [planSelected, plans.length]);
 
   // Внутри одного канала «Все» и сегменты по статусу взаимоисключимы: «Все» —
   // надмножество сегментов, иначе часть юзеров получит рассылку дважды.
@@ -122,13 +141,19 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
     setMsg(null);
     if (!text.trim()) return setErr("Введите текст сообщения");
     if (selected.size === 0) return setErr("Выберите хотя бы один канал");
+    if (planSelected && typeof planId !== "number") return setErr("Выберите тариф для рассылки по тарифу");
     if (!confirm) return setConfirm(true);
     setSending(true);
     try {
-      await broadcastsAdminApi.create(text.trim(), [...selected]);
+      await broadcastsAdminApi.create(
+        text.trim(),
+        [...selected],
+        typeof planId === "number" ? planId : undefined,
+      );
       setMsg("Рассылка запущена — прогресс появится в истории ниже");
       setText("");
       setSelected(new Set());
+      setPlanId("");
       setConfirm(false);
       onCreated();
     } catch (e) {
@@ -220,6 +245,37 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
                 );
               })}
             </div>
+
+            {/* Выбор тарифа появляется только под группой Telegram и только когда
+                выбран канал «По тарифу» — иначе он был бы мёртвым полем на экране. */}
+            {group.title === "Telegram" && planSelected && (
+              <div className="mt-2 rounded-xl border border-accent/40 bg-accent-subtle/40 p-3">
+                <label className="mb-1.5 block text-xs font-medium text-fg-muted">
+                  Тариф для рассылки *
+                </label>
+                <select
+                  value={planId}
+                  onChange={(e) => {
+                    setPlanId(e.target.value ? Number(e.target.value) : "");
+                    setConfirm(false);
+                    setErr(null);
+                  }}
+                  className="w-full rounded-xl border border-[var(--border)] bg-bg-raised px-3 py-2 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent"
+                >
+                  <option value="">— выберите тариф —</option>
+                  {plans.map((pl) => (
+                    <option key={pl.id} value={pl.id}>
+                      {pl.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1.5 text-xs text-fg-subtle">
+                  {typeof planId === "number"
+                    ? `Получат только те, у кого сейчас активна эта подписка: ${counts?.TG_PLAN ?? "…"}`
+                    : "Пока тариф не выбран, рассылка не отправится"}
+                </p>
+              </div>
+            )}
           </div>
         ))}
       </div>

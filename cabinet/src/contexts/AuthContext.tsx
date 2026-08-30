@@ -8,6 +8,8 @@ import {
   type ReactNode,
 } from "react";
 import { authApi } from "@/api/auth";
+import { referralApi } from "@/api/referral";
+import { captureReferralCode, clearReferralCode, readReferralCode } from "@/lib/referralRef";
 import { ApiError } from "@/types/api";
 import type {
   LoginRequest,
@@ -111,8 +113,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    // Код из ссылки приглашения снимаем ДО входа: адрес со временем сменится
+    // (редирект OIDC, переход на страницу входа), а код должен пережить это.
+    captureReferralCode();
     refreshMe().finally(() => setIsLoading(false));
   }, [refreshMe]);
+
+  // Досчёт приглашения. Ждём именно ПОЯВЛЕНИЯ пользователя, а не конкретной
+  // кнопки входа: так одинаково отрабатывают виджет Telegram, мини-приложение,
+  // возврат с oauth.telegram.org и обычная регистрация. Повторы безопасны —
+  // сервер откажет, если пригласивший уже есть.
+  useEffect(() => {
+    if (!user) return;
+    const code = readReferralCode();
+    if (!code) return;
+    clearReferralCode();
+    referralApi.attach(code).catch(() => {
+      // Приглашение не засчиталось — это не повод мешать человеку пользоваться
+      // кабинетом. Разбор — в логах сервера.
+    });
+  }, [user]);
 
   const login = useCallback(
     async (data: LoginRequest) => {

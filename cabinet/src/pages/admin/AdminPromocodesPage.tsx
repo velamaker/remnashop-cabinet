@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { Plus, Trash2, ToggleLeft, ToggleRight, AlertCircle, X, ChevronLeft, ChevronRight } from "lucide-react";
+import { Plus, Trash2, ToggleLeft, ToggleRight, AlertCircle, X, ChevronLeft, ChevronRight, Shuffle } from "lucide-react";
 import { promocodesAdminApi, plansAdminApi, type AdminPromocode, type AdminPlan } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { formatDate } from "@/lib/format";
@@ -47,6 +47,31 @@ const REWARD_LABEL: Record<string, string> = Object.fromEntries(
   REWARD_TYPES.map((t) => [t.value, t.label]),
 );
 
+const AVAILABILITY_LABEL: Record<string, string> = Object.fromEntries(
+  AVAILABILITY_OPTIONS.map((a) => [a.value, a.label]),
+);
+
+// Пункты конфигуратора: какой раскрыт сейчас.
+type RowKey = "code" | "type" | "reward" | "availability" | "expires" | "limit";
+
+// Код той же формы, что генерирует бот: 6 знаков, буквы обоих регистров и цифры.
+// Похожие друг на друга символы (0/O, 1/l/I) выкинуты — код часто диктуют голосом
+// и переписывают со скриншота. Уникальность стережёт база: на колонке code
+// уникальный индекс, повтор вернётся ошибкой, а не молча перезапишет чужой.
+const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+
+function generateCode(length = 6): string {
+  const values = new Uint32Array(length);
+  crypto.getRandomValues(values);
+  return Array.from(values, (v) => CODE_ALPHABET[v % CODE_ALPHABET.length]).join("");
+}
+
+// datetime-local отдаёт «2026-09-01T14:30» — показываем по-человечески.
+function formatDateTimeLocal(value: string): string {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "short" });
+}
+
 // Человеко-читаемое значение награды с единицей — для таблицы.
 function rewardValueText(p: AdminPromocode): string {
   if (p.reward_type === "SUBSCRIPTION") {
@@ -88,6 +113,33 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
   const [duration, setDuration] = useState<number | "">("");
 
   const meta = rewardMeta(rewardType);
+  const [openRow, setOpenRow] = useState<RowKey | null>("code");
+
+  // Как награда выглядит в карточке состояния: то же, что человек увидит потом
+  // в списке промокодов, но собранное из полей формы, а не из ответа сервера.
+  const rewardSummary = (): string => {
+    if (meta.subscription) {
+      const plan = plans.find((pl) => pl.id === planId);
+      if (!plan) return "—";
+      return duration === "" ? plan.name : `${plan.name} · ${duration} дн.`;
+    }
+    if (reward.trim() === "") return "—";
+    const n = Number(reward);
+    if (Number.isNaN(n)) return "—";
+    switch (rewardType) {
+      case "DURATION":
+        return n === 0 ? "бессрочно" : `${n} дн.`;
+      case "TRAFFIC":
+        return n === 0 ? "безлимит" : `${n} ГБ`;
+      case "DEVICES":
+        return n === 0 ? "без лимита" : `${n} шт.`;
+      case "PERSONAL_DISCOUNT":
+      case "PURCHASE_DISCOUNT":
+        return `${n}%`;
+      default:
+        return String(n);
+    }
+  };
 
   // Тарифы подгружаем один раз при первом выборе типа «Тариф».
   useEffect(() => {
@@ -153,158 +205,253 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
     }
   };
 
+  // ── Пошаговый конфигуратор, как в боте ──────────────────────────────────────
+  // Наверху — карточка с текущим состоянием (что именно получится), ниже строки
+  // по пунктам: жмёшь пункт — он раскрывается редактором прямо на месте. Одна
+  // длинная форма показывала все поля разом, включая те, что к выбранному типу
+  // награды отношения не имеют; здесь на экране только то, что сейчас меняешь.
+  const summary: { label: string; value: string; dim?: boolean }[] = [
+    { label: "Код", value: code || "не задан", dim: !code },
+    { label: "Тип", value: REWARD_LABEL[rewardType] ?? rewardType },
+    { label: "Награда", value: rewardSummary(), dim: rewardSummary() === "—" },
+    { label: "Доступ", value: AVAILABILITY_LABEL[availability] ?? availability },
+    { label: "Повторная активация", value: isReusable ? "Разрешена" : "Запрещена" },
+    { label: "Действует до", value: expiresAt ? formatDateTimeLocal(expiresAt) : "∞", dim: !expiresAt },
+    { label: "Лимит активаций", value: maxActivations || "∞", dim: !maxActivations },
+  ];
+
+  const rows: { key: RowKey; label: string; value: string }[] = [
+    { key: "code", label: "Код", value: code || "не задан" },
+    { key: "type", label: "Тип награды", value: REWARD_LABEL[rewardType] ?? rewardType },
+    { key: "reward", label: meta.subscription ? "Тариф и срок" : "Награда", value: rewardSummary() },
+    { key: "availability", label: "Доступ", value: AVAILABILITY_LABEL[availability] ?? availability },
+    { key: "expires", label: "Срок действия", value: expiresAt ? formatDateTimeLocal(expiresAt) : "∞" },
+    { key: "limit", label: "Лимит активаций", value: maxActivations || "∞" },
+  ];
+
+  const rowButton = (r: { key: RowKey; label: string; value: string }) => (
+    <button
+      type="button"
+      onClick={() => setOpenRow(openRow === r.key ? null : r.key)}
+      className={`flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-bg-subtle ${
+        openRow === r.key ? "bg-bg-subtle" : ""
+      }`}
+    >
+      <span className="text-sm text-fg">{r.label}</span>
+      <span className="flex items-center gap-2">
+        <span className="max-w-[10rem] truncate text-sm text-fg-muted">{r.value}</span>
+        <ChevronRight
+          className={`h-4 w-4 flex-shrink-0 text-fg-subtle transition-transform ${
+            openRow === r.key ? "rotate-90" : ""
+          }`}
+        />
+      </span>
+    </button>
+  );
+
+  const inputCls =
+    "w-full rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2.5 text-sm text-fg placeholder:text-fg-muted focus:outline-none focus:ring-2 focus:ring-accent";
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-md rounded-2xl border border-border-subtle bg-bg shadow-xl">
+      <div className="flex max-h-[90vh] w-full max-w-md flex-col rounded-2xl border border-border-subtle bg-bg shadow-xl">
         <div className="flex items-center justify-between border-b border-border-subtle px-6 py-4">
-          <h2 className="text-base font-semibold text-fg">Создать промокод</h2>
+          <h2 className="text-base font-semibold text-fg">Конфигуратор промокода</h2>
           <button onClick={onClose} className="rounded-lg p-1 text-fg-muted hover:text-fg">
             <X className="h-5 w-5" />
           </button>
         </div>
-        <form onSubmit={handleSubmit} className="space-y-4 px-6 py-5">
-          <div>
-            <label className="mb-1 block text-xs font-medium text-fg-muted">Код *</label>
-            <input
-              type="text"
-              value={code}
-              onChange={(e) => setCode(e.target.value.toUpperCase())}
-              placeholder="SUMMER2025"
-              required
-              className="w-full rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2.5 text-sm text-fg placeholder:text-fg-muted focus:outline-none focus:ring-2 focus:ring-accent"
-            />
-          </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="mb-1 block text-xs font-medium text-fg-muted">Тип награды *</label>
-              <select
-                value={rewardType}
-                onChange={(e) => setRewardType(e.target.value)}
-                className="w-full rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent"
-              >
-                {REWARD_TYPES.map((t) => (
-                  <option key={t.value} value={t.value}>{t.label}</option>
+        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5 space-y-4">
+            {/* Карточка состояния: что получится, если нажать «Создать» прямо сейчас. */}
+            <div className="rounded-xl border-l-2 border-accent bg-bg-subtle px-4 py-3">
+              <dl className="space-y-1">
+                {summary.map((s) => (
+                  <div key={s.label} className="flex items-baseline justify-between gap-3">
+                    <dt className="text-xs text-fg-muted">{s.label}</dt>
+                    <dd className={`text-right text-xs font-medium ${s.dim ? "text-fg-subtle" : "text-fg"}`}>
+                      {s.value}
+                    </dd>
+                  </div>
                 ))}
-              </select>
+              </dl>
             </div>
-            <div>
-              {meta.subscription ? (
-                <>
-                  <label className="mb-1 block text-xs font-medium text-fg-muted">Тариф *</label>
-                  <select
-                    value={planId}
-                    onChange={(e) => {
-                      setPlanId(e.target.value ? Number(e.target.value) : "");
-                      setDuration("");
-                    }}
-                    className="w-full rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent"
-                  >
-                    <option value="">— выберите —</option>
-                    {plans.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
-                </>
-              ) : (
-                <>
-                  <label className="mb-1 block text-xs font-medium text-fg-muted">{meta.label} *</label>
-                  <input
-                    type="number"
-                    value={reward}
-                    onChange={(e) => setReward(e.target.value)}
-                    placeholder={meta.placeholder}
-                    min={meta.discount ? 1 : 0}
-                    max={meta.discount ? 100 : undefined}
-                    className="w-full rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2.5 text-sm text-fg placeholder:text-fg-muted focus:outline-none focus:ring-2 focus:ring-accent"
-                  />
-                  {meta.hint && <p className="mt-1 text-[11px] text-fg-subtle">{meta.hint}</p>}
-                </>
-              )}
-            </div>
-          </div>
 
-          {meta.subscription && (
-            <div>
-              <label className="mb-1 block text-xs font-medium text-fg-muted">Длительность *</label>
-              <select
-                value={duration}
-                onChange={(e) => setDuration(e.target.value ? Number(e.target.value) : "")}
-                disabled={!selectedPlan}
-                className="w-full rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
-              >
-                <option value="">{selectedPlan ? "— выберите —" : "сначала тариф"}</option>
-                {durations.map((d) => (
-                  <option key={d.days} value={d.days}>{d.days} дн.</option>
-                ))}
-              </select>
-              <p className="mt-1 text-[11px] text-fg-subtle">Промокод выдаст этот тариф на выбранный срок.</p>
-            </div>
-          )}
+            <p className="text-xs text-fg-subtle">Выберите пункт для изменения.</p>
 
-          <div>
-            <label className="mb-1 block text-xs font-medium text-fg-muted">Доступность</label>
-            <select
-              value={availability}
-              onChange={(e) => setAvailability(e.target.value)}
-              className="w-full rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent"
-            >
-              {AVAILABILITY_OPTIONS.map((a) => (
-                <option key={a.value} value={a.value}>{a.label}</option>
+            <div className="divide-y divide-border-subtle overflow-hidden rounded-xl border border-border-subtle">
+              {rows.map((r) => (
+                <div key={r.key}>
+                  {rowButton(r)}
+                  {openRow === r.key && (
+                    <div className="border-t border-border-subtle bg-bg-subtle/50 px-4 py-3 space-y-2">
+                      {r.key === "code" && (
+                        <>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={code}
+                              onChange={(e) => setCode(e.target.value.toUpperCase())}
+                              placeholder="SUMMER2025"
+                              className={inputCls}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setCode(generateCode())}
+                              title="Сгенерировать код"
+                              className="flex-shrink-0 rounded-xl border border-border-subtle px-3 text-sm font-medium text-fg-muted transition-colors hover:text-fg"
+                            >
+                              <Shuffle className="h-4 w-4" />
+                            </button>
+                          </div>
+                          <p className="text-[11px] text-fg-subtle">
+                            Можно придумать свой или нажать кнопку — код сгенерируется случайно.
+                          </p>
+                        </>
+                      )}
+
+                      {r.key === "type" && (
+                        <select
+                          value={rewardType}
+                          onChange={(e) => setRewardType(e.target.value)}
+                          className={inputCls}
+                        >
+                          {REWARD_TYPES.map((t) => (
+                            <option key={t.value} value={t.value}>{t.label}</option>
+                          ))}
+                        </select>
+                      )}
+
+                      {r.key === "reward" && meta.subscription && (
+                        <>
+                          <select
+                            value={planId}
+                            onChange={(e) => {
+                              setPlanId(e.target.value ? Number(e.target.value) : "");
+                              setDuration("");
+                            }}
+                            className={inputCls}
+                          >
+                            <option value="">— выберите тариф —</option>
+                            {plans.map((pl) => (
+                              <option key={pl.id} value={pl.id}>{pl.name}</option>
+                            ))}
+                          </select>
+                          <select
+                            value={duration}
+                            onChange={(e) => setDuration(e.target.value ? Number(e.target.value) : "")}
+                            disabled={!selectedPlan}
+                            className={`${inputCls} disabled:opacity-50`}
+                          >
+                            <option value="">{selectedPlan ? "— выберите срок —" : "сначала тариф"}</option>
+                            {durations.map((d) => (
+                              <option key={d.days} value={d.days}>{d.days} дн.</option>
+                            ))}
+                          </select>
+                          <p className="text-[11px] text-fg-subtle">
+                            Промокод выдаст этот тариф на выбранный срок.
+                          </p>
+                        </>
+                      )}
+
+                      {r.key === "reward" && !meta.subscription && (
+                        <>
+                          <input
+                            type="number"
+                            value={reward}
+                            onChange={(e) => setReward(e.target.value)}
+                            placeholder={meta.placeholder}
+                            min={meta.discount ? 1 : 0}
+                            max={meta.discount ? 100 : undefined}
+                            className={inputCls}
+                          />
+                          {meta.hint && <p className="text-[11px] text-fg-subtle">{meta.hint}</p>}
+                        </>
+                      )}
+
+                      {r.key === "availability" && (
+                        <select
+                          value={availability}
+                          onChange={(e) => setAvailability(e.target.value)}
+                          className={inputCls}
+                        >
+                          {AVAILABILITY_OPTIONS.map((a) => (
+                            <option key={a.value} value={a.value}>{a.label}</option>
+                          ))}
+                        </select>
+                      )}
+
+                      {r.key === "expires" && (
+                        <>
+                          <input
+                            type="datetime-local"
+                            value={expiresAt}
+                            onChange={(e) => setExpiresAt(e.target.value)}
+                            className={inputCls}
+                          />
+                          {expiresAt && (
+                            <button
+                              type="button"
+                              onClick={() => setExpiresAt("")}
+                              className="text-[11px] text-fg-muted underline hover:text-fg"
+                            >
+                              Сделать бессрочным
+                            </button>
+                          )}
+                        </>
+                      )}
+
+                      {r.key === "limit" && (
+                        <>
+                          <input
+                            type="number"
+                            min={1}
+                            value={maxActivations}
+                            onChange={(e) => setMaxActivations(e.target.value)}
+                            placeholder="∞"
+                            className={inputCls}
+                          />
+                          <p className="text-[11px] text-fg-subtle">Пусто — без ограничения.</p>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
               ))}
-            </select>
+
+              {/* Повтор — переключатель, разворачивать нечего. */}
+              <label className="flex w-full cursor-pointer items-center justify-between gap-3 px-4 py-3">
+                <span className="text-sm text-fg">Повторная активация</span>
+                <span className="flex items-center gap-2">
+                  <span className="text-sm text-fg-muted">{isReusable ? "Разрешена" : "Запрещена"}</span>
+                  <input
+                    type="checkbox"
+                    checked={isReusable}
+                    onChange={(e) => setIsReusable(e.target.checked)}
+                    className="h-4 w-4 rounded border-border accent-accent"
+                  />
+                </span>
+              </label>
+            </div>
+
+            {error && <p className="rounded-xl bg-danger/10 px-4 py-2 text-sm text-danger">{error}</p>}
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="mb-1 block text-xs font-medium text-fg-muted">Макс. активаций</label>
-              <input
-                type="number"
-                value={maxActivations}
-                onChange={(e) => setMaxActivations(e.target.value)}
-                placeholder="∞"
-                className="w-full rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2.5 text-sm text-fg placeholder:text-fg-muted focus:outline-none focus:ring-2 focus:ring-accent"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-fg-muted">Истекает</label>
-              <input
-                type="datetime-local"
-                value={expiresAt}
-                onChange={(e) => setExpiresAt(e.target.value)}
-                className="w-full rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent"
-              />
-            </div>
-          </div>
-
-          <label className="flex items-center gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={isReusable}
-              onChange={(e) => setIsReusable(e.target.checked)}
-              className="h-4 w-4 rounded border-border accent-accent"
-            />
-            <span className="text-sm text-fg">Многоразовый</span>
-          </label>
-
-          {error && (
-            <p className="rounded-xl bg-danger/10 px-4 py-2 text-sm text-danger">{error}</p>
-          )}
-
-          <div className="flex gap-3 pt-1">
+          <div className="flex gap-3 border-t border-border-subtle px-6 py-4">
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 rounded-xl border border-border-subtle px-4 py-2.5 text-sm font-medium text-fg-muted hover:text-fg transition-colors"
+              className="flex-1 rounded-xl border border-border-subtle px-4 py-2.5 text-sm font-medium text-fg-muted transition-colors hover:text-fg"
             >
               Отмена
             </button>
             <button
               type="submit"
-              disabled={saving}
-              className="flex-1 rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50 transition-colors"
+              disabled={saving || !code.trim()}
+              className="flex-1 rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-accent-fg transition-colors hover:bg-accent/90 disabled:opacity-50"
             >
-              {saving ? "Создание…" : "Создать"}
+              {saving ? "Создание…" : "Создать промокод"}
             </button>
           </div>
         </form>

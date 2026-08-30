@@ -662,15 +662,24 @@ export interface AdminBroadcast {
 }
 
 export type BroadcastChannel =
-  | "TG_ALL" | "TG_SUBSCRIBED" | "TG_UNSUBSCRIBED" | "TG_TRIAL" | "TG_EXPIRED"
+  | "TG_ALL" | "TG_PLAN" | "TG_SUBSCRIBED" | "TG_UNSUBSCRIBED" | "TG_TRIAL" | "TG_EXPIRED"
   | "EMAIL_ALL" | "EMAIL_SUBSCRIBED" | "EMAIL_TRIAL" | "EMAIL_EXPIRING" | "EMAIL_EXPIRED";
 
 export const broadcastsAdminApi = {
   list: () => adminApi.get<{ items: AdminBroadcast[]; total: number }>("/broadcasts"),
   get: (task_id: string) => adminApi.get<AdminBroadcast>(`/broadcasts/${task_id}`),
-  audienceCounts: () => adminApi.get<Record<BroadcastChannel, number>>("/broadcasts/audience-counts"),
-  create: (text: string, channels: BroadcastChannel[]) =>
-    adminApi.post<{ telegram: string[]; email: number[] }>("/broadcasts", { text, channels }),
+  // planId нужен только каналу TG_PLAN: размер этой аудитории зависит от тарифа,
+  // поэтому счётчики перезапрашиваются при его смене.
+  audienceCounts: (planId?: number) =>
+    adminApi.get<Record<BroadcastChannel, number>>(
+      planId ? `/broadcasts/audience-counts?plan_id=${planId}` : "/broadcasts/audience-counts",
+    ),
+  create: (text: string, channels: BroadcastChannel[], planId?: number) =>
+    adminApi.post<{ telegram: string[]; email: number[] }>("/broadcasts", {
+      text,
+      channels,
+      plan_id: planId,
+    }),
 };
 
 // ---------- Settings ----------
