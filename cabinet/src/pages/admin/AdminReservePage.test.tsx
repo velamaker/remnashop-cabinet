@@ -29,6 +29,20 @@ const { default: AdminReservePage } = await import("./AdminReservePage");
 
 const card = () => screen.queryByText("Кто на резерве");
 
+/**
+ * Дождаться, пока приедут ВЫДАЧИ, а не пока появится заголовок блока.
+ *
+ * Заголовок «Кто на резерве» страница рисует всегда, с первого кадра, а строки —
+ * только после ответа `grants()` (в разметке это `!error && data`). Поэтому
+ * `waitFor(card)` возвращался мгновенно, ещё до загрузки, и следующая же строка
+ * теста проверяла содержимое, которого пока нет. Локально успевало, на загруженном
+ * раннере CI — нет: тест падал с «expected null not to be null» и выглядел как
+ * поломка страницы, хотя ломался сам тест.
+ *
+ * Ждём то, что тест и проверяет: любой признак отрисованных данных.
+ */
+const waitForGrants = (anchor: () => unknown) => waitFor(() => expect(anchor()).not.toBeNull());
+
 const grant = (over: Record<string, unknown> = {}) => ({
   id: 1,
   user_id: 42,
@@ -56,7 +70,7 @@ describe("Кто на резерве", () => {
     grants = () => Promise.resolve({ items: [grant()], active: 1, broken: 0 });
     render(<AdminReservePage />);
 
-    await waitFor(() => expect(card()).not.toBeNull());
+    await waitForGrants(() => screen.queryByText("vasya"));
     expect(screen.queryByText("vasya")).not.toBeNull();
     expect(screen.queryByText("Reserve-1GB")).not.toBeNull();
     expect(screen.queryByText("0.2 / 1 ГБ")).not.toBeNull();
@@ -73,7 +87,7 @@ describe("Кто на резерве", () => {
       });
     render(<AdminReservePage />);
 
-    await waitFor(() => expect(card()).not.toBeNull());
+    await waitForGrants(() => screen.queryByText("нет активных сквадов — в приложении будет пусто"));
     expect(screen.queryByText("нет активных сквадов — в приложении будет пусто")).not.toBeNull();
     expect(screen.queryByText(/не работает/)).not.toBeNull();
   });
@@ -88,7 +102,7 @@ describe("Кто на резерве", () => {
       });
     render(<AdminReservePage />);
 
-    await waitFor(() => expect(card()).not.toBeNull());
+    await waitForGrants(() => screen.queryByText("резерв израсходован"));
     expect(screen.queryByText("резерв израсходован")).not.toBeNull();
     expect(screen.queryByText(/не работает/)).toBeNull();
   });
@@ -105,7 +119,7 @@ describe("Кто на резерве", () => {
       });
     render(<AdminReservePage />);
 
-    await waitFor(() => expect(card()).not.toBeNull());
+    await waitForGrants(() => screen.queryByText("сломанный"));
     const names = screen.getAllByText(/здоровый|сломанный/).map((n) => n.textContent);
     expect(names[0]).toBe("сломанный");
   });
@@ -122,7 +136,7 @@ describe("Кто на резерве", () => {
       });
     render(<AdminReservePage />);
 
-    await waitFor(() => expect(card()).not.toBeNull());
+    await waitForGrants(() => screen.queryByText("закончился"));
     expect(screen.getAllByText("vasya")).toHaveLength(2);
     expect(screen.queryByText("закончился")).not.toBeNull();
   });
@@ -131,8 +145,15 @@ describe("Кто на резерве", () => {
     grants = () => Promise.reject(new ApiError(501, "Адаптер пока не умеет"));
     render(<AdminReservePage />);
 
-    await waitFor(() => expect(screen.queryByText("Резервный доступ истёкшим")).not.toBeNull());
-    expect(card()).toBeNull();
+    // Ждём ИСЧЕЗНОВЕНИЯ блока, а не появления соседней карточки. Блок нарисован с
+    // первого кадра и прячется только когда придёт 501; соседняя карточка грузится
+    // сама по себе и успевает раньше — на медленном ответе тест проверял «блока
+    // нет» в момент, когда ответа ещё не было, и видел живой заголовок.
+    await waitFor(() => expect(card()).toBeNull());
+    // getAllByText, а не queryByText: после того как блок «Кто на резерве» ушёл,
+    // этот заголовок остаётся на странице не в одном месте, а queryByText на
+    // нескольких совпадениях не возвращает null, а бросает.
+    expect(screen.getAllByText("Резервный доступ истёкшим").length).toBeGreaterThan(0);
   });
 
   it("настоящая ошибка бэкенда не прячется, в отличие от 501", async () => {
@@ -170,7 +191,7 @@ describe("Кто на резерве", () => {
   it("резерв ещё никому не выдавали → таблицы нет, но блок на месте", async () => {
     render(<AdminReservePage />);
 
-    await waitFor(() => expect(card()).not.toBeNull());
+    await waitForGrants(() => screen.queryByText("Резерв пока никому не выдавался."));
     expect(screen.queryByText("Резерв пока никому не выдавался.")).not.toBeNull();
   });
 });
