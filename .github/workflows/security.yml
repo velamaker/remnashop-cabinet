@@ -17,7 +17,7 @@ jobs:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0  # весь история — ловим секреты в прошлых коммитах (был инцидент дампов)
       - uses: gitleaks/gitleaks-action@v2
@@ -28,7 +28,7 @@ jobs:
     name: CodeQL (JS/TS)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: github/codeql-action/init@v3
         with:
           languages: javascript-typescript
@@ -38,7 +38,7 @@ jobs:
     name: Trivy FS + IaC (config)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Trivy filesystem (deps + secrets)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -57,7 +57,7 @@ jobs:
     name: Trivy image (overlay) + SBOM
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build overlay image
         run: docker build -t remnashop-overlay:ci .
       - name: Trivy image scan

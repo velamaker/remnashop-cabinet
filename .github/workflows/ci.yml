@@ -17,10 +17,13 @@ jobs:
       run:
         working-directory: cabinet
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          # 22, а не 20: GitHub объявил Node 20 на раннерах устаревшим. Собственно
+          # предупреждение было про среду САМИХ экшенов (её лечит переход на v5),
+          # но держать сборку на снимаемой версии смысла нет — на 22 проверено.
+          node-version: "22"
           cache: npm
           cache-dependency-path: cabinet/package-lock.json
       - name: Install (clean)
