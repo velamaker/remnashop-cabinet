@@ -533,7 +533,68 @@ export default function AdminPromocodesPage() {
         </div>
       )}
 
-      <div className="overflow-hidden rounded-2xl border border-border-subtle">
+      {/* Телефон: карточки вместо таблицы. Четыре колонки с подарочным кодом на
+          37 знаков в 390 px не помещаются никак — таблицу приходилось листать
+          вбок вместе с колонкой «Код», после чего строка теряла смысл, а перенос
+          кода превращал его в столбик по три буквы. */}
+      <div className="space-y-2 sm:hidden">
+        {loading ? (
+          <div className="flex justify-center py-12">
+            <div className="h-7 w-7 animate-spin rounded-full border-2 border-border border-t-accent" />
+          </div>
+        ) : items.length === 0 ? (
+          <p className="rounded-2xl border border-border-subtle py-12 text-center text-fg-muted">
+            Промокодов нет
+          </p>
+        ) : (
+          items.map((p) => (
+            <div key={p.id} className="rounded-2xl border border-border-subtle bg-bg-subtle p-4">
+              <div className="flex items-start justify-between gap-3">
+                {/* Код — главное в строке, поэтому во всю ширину карточки. */}
+                <span className="min-w-0 flex-1 break-all font-mono text-sm font-semibold text-fg">
+                  {p.code}
+                </span>
+                {p.is_active ? (
+                  <span className="shrink-0 rounded-full bg-success/10 px-2 py-0.5 text-xs text-success">
+                    Активен
+                  </span>
+                ) : (
+                  <span className="shrink-0 rounded-full bg-fg-subtle/20 px-2 py-0.5 text-xs text-fg-muted">
+                    Отключён
+                  </span>
+                )}
+              </div>
+              <p className="mt-1 text-sm text-fg-muted">
+                {REWARD_LABEL[p.reward_type] ?? p.reward_type}
+              </p>
+              <p className="mt-0.5 text-[11px] leading-snug text-fg-subtle">
+                {rewardValueText(p)} · {p.total_activations ?? 0}
+                {p.max_activations != null ? `/${p.max_activations}` : ""} акт.
+                {p.expires_at ? ` · до ${formatDate(p.expires_at)}` : ""}
+              </p>
+              <div className="mt-2 flex items-center justify-end gap-1 border-t border-border-subtle pt-2">
+                <button
+                  onClick={() => toggle(p.id, p.is_active)}
+                  disabled={actionId === p.id}
+                  className="rounded-lg px-2 py-1.5 text-sm text-fg-muted transition-colors hover:text-accent disabled:opacity-40"
+                >
+                  {p.is_active ? "Отключить" : "Включить"}
+                </button>
+                <button
+                  onClick={() => remove(p.id, p.code)}
+                  disabled={actionId === p.id}
+                  className="rounded-lg p-1.5 text-fg-muted transition-colors hover:text-danger disabled:opacity-40"
+                  title="Удалить"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="hidden overflow-hidden rounded-2xl border border-border-subtle sm:block">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>

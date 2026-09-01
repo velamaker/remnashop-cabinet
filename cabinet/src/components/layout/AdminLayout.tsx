@@ -321,22 +321,25 @@ export function AdminLayout({ children }: { children: ReactNode }) {
 
       {/* Mobile top bar */}
       <div className="fixed inset-x-0 top-0 z-20 flex items-center justify-between border-b border-[var(--border)] bg-bg/90 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-md md:hidden">
-        <div className="flex items-center gap-2">
+        {/* min-w-0 обязателен: без него левый блок не сжимается, и правый
+            (колокольчик, версия, темы) выталкивается за правый край — на 320 px
+            это 26 px наружу, и страница начинает ездить вбок пальцем. */}
+        <div className="flex min-w-0 items-center gap-2">
           <button
             onClick={() => setMenuOpen(true)}
             aria-label="Меню админки"
-            className="-ml-1 flex h-8 w-8 items-center justify-center rounded-lg text-fg-muted transition-colors hover:bg-bg-subtle hover:text-fg"
+            className="-ml-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-fg-muted transition-colors hover:bg-bg-subtle hover:text-fg"
           >
             <Menu className="h-5 w-5" strokeWidth={1.75} />
           </button>
-          <NavLink to="/admin" end className="flex items-center gap-2">
-            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-danger/10 text-danger">
+          <NavLink to="/admin" end className="flex min-w-0 items-center gap-2">
+            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-danger/10 text-danger">
               <span className="text-[11px] font-bold">A</span>
             </div>
-            <span className="text-sm font-semibold tracking-tight text-fg">Админ</span>
+            <span className="truncate text-sm font-semibold tracking-tight text-fg">Админ</span>
           </NavLink>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
           <AdminNotifBell />
           {/* Всегда на виду — выход в кабинет без скролла вниз по меню. */}
           <NavLink
@@ -345,13 +348,16 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             className="flex h-8 items-center gap-1 rounded-lg px-2 text-fg-muted transition-colors hover:bg-bg-subtle hover:text-fg"
           >
             <ChevronLeft className="h-4 w-4" strokeWidth={1.75} />
-            <span className="text-sm font-medium">Кабинет</span>
+            {/* На узком экране остаётся одна стрелка: подпись вместе с версией и
+                переключателем тем не помещалась в строку и выталкивала их за
+                правый край (замер на 390 px: правый край 407). */}
+            <span className="hidden text-sm font-medium sm:inline">Кабинет</span>
           </NavLink>
           {version && (
             <NavLink
               to="/admin/updates"
               title="Версия бэкенда (бота)"
-              className="font-mono text-[10px] text-fg-subtle transition-colors hover:text-accent"
+              className="hidden font-mono text-[10px] text-fg-subtle transition-colors hover:text-accent min-[360px]:inline"
             >
               v{version}
             </NavLink>
