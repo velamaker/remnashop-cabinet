@@ -19,7 +19,7 @@ from loguru import logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.infrastructure.services.overlay_push import send_to_user
+from src.infrastructure.services.overlay_push import send_to_user, _fill
 from src.infrastructure.taskiq.broker import broker
 
 ASSETS_DIR = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets"))
@@ -104,10 +104,14 @@ async def run_push_expiring(session: FromDishka[AsyncSession]) -> None:
             if expire_at
             else n
         )
-        title, body_tpl = _MSG.get((lang or "ru")[:2], _MSG["ru"])
+        title_tpl, body_tpl = _MSG.get((lang or "ru")[:2], _MSG["ru"])
+        # Заголовок подставляем наравне с телом. Сейчас плейсхолдеров в нём нет,
+        # но ровно на этом месте в соседней задаче люди получили «{percent}» в
+        # заголовке: там текст правили, а про подстановку никто не вспомнил.
+        # `_fill` не роняет уведомление на лишней фигурной скобке.
         payload = {
-            "title": title,
-            "body": body_tpl.format(days=days_left),
+            "title": _fill(title_tpl, {"days": days_left}),
+            "body": _fill(body_tpl, {"days": days_left}),
             "url": "/billing",
             "tag": "expiring",
         }

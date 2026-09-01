@@ -366,6 +366,24 @@ async def push_admin_event_standalone(user_id: int, payload: dict) -> int:
         return 0
 
 
+def _fill(template: str, fmt: dict) -> str:
+    """Подставляет значения в шаблон, но НИКОГДА не роняет уведомление.
+
+    Шаблон и набор значений живут в разных файлах и расходятся: лишняя фигурная
+    скобка в тексте или забытый параметр — это `KeyError`/`IndexError`, а он до
+    сих пор гасил push целиком (весь вызов обёрнут в `except`). Уведомление с
+    неподставленным словом хуже красивого, но лучше пропавшего.
+    """
+    try:
+        return template.format(**fmt)
+    except Exception as exc:  # noqa: BLE001 — текст важнее подстановки
+        # След обязателен: молча подставленный обратно шаблон выглядит как опечатка
+        # в тексте, и никто не пойдёт искать причину. Warning, а не exception:
+        # трассировка тут ничего не добавит, а строк может быть много.
+        logger.warning(f"push: шаблон не подставился ({exc}) — отправляю как есть: {template[:60]}")
+        return template
+
+
 async def notify_user_push(
     session: AsyncSession,
     user: object,
@@ -385,8 +403,17 @@ async def notify_user_push(
     """
     try:
         l = _user_lang(user)
-        title, body_tpl = messages.get(l) or messages["ru"]
-        payload = {"title": title, "body": body_tpl.format(**fmt), "url": url}
+        title_tpl, body_tpl = messages.get(l) or messages["ru"]
+        # Подставляем и в ЗАГОЛОВОК тоже. Раньше форматировалось только тело, и
+        # человек видел в ленте буквальное «Скидка {percent}% на первую покупку»
+        # (жалоба пользователя 7 августа) — при том, что в Telegram то же самое
+        # уведомление приходило с числом: там текст собирают отдельно. Заголовки с
+        # плейсхолдером есть минимум у скидки триальщикам и win-back.
+        payload = {
+            "title": _fill(title_tpl, fmt),
+            "body": _fill(body_tpl, fmt),
+            "url": url,
+        }
         if tag:
             payload["tag"] = tag
         uid = getattr(user, "id")

@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.application.common import Remnawave
 from src.core.config import AppConfig
 from src.infrastructure.services.overlay_digest import load_config
-from src.infrastructure.services.overlay_push import notify_user_push
+from src.infrastructure.services.overlay_push import _fill, notify_user_push
 from src.infrastructure.taskiq.broker import broker
 
 ASSETS_DIR = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets"))
@@ -137,9 +137,13 @@ async def run_digest(
         l = (lang or "ru")[:2]
         fav_txt = ""
         if fav is not None and getattr(fav, "name", None):
-            fav_txt = _FAV.get(l, _FAV["ru"]).format(name=fav.name)
+            fav_txt = _fill(_FAV.get(l, _FAV["ru"]), {"name": fav.name})
         title, body_tpl = _MSG.get(l, _MSG["ru"])
-        body = body_tpl.format(gb=gb, fav=fav_txt)
+        # Через _fill, а не .format(): оба вызова стоят внутри цикла по людям и
+        # вне try, а у задачи retry_on_error=False — расхождение шаблона и
+        # аргументов уронило бы ВЕСЬ проход, и месячная сводка не ушла бы никому
+        # из очереди после. Текст в норме тот же.
+        body = _fill(body_tpl, {"gb": gb, "fav": fav_txt})
 
         await notify_user_push(
             session, SimpleNamespace(id=uid, language=lang),

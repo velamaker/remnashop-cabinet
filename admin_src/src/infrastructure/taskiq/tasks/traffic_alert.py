@@ -25,7 +25,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import AppConfig
-from src.infrastructure.services.overlay_push import notify_user_push
+from src.infrastructure.services.overlay_push import _fill, notify_user_push
 from src.infrastructure.services.overlay_traffic_alert import load_config
 from src.infrastructure.taskiq.broker import broker
 
@@ -166,7 +166,11 @@ async def run_traffic_alert(
         gb_limit = round(limit / _GB, 1)
         l = (lang or "ru")[:2]
         title, body_tpl = _MSG.get(l, _MSG["ru"])
-        body = body_tpl.format(pct=pct, used=gb_used, limit=gb_limit)
+        # Через _fill, а не .format(): вызов стоит внутри цикла по людям и вне
+        # try, а у задачи retry_on_error=False — расхождение шаблона и аргументов
+        # уронило бы ВЕСЬ проход, и все, кто в очереди после, остались бы без
+        # предупреждения о трафике до следующего кроном. Текст в норме тот же.
+        body = _fill(body_tpl, {"pct": pct, "used": gb_used, "limit": gb_limit})
 
         await notify_user_push(
             session, SimpleNamespace(id=uid, language=lang),
