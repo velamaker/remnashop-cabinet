@@ -32,6 +32,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "reserve_gb": 1,      # сколько ГБ резервного трафика
     "window_days": 7,     # сколько дней держать резервный доступ
     "squad_uuid": "",     # ОБЯЗАТЕЛЕН при enabled: сквад с доступом только в Telegram
+    # За сколько часов до конца резерва предупредить человека. 0 — не предупреждать.
+    # Резерв — единственное, что у него осталось; кончится молча, и он просто
+    # потеряет доступ, не поняв почему. Это ещё и последний момент, когда ему можно
+    # предложить купить подписку, пока сервис у него работает.
+    "warn_hours_before": 48,
 }
 
 
@@ -50,6 +55,9 @@ def _normalize(data: dict[str, Any]) -> dict[str, Any]:
         "reserve_gb": _clamp(data.get("reserve_gb"), DEFAULT_CONFIG["reserve_gb"], 1, 100),
         "window_days": _clamp(data.get("window_days"), DEFAULT_CONFIG["window_days"], 1, 60),
         "squad_uuid": squad,
+        "warn_hours_before": _clamp(
+            data.get("warn_hours_before"), DEFAULT_CONFIG["warn_hours_before"], 0, 720
+        ),
     }
 
 

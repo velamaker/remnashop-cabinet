@@ -56,6 +56,7 @@ LIMITED «кончился трафик»; окно вышло → EXPIRED «п�
 меняем срок/лимит/сквад юзера в панели. Best-effort: ошибка по одному не роняет проход.
 """
 
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Optional
@@ -66,8 +67,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common import Remnawave
-from src.infrastructure.services.overlay_push import notify_user_push
-from src.infrastructure.services.overlay_reserve import load_config
+from src.infrastructure.services.overlay_push import _fill, notify_user_push
+from src.infrastructure.services.overlay_reserve import ASSETS_DIR, load_config
 from src.infrastructure.taskiq.broker import broker
 
 _GB = 1024 ** 3
@@ -84,6 +85,58 @@ _MSG = {
         "Telegram ({gb} GB) — renew to get the rest back.",
     ),
 }
+
+
+# Предупреждение за N часов до конца резерва. Формулировка отличается от обычного
+# «подписка заканчивается» НАРОЧНО: у человека подписки уже нет, у него бесплатная
+# страховка, и честнее сказать именно это. Плюс это последний момент, когда сервис у
+# него ещё работает и предложение купить попадает в живого пользователя.
+_ENDING_MSG = {
+    "ru": (
+        "⏳ Бесплатный доступ заканчивается",
+        "Резервный доступ к Telegram закончится через {hours} ч. Оформите подписку, "
+        "чтобы не остаться без интернета и вернуть все серверы.",
+    ),
+    "en": (
+        "⏳ Free access is ending",
+        "Your backup Telegram access ends in {hours} h. Get a subscription to stay "
+        "online and bring the other servers back.",
+    ),
+}
+
+_WARN_STATE_PATH = ASSETS_DIR / "reserve_warn_state.json"
+
+
+def _load_warn_state() -> dict:
+    """Кого уже предупреждали. Ключ — id выдачи, значение — её срок.
+
+    Срок в значении не для красоты: резерв выдаётся заново после покупки, и у новой
+    выдачи новый id — но если бы ключом был user_id, повторная выдача унаследовала бы
+    «уже предупреждён» и человек второй раз остался бы без предупреждения.
+    """
+    try:
+        if _WARN_STATE_PATH.exists():
+            with _WARN_STATE_PATH.open(encoding="utf-8") as fh:
+                data = json.load(fh)
+                return data if isinstance(data, dict) else {}
+    except Exception as exc:  # noqa: BLE001 — потеря файла не повод ронять проход
+        logger.warning(f"reserve: не прочитал стейт предупреждений: {exc}")
+    return {}
+
+
+def _save_warn_state(state: dict) -> None:
+    try:
+        ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+        with _WARN_STATE_PATH.open("w", encoding="utf-8") as fh:
+            json.dump(state, fh)
+    except Exception as exc:  # noqa: BLE001
+        # ERROR, а не warning: незаписанный стейт означает, что на СЛЕДУЮЩЕМ проходе
+        # (через час) те же люди получат то же предупреждение — и так до конца окна.
+        # Рассылка раз в час живым людям должна быть видна сразу, а не в общем шуме.
+        logger.error(
+            f"reserve: НЕ сохранил стейт предупреждений ({exc}) — "
+            "предупреждения повторятся на следующем проходе"
+        )
 
 
 def _squad_uuids(user: object) -> list[str]:
@@ -202,6 +255,89 @@ async def _close_finished(session: AsyncSession) -> int:
     return result.rowcount or 0
 
 
+async def _warn_ending(session: AsyncSession, hours_before: int) -> int:
+    """Предупредить тех, у кого резерв вот-вот кончится.
+
+    ЗАЧЕМ. Напоминания об окончании подписки этих людей НЕ трогают (и правильно: у
+    них истёк не срок подписки, а бесплатная страховка, и «продлите подписку» про
+    неё сбивало бы с толку). Но молчать нельзя: резерв — единственное, что у них
+    работает, и кончится он без единого слова. Это ещё и последний момент, когда
+    предложение купить попадает в человека, который сервисом ПОЛЬЗУЕТСЯ.
+
+    Шлём и в Telegram, и web-push. При самой выдаче резерва уходит только push, а
+    телеграмом в кабинет входят почти все — на одном push половина не увидит.
+    """
+    if hours_before <= 0:
+        return 0
+
+    rows = (
+        await session.execute(
+            text(
+                "SELECT r.id, r.user_id, r.reserve_expire_at, u.telegram_id, "
+                "       lower(u.language::text) AS lang "
+                "FROM reserve_grants r JOIN users u ON u.id = r.user_id "
+                "WHERE r.ended = false "
+                "  AND r.reserve_expire_at > now() "
+                "  AND r.reserve_expire_at <= now() + make_interval(hours => :h)"
+            ),
+            {"h": hours_before},
+        )
+    ).all()
+    if not rows:
+        return 0
+
+    state = _load_warn_state()
+    bot = None
+    sent = 0
+    try:
+        for grant_id, uid, expire_at, tg_id, lang in rows:
+            key = str(grant_id)
+            stamp = expire_at.isoformat() if expire_at else ""
+            if state.get(key) == stamp:
+                continue  # за эту выдачу уже предупреждали
+
+            left = expire_at - datetime.now(expire_at.tzinfo) if expire_at else None
+            hours_left = max(1, int(left.total_seconds() // 3600)) if left else hours_before
+
+            await notify_user_push(
+                session,
+                SimpleNamespace(id=uid, language=lang),
+                _ENDING_MSG,
+                url="/billing",
+                tag="reserve-ending",
+                hours=hours_left,
+            )
+
+            if tg_id:
+                if bot is None:
+                    from aiogram import Bot
+
+                    from src.core.config import AppConfig
+
+                    bot = Bot(AppConfig.get().bot.token.get_secret_value())
+                title, body_tpl = _ENDING_MSG.get((lang or "ru")[:2], _ENDING_MSG["ru"])
+                try:
+                    await bot.send_message(
+                        int(tg_id),
+                        f"<b>{title}</b>\n\n{_fill(body_tpl, {'hours': hours_left})}",
+                    )
+                except Exception as exc:  # noqa: BLE001 — недоступный юзер это норма
+                    logger.debug(f"reserve: TG user_id={uid} не доставлено: {exc}")
+
+            state[key] = stamp
+            sent += 1
+    finally:
+        if bot is not None:
+            try:
+                await bot.session.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    if sent:
+        _save_warn_state(state)
+    return sent
+
+
 async def _repair_active(session: AsyncSession, sdk: object, gb: int, squad: str) -> int:
     """Доводит до рабочего состояния резервы, которые уже выданы, но ничего не дают.
 
@@ -271,6 +407,12 @@ async def run_reserve(
     closed = await _close_finished(session)
     if closed:
         logger.info(f"reserve: закрыто окон резерва {closed}")
+
+    # ДО проверки тумблера, как и закрытие окон: люди на резерве уже сидят, и
+    # выключенная фича не повод оставить их без предупреждения.
+    warned = await _warn_ending(session, int(cfg.get("warn_hours_before", 0)))
+    if warned:
+        logger.info(f"reserve: предупреждено о скором конце резерва {warned}")
 
     sdk = getattr(remnawave, "sdk", None)
     if sdk is None:
