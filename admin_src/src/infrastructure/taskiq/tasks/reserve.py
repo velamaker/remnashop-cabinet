@@ -287,11 +287,22 @@ async def run_reserve(
     rows = (
         await session.execute(
             text(
-                # Дедуп — НА ЦИКЛ ПОДПИСКИ, а не на человека: резерв положен на каждое
-                # истечение. Пропускаем, если резерв сейчас действует (ended = false)
-                # либо уже выдавался за ТЕКУЩЕЕ истечение (granted_at не раньше
-                # s.expire_at). После продления s.expire_at уезжает вперёд, и старая
-                # выдача перестаёт закрывать дорогу следующей.
+                # ПРАВИЛО ВЛАДЕЛЬЦА: повторный резерв — ТОЛЬКО после покупки.
+                #
+                # Раньше дедуп сравнивал granted_at с s.expire_at («выдавали ли уже за
+                # это истечение»), и это не работало никогда: выдача резерва САМА
+                # двигает s.expire_at на окно вперёд (панель не принимает дату в
+                # прошлом). Через окно подписка снова выглядела истёкшей, старая выдача
+                # оказывалась раньше нового срока — и резерв выписывался заново, по
+                # кругу. К 09.09.2026 так набралось 163 выдачи на 89 человек: пятнадцать
+                # получили по четыре подряд, до 34 дней непрерывного доступа, и почти
+                # все — ни разу не заплатив.
+                #
+                # Теперь ворота — сама оплата, а не срок: её резерв подделать не может.
+                # Даём, если резерв не выдавался вовсе (первое истечение, в том числе
+                # после триала — тот транзакцию не создаёт) либо после ПОСЛЕДНЕЙ выдачи
+                # была успешная НЕтестовая оплата. Действующий резерв, как и раньше, не
+                # перевыдаём.
                 "SELECT u.id, s.user_remna_id, lower(u.language::text) "
                 "FROM users u "
                 "JOIN subscriptions s ON u.current_subscription_id = s.id "
@@ -300,8 +311,18 @@ async def run_reserve(
                 "AND s.expire_at > now() - make_interval(days => :w) "
                 "AND NOT EXISTS ("
                 "  SELECT 1 FROM reserve_grants r "
-                "  WHERE r.user_id = u.id "
-                "    AND (r.ended = false OR r.granted_at >= s.expire_at)"
+                "  WHERE r.user_id = u.id AND r.ended = false"
+                ") "
+                "AND ("
+                "  NOT EXISTS (SELECT 1 FROM reserve_grants r WHERE r.user_id = u.id)"
+                "  OR EXISTS ("
+                "    SELECT 1 FROM transactions t "
+                "    WHERE t.user_id = u.id AND t.status = 'COMPLETED' "
+                "      AND t.is_test = false "
+                "      AND t.created_at > ("
+                "        SELECT max(r.granted_at) FROM reserve_grants r WHERE r.user_id = u.id"
+                "      )"
+                "  )"
                 ")"
             ),
             {"w": window},
