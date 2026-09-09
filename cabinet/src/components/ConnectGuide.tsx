@@ -39,7 +39,9 @@ function AppCard({
   const installUrl = app.install[platform];
 
   const handleConnect = () => {
-    openExternalLink(app.deepLink(sub));
+    // Состояние ставим по факту, а не заранее: неразрешённая схема раньше давала
+    // «Открываем…» при полном бездействии, и выглядело это как поломка приложения.
+    if (!openExternalLink(app.deepLink(sub))) return;
     setConnected(true);
     setTimeout(() => setConnected(false), 2500);
   };

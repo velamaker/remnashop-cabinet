@@ -7,6 +7,7 @@ interface TelegramWebApp {
   colorScheme: "dark" | "light";
   ready: () => void;
   expand: () => void;
+  close: () => void;
   openLink: (url: string, options?: { try_instant_view?: boolean }) => void;
   BackButton: {
     isVisible: boolean;
@@ -72,11 +73,17 @@ export function useIsMiniApp(): boolean {
  * (/connect.html), который openLink открывает во ВНЕШНЕМ браузере, а тот уже
  * отдаёт схему приложению по URL-scheme. Вне Mini App — обычный location.href.
  */
-export function openExternalLink(url: string) {
+export function openExternalLink(url: string): boolean {
   // Централизованный guard: url может прийти из админ-конфига (custom deep_link) —
   // не открываем javascript:/data: и прочие неразрешённые схемы (иначе XSS в origin).
   const safe = safeExternalUrl(url);
-  if (!safe) return;
+  if (!safe) {
+    // Раньше здесь был молчаливый выход, и вызывающий рапортовал успех: кнопка
+    // «Подключиться» писала «Открываем…», хотя не открывала ничего. Возвращаем
+    // признак, чтобы вызывающий мог не врать, и оставляем след в консоли.
+    console.warn("openExternalLink: схема не разрешена, ссылка не открыта:", url);
+    return false;
+  }
   const app = getTelegramWebApp();
   const isHttp = /^https?:\/\//i.test(safe);
   if (app) {
@@ -87,6 +94,7 @@ export function openExternalLink(url: string) {
   } else {
     window.location.href = safe;
   }
+  return true;
 }
 
 export function useTelegramTheme(): "dark" | "light" | null {

@@ -16,8 +16,14 @@ export function safeInternalPath(raw: string | null | undefined): string {
 
 // Разрешённые схемы для ВНЕШНИХ ссылок: http(s)/tg/mailto + известные схемы импорта
 // VPN-приложений. Всё остальное (javascript:/data:/blob:/vbscript: …) отвергаем.
+//
+// ВАЖНО: добавил приложение в data/apps.ts — добавь сюда его схему. Забудешь —
+// кнопка «Подключиться» будет молча не работать: ссылка отбраковывается здесь,
+// openExternalLink выходит без действия, а пользователь видит «Открываем…».
+// Ровно так вышло с INCY. За этим следит тест lib/nav.test.ts, он сверяет
+// список схем apps.ts с этим регулярным выражением.
 const _SAFE_URL_SCHEME =
-  /^(https?|tg|mailto|happ|hiddify|v2raytun|v2rayng|v2box|nekobox|nekoray|streisand|sub|karing|sing-box|clash|clashmeta|shadowrocket|foxray|sfi|sfa|fair):/i;
+  /^(https?|tg|mailto|happ|hiddify|v2raytun|v2rayng|v2box|nekobox|nekoray|streisand|sub|karing|sing-box|clash|clashmeta|shadowrocket|foxray|sfi|sfa|fair|incy):/i;
 
 /**
  * Безопасный ВНЕШНИЙ url для href/навигации. Непроверенный url из бэкенда/админки
