@@ -363,6 +363,11 @@ def install() -> None:
             "referral_rewards",
         ),
         (
+            "сверка суммы платежа ЮMoney",
+            "src.infrastructure.payment_gateways.yoomoney",
+            "yoomoney_amount_check",
+        ),
+        (
             "рефералка без почтового гейта",
             "src.web.endpoints.public.referral",
             "public_referral_gate",
