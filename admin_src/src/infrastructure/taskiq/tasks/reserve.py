@@ -299,10 +299,12 @@ async def run_reserve(
                 # все — ни разу не заплатив.
                 #
                 # Теперь ворота — сама оплата, а не срок: её резерв подделать не может.
-                # Даём, если резерв не выдавался вовсе (первое истечение, в том числе
-                # после триала — тот транзакцию не создаёт) либо после ПОСЛЕДНЕЙ выдачи
-                # была успешная НЕтестовая оплата. Действующий резерв, как и раньше, не
-                # перевыдаём.
+                # Условие одно: после ПОСЛЕДНЕЙ выдачи (а если выдач не было — то вообще
+                # когда-либо) была успешная НЕтестовая оплата. Оно же закрывает и триал:
+                # бесплатная подписка транзакции не создаёт, значит после пробного
+                # периода резерва нет — он там и не нужен. Купил → резерв; после резерва
+                # купил снова → резерв снова, и так по кругу. Действующую выдачу, как и
+                # раньше, не перевыдаём.
                 "SELECT u.id, s.user_remna_id, lower(u.language::text) "
                 "FROM users u "
                 "JOIN subscriptions s ON u.current_subscription_id = s.id "
@@ -313,16 +315,15 @@ async def run_reserve(
                 "  SELECT 1 FROM reserve_grants r "
                 "  WHERE r.user_id = u.id AND r.ended = false"
                 ") "
-                "AND ("
-                "  NOT EXISTS (SELECT 1 FROM reserve_grants r WHERE r.user_id = u.id)"
-                "  OR EXISTS ("
-                "    SELECT 1 FROM transactions t "
-                "    WHERE t.user_id = u.id AND t.status = 'COMPLETED' "
-                "      AND t.is_test = false "
-                "      AND t.created_at > ("
-                "        SELECT max(r.granted_at) FROM reserve_grants r WHERE r.user_id = u.id"
-                "      )"
-                "  )"
+                "AND EXISTS ("
+                "  SELECT 1 FROM transactions t "
+                "  WHERE t.user_id = u.id AND t.status = 'COMPLETED' "
+                "    AND t.is_test = false "
+                # COALESCE с -infinity: выдач не было — значит годится любая оплата.
+                "    AND t.created_at > COALESCE("
+                "      (SELECT max(r.granted_at) FROM reserve_grants r WHERE r.user_id = u.id),"
+                "      '-infinity'::timestamptz"
+                "    )"
                 ")"
             ),
             {"w": window},

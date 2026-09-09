@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from dishka.integrations.taskiq import FromDishka, inject
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common.email_sender import EmailSender
@@ -75,6 +75,16 @@ async def send_email_expiry_reminders(
                 User.telegram_id.is_(None),
                 User.email.is_not(None),
                 User.is_email_verified.is_(True),
+                # Сидящих на резерве пропускаем: у них expire_at — это срок РЕЗЕРВА, а
+                # не подписки. Подписка у такого человека уже кончилась, и «продлите,
+                # осталось 3 дня» про бесплатную страховку только сбивает с толку —
+                # 9 сентября письмо ушло тому, у кого подписка истекла ещё 22 августа.
+                # Через text(): reserve_grants заведена overlay-миграцией, модели у неё
+                # нет, а тянуть её сюда ради одного условия ни к чему.
+                text(
+                    "NOT EXISTS (SELECT 1 FROM reserve_grants r "
+                    "WHERE r.user_id = users.id AND r.ended = false)"
+                ),
             )
         )
         emails = {r[0] for r in (await session.execute(stmt)).all() if r[0]}

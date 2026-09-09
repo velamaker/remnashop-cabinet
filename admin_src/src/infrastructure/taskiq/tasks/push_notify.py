@@ -79,6 +79,14 @@ async def run_push_expiring(session: FromDishka[AsyncSession]) -> None:
                 "WHERE s.status = 'ACTIVE' "
                 "AND s.expire_at >= now() "
                 "AND s.expire_at < now() + make_interval(days => :n) "
+                # Сидящих на резерве пропускаем: у них s.expire_at — это срок
+                # РЕЗЕРВА, а не подписки. Подписка у такого человека уже кончилась,
+                # и «продлите, осталось 3 дня» про бесплатную страховку сбивает с
+                # толку: 9 сентября так пришло письмо тому, у кого подписка истекла
+                # ещё 22 августа.
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM reserve_grants r WHERE r.user_id = u.id AND r.ended = false"
+                ") "
                 "GROUP BY u.id, u.language, s.expire_at"
             ),
             {"n": n},
