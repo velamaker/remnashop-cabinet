@@ -37,3 +37,58 @@ jobs:
       - name: Dependency audit (high+)
         run: npm audit --audit-level=high
         continue-on-error: true  # видимость, не блокируем (транзитивные фиксы бывают отложены)
+
+  backend:
+    name: Бэкенд — тесты overlay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Тесты импортируют src.* — исходники бота живут ТОЛЬКО внутри образа
+      # (COPY admin_src/src поверх ghcr.io/snoups/remnashop). Без сборки их
+      # неоткуда взять, поэтому гоняем внутри образа, как и локально.
+      - name: Собрать образ
+        run: docker build -t remnashop-ci .
+
+      # Значения ЗАВЕДОМО фальшивые и секретами не являются: AppConfig валидирует
+      # их на импорте, и без них три теста падают ещё на сборе. Ключ — валидный
+      # base64 нужной длины, иначе валидатор ругается.
+      - name: Тесты
+        run: |
+          cat > ci.env <<'ENV'
+          APP_DOMAIN=example.test
+          APP_CRYPT_KEY=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
+          BOT_TOKEN=123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          BOT_SECRET_TOKEN=ci-secret
+          BOT_OWNER_ID=1
+          BOT_SUPPORT_USERNAME=ci_support
+          REMNAWAVE_HOST=remnawave
+          REMNAWAVE_TOKEN=ci-token
+          REMNAWAVE_WEBHOOK_SECRET=ci-webhook-secret
+          DATABASE_PASSWORD=ci
+          APP_API_KEY=ci-api-key
+          APP_JWT_SECRET=ci-jwt-secret
+          ENV
+          docker run --rm --env-file ci.env \
+            -v "$PWD/admin_src/tests:/tmp/tests:ro" remnashop-ci \
+            sh -c 'pip install -q --target /tmp/pylibs pytest pytest-asyncio &&
+                   PYTHONPATH=/tmp/pylibs python -m pytest /tmp/tests -q \
+                     --asyncio-mode=auto -p no:cacheprovider'
+
+      # Правки overlay применяются к базе в рантайме. Гейт ловит и то, что
+      # апстрим изменил цель (expect_source), и то, что наша замена не найдёт свои
+      # имена (expect_names_resolve) — именно так 23.08 уехал NameError, из-за
+      # которого месяц не активировался ни один промокод.
+      - name: Правки overlay применяются
+        run: |
+          docker run --rm --env-file ci.env remnashop-ci python -c "
+          import sys, overlay_patches as op, src.overlay_app as m
+          m.application()
+          bad = False
+          for name, why in op.failures():
+              print(f'НЕ ПРИМЕНИЛАСЬ: {name}: {why}', file=sys.stderr); bad = True
+          for module in op.pending():
+              print(f'НЕ СРАБОТАЛА: никто не импортировал {module}', file=sys.stderr); bad = True
+          print(f'применено правок: {len(op.applied())}')
+          sys.exit(1 if bad else 0)
+          "
