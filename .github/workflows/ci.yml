@@ -51,13 +51,19 @@ jobs:
         run: docker build -t remnashop-ci .
 
       # Значения ЗАВЕДОМО фальшивые и секретами не являются: AppConfig валидирует
-      # их на импорте, и без них три теста падают ещё на сборе. Ключ — валидный
-      # base64 нужной длины, иначе валидатор ругается.
+      # их на импорте, и без них три теста падают ещё на сборе.
+      #
+      # APP_CRYPT_KEY — 32 НУЛЕВЫХ байта в base64, и это НАМЕРЕННО, а не лень.
+      # Валидатору нужен ровно 44-символьный base64, но случайный ключ имеет
+      # высокую энтропию, и gitleaks в соседнем workflow принимает его за
+      # настоящий (проверено: падал именно на этой строке, generic-api-key).
+      # Ключ из нулей валидатор принимает, а сканер не трогает. Не заменяйте на
+      # `openssl rand` — сломаете проверку секретов.
       - name: Тесты
         run: |
           cat > ci.env <<'ENV'
           APP_DOMAIN=example.test
-          APP_CRYPT_KEY=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
+          APP_CRYPT_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
           BOT_TOKEN=123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
           BOT_SECRET_TOKEN=ci-secret
           BOT_OWNER_ID=1
