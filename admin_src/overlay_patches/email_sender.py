@@ -168,6 +168,65 @@ def _render_verification(body: str, from_name: str) -> tuple[str, str, str]:
     return subject, text, html
 
 
+def _cabinet_url() -> str:
+    """Адрес кабинета для кнопки в письме. Пусто — кнопку не рисуем."""
+    import os
+
+    return (os.environ.get("WEB_CABINET_URL") or "").strip().rstrip("/")
+
+
+def _render_branded(subject: str, body: str, from_name: str) -> tuple[str, str, str]:
+    """Обычное письмо в том же оформлении, что и письмо с кодом.
+
+    ЧТО БЫЛО. Оформлено было ТОЛЬКО письмо с кодом подтверждения. Всё остальное —
+    напоминание об окончании, алерт о входе, рассылки — уходило голым текстом: без
+    логотипа, без имени сервиса и, что хуже, без единой ссылки. Напоминание просило
+    «продлите её в личном кабинете», не давая куда нажать; человеку предлагалось
+    самому вспомнить адрес.
+
+    Шапка, подвал и логотип те же, что у письма с кодом, — намеренно: два разных
+    оформления от одного отправителя выглядят как подделка одного из них.
+    """
+    safe_brand = _escape(from_name or "VPN")
+    logo_src = _logo_src()
+    logo_img = (
+        f'<img src="{logo_src}" alt="{safe_brand}" height="36" '
+        'style="height:36px;width:auto;max-width:150px;border-radius:8px;'
+        'vertical-align:middle;margin-right:12px;">'
+        if logo_src
+        else ""
+    )
+    cabinet = _cabinet_url()
+    button = (
+        f'<div style="text-align:center;margin:24px 0 4px;">'
+        f'<a href="{_escape(cabinet)}" style="display:inline-block;background:#5b5bd6;'
+        'color:#ffffff;text-decoration:none;font-size:15px;font-weight:600;'
+        'padding:12px 28px;border-radius:12px;">Открыть кабинет</a></div>'
+        if cabinet
+        else ""
+    )
+    html = f"""\
+<div style="font-family:'Segoe UI',Arial,Helvetica,sans-serif;background:#f4f5f7;padding:32px 16px;">
+  <div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:16px;
+              overflow:hidden;border:1px solid #e6e8eb;">
+    <div style="background:#5b5bd6;padding:18px 28px;">
+      {logo_img}<span style="color:#ffffff;font-size:18px;font-weight:700;letter-spacing:.2px;vertical-align:middle;">{safe_brand}</span>
+    </div>
+    <div style="padding:28px;">
+      <h1 style="margin:0 0 12px;font-size:20px;color:#16181d;">{_escape(subject)}</h1>
+      <div style="margin:0;font-size:15px;line-height:1.6;color:#454a52;">{_text_to_html(body)}</div>
+      {button}
+    </div>
+    <div style="background:#fafbfc;padding:14px 28px;border-top:1px solid #eef0f2;">
+      <span style="font-size:12px;color:#9aa1ab;">© {safe_brand}</span>
+    </div>
+  </div>
+</div>"""
+    # Текстовая версия — с адресом кабинета: почтовики без HTML показывают её.
+    text = f"{body}\n\n{cabinet}" if cabinet else body
+    return subject, text, html
+
+
 class OverlaySmtpEmailSender(BaseSmtpEmailSender):
     """Отправитель писем кабинета. Всё, что не переопределено, — поведение базы."""
 
@@ -197,9 +256,11 @@ class OverlaySmtpEmailSender(BaseSmtpEmailSender):
 
     def _localize(self, settings: dict, *, subject: str, body: str) -> tuple[str, str, str]:
         """Возвращает (subject, text, html) — русифицируем письмо с кодом."""
+        from_name = (settings["from_name"] or "").strip()
         if subject == EMAIL_VERIFICATION_SUBJECT:
-            return _render_verification(body, (settings["from_name"] or "").strip())
-        return subject, body, _text_to_html(body)
+            return _render_verification(body, from_name)
+        # Остальные письма — то же оформление, но без блока с кодом.
+        return _render_branded(subject, body, from_name)
 
     async def send(self, *, to: str, subject: str, body: str) -> None:
         try:
