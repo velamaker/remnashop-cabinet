@@ -39,6 +39,40 @@ async def _first_rub_gateway(payment_gateway_dao: PaymentGatewayDao):
     return None
 
 
+async def was_subscription_granted(
+    subscription_dao: SubscriptionDao, user_id: int, expire_before: object
+) -> "bool | None":
+    """Сдвинулся ли срок подписки. True/False, None — определить не удалось.
+
+    Судим по СРОКУ, а не по статусу счёта: базовый ProcessPayment переводит счёт в
+    COMPLETED ДО выдачи, и «счёт проведён» ещё не значит «подписка есть». Сдвинутый
+    вперёд срок — единственный признак, который нельзя истолковать двояко.
+
+    Вынесено отдельно, потому что от этого ответа зависит, вернуть человеку деньги
+    или нет; такое обязано быть проверяемым.
+    """
+    try:
+        after = await subscription_dao.get_current(user_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"renew_current_from_balance: не смог сверить срок: {exc}")
+        return None
+
+    after_expire = getattr(after, "expire_at", None)
+    if after_expire is None or expire_before is None:
+        return None
+    return bool(after_expire > expire_before)
+
+
+async def _alert_admins_balance(message: str) -> None:
+    """Сказать владельцу. Никогда не мешает основному пути."""
+    try:
+        from src.infrastructure.services.overlay_push import push_admins_standalone
+
+        await push_admins_standalone({"title": "⚠️ Продление с баланса", "body": message})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"renew_current_from_balance: не предупредил владельца: {exc}")
+
+
 async def renew_current_from_balance(
     user: UserDto,
     *,
@@ -65,6 +99,9 @@ async def renew_current_from_balance(
     )
     if not matched:
         return None
+
+    # Срок ДО списания: по нему потом узнаем, выдалась подписка или нет.
+    expire_before = getattr(current, "expire_at", None)
 
     days = current.plan_snapshot.duration
     duration = matched.get_duration(days)
@@ -116,12 +153,53 @@ async def renew_current_from_balance(
             ),
         )
     except Exception as e:  # noqa: BLE001
+        # ВОЗВРАЩАТЬ ДЕНЬГИ МОЖНО, ТОЛЬКО ЕСЛИ ПОДПИСКА НЕ ВЫДАНА.
+        #
+        # Раньше возврат был безусловным, а `try` накрывает не только оплату, но и
+        # последний шаг успешного пути — живой вызов Telegram
+        # (`redirect.to_success_payment`). Человек заблокировал бота → исключение
+        # прилетает ПОСЛЕ того, как подписка уже закоммичена и в Remnawave, и в БД,
+        # и деньги возвращались поверх выданной услуги. Автоплатёж гасит это одним
+        # warning, так что каждый его прогон по такому юзеру = бесплатное продление.
+        #
+        # Судим по СРОКУ ПОДПИСКИ, а не по статусу счёта: базовый ProcessPayment
+        # переводит счёт в COMPLETED ДО выдачи, и «счёт проведён» ещё не значит
+        # «подписка есть».
+        granted = await was_subscription_granted(subscription_dao, user.id, expire_before)
+
+        if granted:
+            logger.error(
+                f"renew_current_from_balance: user_id={user.id} — подписка ВЫДАНА, "
+                f"но шаг после выдачи упал ({e}). Деньги НЕ возвращаем: "
+                "это было бы бесплатное продление."
+            )
+            await _alert_admins_balance(
+                f"Продление с баланса: подписка выдана, но последний шаг упал "
+                f"(user_id={user.id}, {price} ₽). Деньги не возвращены — проверьте, "
+                f"дошло ли уведомление."
+            )
+            return Decimal(str(new_balance))
+
         await session.execute(
             text("UPDATE users SET cabinet_balance = cabinet_balance + :amt WHERE id = :id"),
             {"amt": price, "id": user.id},
         )
         await session.commit()
-        logger.warning(f"renew_current_from_balance: user_id={user.id} упало ({e}), деньги возвращены")
+        if granted is None:
+            # Определить не смогли. Возвращаем деньги (как раньше), но громко:
+            # человек мог остаться и с деньгами, и с подпиской.
+            logger.error(
+                f"renew_current_from_balance: user_id={user.id} упало ({e}), деньги "
+                "возвращены, но выдачу подтвердить НЕ удалось — проверьте вручную"
+            )
+            await _alert_admins_balance(
+                f"Продление с баланса упало (user_id={user.id}, {price} ₽), деньги "
+                "вернули, но выдалась ли подписка — неизвестно. Нужна проверка."
+            )
+        else:
+            logger.warning(
+                f"renew_current_from_balance: user_id={user.id} упало ({e}), деньги возвращены"
+            )
         raise
 
     logger.info(f"Autopay: продлил подписку user_id={user.id} за {price} ₽ ({days} дн.)")
