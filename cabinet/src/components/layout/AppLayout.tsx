@@ -16,6 +16,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { useBranding } from "@/contexts/BrandingContext";
 import type { FeatureKey } from "@/lib/features";
+import { SidebarReferralCard } from "@/components/SidebarReferralCard";
 import { useT } from "@/i18n/I18nContext";
 import { BrandWordmark } from "@/components/BrandWordmark";
 import { BrandLogo } from "@/components/BrandLogo";
@@ -62,7 +63,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
     if (!app) return;
     if (location.pathname !== "/") {
       app.BackButton.show();
-      const handler = () => navigate(-1);
+      const handler = () => { const idx = (window.history.state && window.history.state.idx) || 0; if (idx > 0) navigate(-1); else app.close(); };
       app.BackButton.onClick(handler);
       return () => {
         app.BackButton.offClick(handler);
@@ -143,6 +144,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
               Админ панель
             </NavLink>
           )}
+          {/* Карточка рефералки — только на десктопе: на телефоне место внизу
+              занято таб-баром, и ещё один блок туда не влезает. Прячет себя сама,
+              если программа выключена или недоступна этому человеку. */}
+          {can("referral") && <SidebarReferralCard />}
+
           {/* «Информация» — редактируемые страницы бэкенда (FAQ, правила, оферта).
               Нет их у бэкенда — нет и пункта, иначе раздел открывается пустым. */}
           {can("info_pages") && (
