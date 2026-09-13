@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import { Activity, CheckCircle2, AlertTriangle } from "lucide-react";
 import { statusApi, type StatusResponse } from "@/api/status";
-import { pingClass } from "@/pages/StatusPage";
-import { useNodePings } from "@/lib/ping";
+import { useNodePings, pingClass } from "@/lib/ping";
 import { Flag } from "@/components/Flag";
 import { useT } from "@/i18n/I18nContext";
 
