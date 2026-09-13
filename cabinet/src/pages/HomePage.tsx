@@ -42,6 +42,7 @@ export default function HomePage() {
   const { subscription, isLoading, reload } = useSubscription();
   const [devices, setDevices] = useState<{ current: number; max: number } | null>(null);
   const [referrals, setReferrals] = useState<number | null>(null);
+  const [refEarned, setRefEarned] = useState<number | null>(null);
   const [favServer, setFavServer] = useState<{ name: string; country_code: string; total: number } | null>(null);
   const [servers, setServers] = useState<{ name: string; country_code: string; total: number }[]>([]);
   const [trialError, setTrialError] = useState<string | null>(null);
@@ -52,6 +53,9 @@ export default function HomePage() {
   const loadExtras = useCallback(() => {
     subscriptionApi.devices().then((d) => setDevices({ current: d.current_count, max: d.max_count })).catch(() => {});
     referralApi.program().then((p) => setReferrals(p.invited_count)).catch(() => {});
+    // Заработок — та же цифра, что в карточке боковой панели: на телефоне плитка
+    // показывала только «приглашено», и было непонятно, дало это что-нибудь или нет.
+    referralApi.earnings().then((e) => setRefEarned(e.earned)).catch(() => {});
     subscriptionApi.serverStats().then((s) => { setFavServer(s.favorite); setServers(s.nodes); }).catch(() => {});
   }, []);
 
@@ -345,6 +349,11 @@ export default function HomePage() {
             </p>
             <p className="tabular mt-2 text-2xl font-bold text-fg">{referrals ?? 0}</p>
             <p className="mt-0.5 text-xs text-fg-subtle">{t("home.invited")}</p>
+            {refEarned != null && refEarned > 0 && (
+              <p className="tabular mt-1.5 text-xs font-medium text-success">
+                +{refEarned.toLocaleString()} ₽
+              </p>
+            )}
           </div>
           <ChevronRight className="h-4 w-4 text-fg-subtle transition-colors group-hover:text-accent" />
         </Link>
