@@ -73,8 +73,16 @@ jobs:
         with:
           sarif_file: trivy-image.sarif
         if: always()
+      # Тег ПРИБИТ. Раньше стояло @v0 — плавающий тег, и действие переезжало само:
+      # 28.08 вышел v0.24.2, после чего шаг стал падать без единой нашей правки.
+      # Security от этого краснел целиком, хотя скан образа проходил.
+      #
+      # continue-on-error — как у npm audit в CI: SBOM это артефакт «посмотреть,
+      # что внутри образа», а не ворота. Уязвимости ловит Trivy выше, и вот ОН
+      # задание валить должен. Генератор списка пакетов — нет.
       - name: Generate SBOM (SPDX)
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@v0.24.2
+        continue-on-error: true
         with:
           image: remnashop-overlay:ci
           format: spdx-json
