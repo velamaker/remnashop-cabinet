@@ -377,6 +377,11 @@ def install() -> None:
             "src.telegram.routers.subscription.promocode_handlers",
             "promocode_gift_confirm",
         ),
+        (
+            "статистика без пробных оплат",
+            "src.infrastructure.database.dao.transaction",
+            "stats_exclude_test",
+        ),
     )
 
     # Правки запасной копии бэкенда: у них по три разные цели, поэтому идут

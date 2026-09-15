@@ -100,7 +100,21 @@ async def get_sales_stats(
     Валюты не суммируются между собой (RUB/USD/XTR-звёзды) — выручка разбита
     по валютам. Данные считаются на лету из таблицы transactions (status=COMPLETED,
     исключая тестовые), поэтому всегда актуальны.
-    """
+    
+
+ЧЬИ ДЕНЬГИ СЧИТАЕМ. Каждый запрос ниже отсекает не только пробные платежи
+(`is_test`), но и покупки НЕКЛИЕНТСКИХ учёток: владелец покупает тарифы и дарит
+подарки на своём же аккаунте, проверяя магазин, и такие платежи `is_test` не
+помечаются — они идут обычным путём. Деньги при этом ходят по кругу: из его
+кармана в его же кассу. На боевых данных 15 сентября 2026 это было 11 463 ₽ из
+31 695 ₽ по ЮMoney — больше трети «выручки».
+
+Отсекаем подзапросом, а не соединением с `users`: часть запросов ниже группирует
+и считает оконными суммами, и лишняя таблица во FROM размножила бы строки — числа
+стали бы неверными, оставаясь правдоподобными. Та же граница действует в боте
+(`overlay_patches/stats_exclude_test.py`), иначе два экрана одного магазина
+показывали бы разные суммы.
+"""
     periods = (30, 60, 90)
 
     # Один проход по последним 90 дням, условные агрегаты на каждое окно.
@@ -121,7 +135,7 @@ async def get_sales_stats(
                     count(*) FILTER (WHERE created_at >= now() - interval '90 days') AS cnt90
                 FROM transactions
                 WHERE status::text = 'COMPLETED'
-                  AND is_test = false
+                  AND is_test = false AND user_id NOT IN (SELECT su.id FROM users su WHERE su.role::text <> 'USER')
                   AND (pricing->>'final_amount')::numeric > 0
                   AND created_at >= now() - interval '90 days'
                 GROUP BY currency
@@ -201,7 +215,7 @@ async def get_daily_stats(
                        sum((pricing->>'final_amount')::numeric) AS amt
                 FROM transactions
                 WHERE status::text = 'COMPLETED'
-                  AND is_test = false
+                  AND is_test = false AND user_id NOT IN (SELECT su.id FROM users su WHERE su.role::text <> 'USER')
                   AND (pricing->>'final_amount')::numeric > 0
                   AND created_at::date >= :since
                 GROUP BY 1, 2
@@ -295,7 +309,7 @@ async def compute_metrics(session: AsyncSession) -> dict[str, Any]:
                     SELECT DISTINCT ON (t.user_id) t.user_id,
                            (t.pricing->>'final_amount')::numeric AS amt
                     FROM transactions t
-                    WHERE t.status::text = 'COMPLETED' AND t.is_test = false
+                    WHERE t.status::text = 'COMPLETED' AND t.is_test = false AND t.user_id NOT IN (SELECT su.id FROM users su WHERE su.role::text <> 'USER')
                       AND t.currency::text = 'RUB'
                       AND (t.pricing->>'final_amount')::numeric > 0
                     ORDER BY t.user_id, t.created_at DESC
@@ -316,7 +330,7 @@ async def compute_metrics(session: AsyncSession) -> dict[str, Any]:
             text(
                 "SELECT coalesce(sum((pricing->>'final_amount')::numeric),0) AS rev, "
                 "count(*) AS cnt, count(DISTINCT user_id) AS payers "
-                "FROM transactions WHERE status::text='COMPLETED' AND is_test=false "
+                "FROM transactions WHERE status::text='COMPLETED' AND is_test = false AND user_id NOT IN (SELECT su.id FROM users su WHERE su.role::text <> 'USER') "
                 "AND (pricing->>'final_amount')::numeric>0 " + RUB +
                 "AND created_at >= now() - interval '30 days'"
             )
@@ -339,7 +353,7 @@ async def compute_metrics(session: AsyncSession) -> dict[str, Any]:
                 """
                 WITH trial_users AS (SELECT DISTINCT user_id FROM subscriptions WHERE is_trial = true),
                      paid AS (SELECT DISTINCT user_id FROM transactions
-                              WHERE status::text='COMPLETED' AND is_test=false
+                              WHERE status::text='COMPLETED' AND is_test = false AND user_id NOT IN (SELECT su.id FROM users su WHERE su.role::text <> 'USER')
                                 AND (pricing->>'final_amount')::numeric>0)
                 SELECT (SELECT count(*) FROM trial_users) AS trials,
                        (SELECT count(*) FROM trial_users t WHERE t.user_id IN (SELECT user_id FROM paid)) AS converted
@@ -378,7 +392,7 @@ async def compute_metrics(session: AsyncSession) -> dict[str, Any]:
             text(
                 "SELECT count(*) FILTER (WHERE status::text='COMPLETED') AS ok, "
                 "count(*) FILTER (WHERE status::text='CANCELED') AS canceled "
-                "FROM transactions WHERE is_test=false "
+                "FROM transactions WHERE is_test = false AND user_id NOT IN (SELECT su.id FROM users su WHERE su.role::text <> 'USER') "
                 "AND created_at >= now() - interval '30 days'"
             )
         )
@@ -396,7 +410,7 @@ async def compute_metrics(session: AsyncSession) -> dict[str, Any]:
                 text(
                     "SELECT plan_snapshot->>'name' AS name, "
                     "sum((pricing->>'final_amount')::numeric) AS rev, count(*) AS cnt "
-                    "FROM transactions WHERE status::text='COMPLETED' AND is_test=false "
+                    "FROM transactions WHERE status::text='COMPLETED' AND is_test = false AND user_id NOT IN (SELECT su.id FROM users su WHERE su.role::text <> 'USER') "
                     "AND (pricing->>'final_amount')::numeric>0 " + RUB +
                     "AND plan_snapshot->>'name' IS NOT NULL "
                     "AND coalesce((plan_snapshot->>'id')::int, 0) >= 0 "
@@ -414,7 +428,7 @@ async def compute_metrics(session: AsyncSession) -> dict[str, Any]:
                 text(
                     "SELECT gateway_type::text AS gw, "
                     "sum((pricing->>'final_amount')::numeric) AS rev, count(*) AS cnt "
-                    "FROM transactions WHERE status::text='COMPLETED' AND is_test=false "
+                    "FROM transactions WHERE status::text='COMPLETED' AND is_test = false AND user_id NOT IN (SELECT su.id FROM users su WHERE su.role::text <> 'USER') "
                     "AND (pricing->>'final_amount')::numeric>0 " + RUB +
                     "GROUP BY 1 ORDER BY rev DESC LIMIT 5"
                 )
@@ -469,7 +483,7 @@ async def get_cohorts(
                 "WITH pays AS ("
                 "  SELECT user_id, date_trunc('month', created_at) AS m "
                 "  FROM transactions "
-                "  WHERE status = 'COMPLETED' AND is_test = false "
+                "  WHERE status = 'COMPLETED' AND is_test = false AND user_id NOT IN (SELECT su.id FROM users su WHERE su.role::text <> 'USER') "
                 "    AND (pricing->>'final_amount')::numeric > 0 "
                 "  GROUP BY user_id, date_trunc('month', created_at)"
                 "), cohort AS ("
