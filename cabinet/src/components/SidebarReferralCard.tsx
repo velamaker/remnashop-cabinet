@@ -4,6 +4,7 @@ import { ArrowRight, Gift, UserPlus, Coins } from "lucide-react";
 import { referralApi, type ReferralEarningsResponse } from "@/api/referral";
 import type { ReferralProgramResponse } from "@/types/api";
 import { useT } from "@/i18n/I18nContext";
+import { formatReferralEarned, hasReferralEarnings } from "@/lib/referralReward";
 
 /**
  * Карточка рефералки внизу боковой панели (только десктоп).
@@ -53,13 +54,14 @@ export function SidebarReferralCard() {
 
   if (!program?.enabled) return null;
 
-  // referral_rewards.amount: для EXTRA_DAYS это дни, иначе рубли — как на
-  // странице рефералки, чтобы числа в двух местах не расходились.
+  // Считает ту же функция, что и страница рефералки, — чтобы числа в двух местах
+  // не расходились (см. lib/referralReward.ts: наград может быть сразу две).
   const earnedText =
-    earnings && earnings.earned > 0
-      ? program.reward_type === "EXTRA_DAYS"
-        ? t("ref.earnedDays", { n: earnings.earned })
-        : `${earnings.earned.toLocaleString()} ₽`
+    earnings && hasReferralEarnings(earnings.earned, earnings.earned_days)
+      ? formatReferralEarned(earnings.earned, earnings.earned_days, program.reward_type, {
+          days: (n) => t("ref.earnedDays", { n }),
+          money: (n) => `${n.toLocaleString()} ₽`,
+        })
       : "0";
 
   return (

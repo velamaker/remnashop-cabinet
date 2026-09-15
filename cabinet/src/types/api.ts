@@ -189,6 +189,12 @@ export interface PublicPlanLandingListResponse {
 export interface ReferralRewardLevelResponse {
   level: number;
   value: number;
+  // Готовая подпись награды с бэкенда. Наш бот её не шлёт: у него ступень — это
+  // число плюс общая единица измерения (`value` + «% от платежей»). У «Бедолаги»
+  // одна ступень платит процентом, фиксированной суммой и днями конкретного
+  // тарифа сразу — такое числом не передать, поэтому строку собирает бэкенд, а
+  // кабинет печатает её как есть.
+  label?: string;
 }
 
 export interface ReferralProgramResponse {

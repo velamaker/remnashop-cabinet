@@ -4,6 +4,10 @@ import type { ReferralProgramResponse } from "@/types/api";
 export interface ReferralEarningsResponse {
   earned: number;
   rewards_count: number;
+  // Дни подписки, начисленные за приглашения. Наш бэкенд поля не шлёт (у него
+  // награда одного вида, и она лежит в `earned`), а у «Бедолаги» ступень платит
+  // деньгами и днями одновременно — см. lib/referralReward.ts.
+  earned_days?: number;
 }
 
 export const referralApi = {

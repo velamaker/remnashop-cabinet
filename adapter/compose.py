@@ -1939,6 +1939,88 @@ async def info(ctx: Ctx) -> dict[str, Any]:
 # --- промо и рефералка ------------------------------------------------------
 
 
+# Порог ступени. Формулировки взяты из их же шаблонов по умолчанию
+# (referral_reward_service.py:1498-1517) — там ровно эти строки подставляются в
+# описание уровня, когда у оператора нет своего перевода.
+_LEVEL_UNLOCK = {
+    # (режим_рангов, только_оплатившие) -> шаблон
+    (True, True): " — от {count} рефералов с пополнением",
+    (True, False): " — от {count} приглашённых",
+    (False, True): " (открывается за {count} рефералов с пополнением)",
+    (False, False): " (открывается за {count} приглашённых)",
+}
+
+
+def referral_reward_levels(terms: dict[str, Any]) -> list[dict[str, Any]]:
+    """Ступени программы для кабинета — только для схемы «levels». Иначе пусто.
+
+    ЗАЧЕМ. С сентября 2026 (их v4.5+) у наград две схемы. При «levels» поля
+    `commission_percent` и `first_payment_commission_percent` не управляют ничем:
+    начисления идут по таблице уровней, и их собственная схема ответа это прямо
+    оговаривает. Отдавать этот процент как условие программы — обещать человеку
+    деньги, которых бот не заплатит. Именно так кабинет и вёл себя до этой правки:
+    боту настроены 25 % / 10 % / 7 дней на трёх коленах, а на экране стояло
+    «Уровень 1 — 15 % от платежей», и 15 % не платились никому.
+
+    ПОЧЕМУ БЕРЁМ ИХ ГОТОВЫЕ СТРОКИ, А НЕ ЧИСЛА. Ступень платит разнородно —
+    процентом, фиксированной суммой, днями конкретного тарифа, и всё это может
+    складываться. Одним числом с общей единицей измерения (`value` + «% от
+    платежей») такое не передать. Их `rewards` собраны ТЕМ ЖЕ кодом, что считает
+    выплату, и уже учитывают личную ставку партнёра, выбор «деньги или дни» и
+    режим рангов, — пересчитывать это у себя значило бы завести второй источник
+    правды о деньгах. Поэтому кабинет печатает `label` как есть (поле
+    необязательное: наш собственный бэкенд его не шлёт и печатает `value`).
+
+    Номер уровня оставляем их: и в цепочке, и в режиме рангов их бот называет
+    ступень «Уровень N», так что подпись кабинета совпадает с ботом.
+    """
+    if str(terms.get("scheme") or "") != "levels":
+        return []
+
+    raw = terms.get("levels")
+    if not isinstance(raw, list):
+        return []
+
+    tier_mode = str(terms.get("levels_mode") or "chain") == "tiers"
+    out: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        rewards = [str(r).strip() for r in (item.get("rewards") or []) if str(r).strip()]
+        if not rewards:
+            # Пустых ступеней их ручка не отдаёт (referral_reward_service.py:1338-1345:
+            # неплатящая получает текст «вам не начисляется»). Но если отдаст —
+            # печатать строку без награды нечего.
+            continue
+
+        label = " + ".join(rewards)
+        # Повод у неплатящей ступени не называем: «вам не начисляется за первое
+        # пополнение» читается как награда. Это их же правило (там же, :1491).
+        if item.get("pays_referrer", True):
+            trigger = str(item.get("trigger_label") or "").strip()
+            if trigger:
+                label = f"{label} {trigger}"
+
+        required = int(item.get("required_referrals") or 0)
+        if required > 0:
+            active_only = bool(item.get("required_referrals_active_only", True))
+            label += _LEVEL_UNLOCK[(tier_mode, active_only)].format(count=required)
+        elif tier_mode:
+            label += " — стартовый"
+
+        if item.get("is_current"):
+            label += "  ← ваш уровень"
+
+        out.append({
+            "level": int(item.get("level") or 0),
+            # `value` в форме кабинета обязателен, но при непустом `label` не
+            # печатается. Ноль здесь — «числом эту награду не выразить».
+            "value": 0,
+            "label": label,
+        })
+    return out
+
+
 @handler("GET", "/api/referral/program")
 async def referral_program(ctx: Ctx) -> dict[str, Any]:
     """Реферальная программа. У «Бедолаги» она разложена на две ручки: персональные
@@ -1973,6 +2055,13 @@ async def referral_program(ctx: Ctx) -> dict[str, Any]:
 
     # Персональный процент реферера приоритетнее общего (routes/referral.py:70-72).
     percent = int(info.get("commission_percent") or terms.get("commission_percent") or 0)
+    # ВАЖНО: судим по СХЕМЕ, а не по тому, собрались ли ступени. Схема «levels» с
+    # пустой или целиком выключенной таблицей уровней означает, что не платят ничего;
+    # откатиться в этом случае на legacy-процент значило бы напечатать «15 % от
+    # платежей» там, где не заплатят ни копейки. Пустой список кабинет понимает
+    # правильно — карточку «Уровни вознаграждения» он просто не рисует.
+    levels_scheme = str(terms.get("scheme") or "") == "levels"
+    levels = referral_reward_levels(terms)
     return {
         "enabled": True,
         "referral_code": code,
@@ -1985,15 +2074,23 @@ async def referral_program(ctx: Ctx) -> dict[str, Any]:
         "reward_type": "POINTS",
         "reward_strategy": "PERCENT",
         # 1 платёж на реферала = наша «только первая оплата»; 0 у них = без лимита.
+        # При схеме «levels» повод задаётся на каждой ступени отдельно, общего
+        # ответа нет; кабинет это поле на экране рефералки не читает вовсе
+        # (используется только в админке нашего бэкенда), поэтому оставляем как есть.
         "accrual_strategy": (
             "ON_FIRST_PAYMENT"
             if int(terms.get("max_commission_payments") or 0) == 1
             else "ON_EACH_PAYMENT"
         ),
-        # Колено у них одно: комиссия платится только прямому пригласившему
-        # (users.referred_by_id, app/services/referral_service.py:645-652).
-        "max_level": 1,
-        "reward_levels": [{"level": 1, "value": percent}] if percent else [],
+        # В классической схеме колено одно: комиссия платится только прямому
+        # пригласившему (users.referred_by_id, referral_service.py:645-652). В схеме
+        # «levels» глубину задаёт админ, и её отдаёт сама ручка условий.
+        "max_level": int(terms.get("max_level_depth") or 1) if levels_scheme else 1,
+        "reward_levels": (
+            levels
+            if levels_scheme
+            else ([{"level": 1, "value": percent}] if percent else [])
+        ),
     }
 
 
@@ -2008,6 +2105,13 @@ async def referral_earnings(ctx: Ctx) -> dict[str, Any]:
         # Кабинет печатает earned с «₽» без деления, поэтому рубли, не копейки.
         "earned": round(float(data.get("total_amount_rubles") or 0), 2),
         "rewards_count": int(data.get("total") or 0),
+        # Награду днями их рублёвый итог не видит вовсе: у такого начисления
+        # `amount_kopeks == 0`, и партнёр на «дневной» программе читал бы «0 ₽»
+        # при работающих выплатах. Дни отдаём отдельным полем, а не вместо рублей:
+        # ступени могут платить и тем и другим, и подменять одно другим значило бы
+        # прятать половину заработка (их поле `total_days_granted`, с их v4.5+;
+        # на старых сборках его нет — тогда 0, и кабинет ничего не дорисует).
+        "earned_days": int(data.get("total_days_granted") or 0),
     }
 
 
@@ -2885,9 +2989,23 @@ async def gift_create(ctx: Ctx) -> dict[str, Any]:
     paid_by = "gateway" if gateway else "balance"
     return {
         "paid_by": paid_by,
-        # При оплате с баланса код готов сразу; при оплате картой он выпустится
-        # после оплаты, и кабинет заберёт его из истории подарков.
-        "code": data.get("purchase_token") if paid_by == "balance" else None,
+        # КОД — ЭТО `gift_code`, А НЕ `purchase_token`.
+        #
+        # `purchase_token` у них давно `token[:12]` — обрезок, по которому подарок
+        # не активируется нигде: ручной ввод в боте требует полный код
+        # (`allow_legacy_short=False`), а в их сборке 4.0 ручного ввода не было
+        # вовсе. То есть кабинет печатал человеку строку, которую некуда деть, —
+        # он платил за подарок и получал набор символов. Настоящий код приехал
+        # отдельным полем `gift_code` (`GIFT_` + 59 символов).
+        #
+        # При оплате картой его нет и быть не может: их ручка в этом режиме прямо
+        # возвращает `gift_code=None` — подарок ещё не оплачен. Код появится в
+        # истории подарков, оттуда кабинет его и возьмёт.
+        #
+        # Фолбэка на `purchase_token` НЕТ намеренно: показать нерабочий код хуже,
+        # чем не показать никакого. Не пришло — человек увидит подарок без кода и
+        # спросит, а не будет впустую вводить обрезок.
+        "code": data.get("gift_code") or None,
         "payment_id": data.get("purchase_token"),
         "payment_url": data.get("payment_url"),
         "plan_name": plan_name,
@@ -2916,8 +3034,15 @@ async def gift_my(ctx: Ctx) -> dict[str, Any]:
             # напечатает цену.
             "price": "",
             # Код показываем только когда он уже действителен: до оплаты его
-            # показывать нельзя — человек решит, что подарок готов.
-            "code": str(token) if status in ("paid", "delivered", "pending_activation") else None,
+            # показывать нельзя — человек решит, что подарок готов. Сам код берём
+            # из их `gift_code` (см. gift_create): `token` — обрезок, которым
+            # подарок не активируется. Они и сами заполняют это поле ровно для
+            # тех подарков, которые ещё можно получить (`item.is_claimable`), так
+            # что лишней проверки на статус оно не требует — но пусть стоят обе:
+            # поля может не быть на их старой сборке.
+            "code": (str(g.get("gift_code")) or None)
+            if g.get("gift_code") and status in ("paid", "delivered", "pending_activation")
+            else None,
             "issued": status in ("paid", "delivered", "pending_activation"),
             "created_at": g.get("created_at"),
         })

@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import type { ReferralProgramResponse } from "@/types/api";
 import { ApiError } from "@/types/api";
 import { useT } from "@/i18n/I18nContext";
+import { formatReferralEarned, hasReferralEarnings } from "@/lib/referralReward";
 
 // Единица измерения уровня зависит от СТРАТЕГИИ (а не типа награды): при PERCENT
 // значение уровня — это процент от платежа друга; иначе — фикс. величина в единицах
@@ -153,10 +154,11 @@ function EarningsCard({
 }) {
   const t = useT();
   // referral_rewards.amount: для EXTRA_DAYS — дни, иначе (POINTS/деньги) — рубли.
-  const isDays = rewardType === "EXTRA_DAYS";
-  const value = isDays
-    ? t("ref.earnedDays", { n: earnings.earned })
-    : `${earnings.earned.toLocaleString()} ₽`;
+  // Отдельное поле earned_days добавляется, когда ступени платят и тем и другим.
+  const value = formatReferralEarned(earnings.earned, earnings.earned_days, rewardType, {
+    days: (n) => t("ref.earnedDays", { n }),
+    money: (n) => `${n.toLocaleString()} ₽`,
+  });
 
   return (
     <div className="card-accent rounded-xl p-5">
@@ -186,14 +188,19 @@ function RewardLevelsCard({ program }: { program: ReferralProgramResponse }) {
     <Card variant="bordered">
       <CardHeader title={t("ref.levelsTitle")} />
       <div className="flex flex-col gap-2">
+        {/* Подпись справа теперь бывает длинной фразой, а не «15 %»: при схеме
+            «levels» бэкенд присылает готовое условие ступени целиком. Поэтому ряд
+            переносит её, а не выдавливает номер уровня за край. */}
         {program.reward_levels.map((level) => (
           <div
             key={level.level}
-            className="flex items-center justify-between rounded-xl bg-bg-subtle px-3 py-2.5"
+            className="flex items-start justify-between gap-3 rounded-xl bg-bg-subtle px-3 py-2.5"
           >
-            <span className="text-sm text-fg-muted">{t("ref.level", { n: level.level })}</span>
-            <span className="text-sm font-medium text-fg">
-              {level.value} {unit}
+            <span className="shrink-0 text-sm text-fg-muted">
+              {t("ref.level", { n: level.level })}
+            </span>
+            <span className="min-w-0 text-right text-sm font-medium text-fg">
+              {level.label ?? `${level.value} ${unit}`}
             </span>
           </div>
         ))}
@@ -277,7 +284,7 @@ export default function ReferralPage() {
         <>
           <ReferralCodeCard code={program.referral_code} />
           <StatsRow program={program} />
-          {earnings && earnings.earned > 0 && (
+          {earnings && hasReferralEarnings(earnings.earned, earnings.earned_days) && (
             <EarningsCard earnings={earnings} rewardType={program.reward_type} />
           )}
           {program.reward_levels.length > 0 && <RewardLevelsCard program={program} />}
