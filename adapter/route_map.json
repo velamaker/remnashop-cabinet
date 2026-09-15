@@ -67,6 +67,15 @@
    "methods": [
     "DELETE"
    ]
+  },
+  "/api/cabinet/public/unsubscribe": {
+   "target": "/cabinet/public/unsubscribe",
+   "kind": "direct",
+   "methods": [
+    "GET",
+    "POST"
+   ],
+   "note": "ссылка отписки из писем бота; без авторизации, ходят почтовые клиенты"
   }
  },
  "todo": [

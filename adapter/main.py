@@ -150,10 +150,32 @@ def _drop_from_upstream(name: str) -> bool:
 
 
 def _client_ip(request: Request) -> str:
-    """Настоящий адрес посетителя: первый в цепочке от нашего же nginx."""
-    chain = request.headers.get("x-forwarded-for", "")
-    first = chain.split(",")[0].strip() if chain else ""
-    return first or (request.client.host if request.client else "")
+    """Настоящий адрес посетителя.
+
+    ПОЧЕМУ НЕ ПЕРВЫЙ В `X-Forwarded-For`. Наш nginx собирает этот заголовок как
+    `$proxy_add_x_forwarded_for` — то есть ДОПИСЫВАЕТ вычисленный им адрес в
+    КОНЕЦ к тому, что прислал браузер. Значит начало цепочки — чужой текст:
+    посетитель, отправивший `X-Forwarded-For: 1.2.3.4`, назывался бы этим
+    адресом. Раньше отсюда брался как раз первый элемент, и весь смысл
+    пересылки адреса пропадал: лимиты бота на вход и регистрацию считались бы
+    по значению, которое подделывается одной строкой.
+
+    Доверять можно только тому концу цепочки, который приписал НАШ nginx:
+    `X-Real-IP` (он ставит туда `$remote_addr`, уже вычисленный через
+    `set_real_ip_from`/`real_ip_recursive`, см. cabinet/nginx.conf) либо
+    последний элемент `X-Forwarded-For`. Ни того, ни другого нет — остаётся
+    адрес соединения.
+    """
+    real = (request.headers.get("x-real-ip") or "").strip()
+    if real:
+        return real
+
+    chain = [part.strip() for part in request.headers.get("x-forwarded-for", "").split(",")]
+    for part in reversed(chain):
+        if part:
+            return part
+
+    return request.client.host if request.client else ""
 
 
 def _forwarded(request: Request) -> dict[str, str]:
@@ -740,6 +762,126 @@ async def auth_bridge(kind: str, request: Request) -> Response:
         )
 
 
+# Коды отказов их моста авторизации → человеческая причина. Переводим по КОДУ, а
+# не по фразе: код — договор, английский текст рядом они правят когда угодно.
+_AUTH_ERRORS = {
+    "legal_consent_required": (
+        "Чтобы создать аккаунт, примите оферту и политику конфиденциальности"
+    ),
+    "registration_invite_required": (
+        "Регистрация сейчас только по приглашению — попросите ссылку у того, "
+        "кто вас пригласил"
+    ),
+    "registration_check_unavailable": (
+        "Не удалось проверить приглашение — попробуйте ещё раз через минуту"
+    ),
+}
+
+# Их дроссель регистрации и входа отдаёт ровно эту фразу и заголовок Retry-After.
+_TOO_MANY = "too many requests"
+
+# Отказы, которые их бот отдаёт готовой английской строкой. Форма входа и
+# регистрации — единственные страницы, куда доходит ЧЕЛОВЕК СО СТОРОНЫ, и
+# «Invalid email or password» на русском экране читается как поломка сайта.
+# Переводим только то, на что человек может как-то повлиять; служебное
+# («Invalid token payload», «Bot not configured») оставляем как есть — там
+# английская строка честнее выдуманного русского пересказа, а видит её админ.
+_AUTH_MESSAGES = {
+    "invalid email or password": "Неверная почта или пароль",
+    "please verify your email first":
+        "Сначала подтвердите почту — ссылка в письме, которое мы отправили",
+    "this email is already registered": "Этот адрес уже зарегистрирован",
+    "this email address cannot be used for registration.":
+        "На этот адрес зарегистрироваться нельзя",
+    "disposable email addresses are not allowed":
+        "Одноразовые почтовые адреса не принимаем — укажите постоянный",
+    "account is deactivated": "Аккаунт отключён — напишите в поддержку",
+    "user account is not active": "Аккаунт отключён — напишите в поддержку",
+    "user not found": "Аккаунт не найден",
+    "user not found or inactive": "Аккаунт не найден",
+    "invalid confirmation code": "Неверный код подтверждения",
+    "too many invalid attempts. please request a new code.":
+        "Слишком много неверных кодов — запросите новый",
+    "invalid reset token": "Ссылка для сброса пароля недействительна — запросите новую",
+    "reset token has expired": "Ссылка для сброса пароля устарела — запросите новую",
+    "invalid verification token": "Ссылка подтверждения недействительна — запросите письмо заново",
+    "verification token has expired": "Ссылка подтверждения устарела — запросите письмо заново",
+    "invalid or expired refresh token": "Сессия истекла — войдите заново",
+    "password login not configured for this account":
+        "У этого аккаунта нет пароля — войдите через Telegram",
+    "email verification is disabled": "Подтверждение почты отключено",
+    "email service is not configured": "Почта не настроена — напишите в поддержку",
+    "invalid or expired telegram authentication data":
+        "Данные входа через Telegram устарели — нажмите кнопку ещё раз",
+    "this telegram authorization has already been used. please log in again.":
+        "Эта кнопка входа уже использована — нажмите её ещё раз",
+    "service temporarily unavailable": "Сервис временно недоступен — попробуйте позже",
+}
+
+
+def _retry_after_text(seconds: str) -> str:
+    """«Повторите через …» из заголовка Retry-After, если он читается."""
+    try:
+        left = int(float(seconds))
+    except (TypeError, ValueError):
+        return ""
+    if left <= 0:
+        return ""
+    if left < 90:
+        return f" Повторите через {left} с."
+    return f" Повторите через {max(1, round(left / 60))} мин."
+
+
+def _auth_error(resp: httpx.Response) -> Response:
+    """Отказ моста авторизации — в вид, который кабинет покажет человеку.
+
+    ЗАЧЕМ. Кабинет печатает `detail` как есть и умеет только строку
+    (`api/client.ts`). А их отказы на регистрации приходят ОБЪЕКТОМ: согласие с
+    документами — 428 `{'code': 'legal_consent_required', …}`, приглашение — 403
+    `{'code': 'registration_invite_required', …}`. Раньше тело шло наружу как
+    есть, и человек вместо причины читал фигурные скобки — то есть на самой
+    первой странице, до которой он вообще дошёл.
+
+    Заголовок `Retry-After` сохраняем: по нему кабинет (и почтовый клиент, и
+    просто внимательный человек) видит, сколько ждать, а не гадает.
+    """
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+
+    detail = body.get("detail") if isinstance(body, dict) else None
+    text = ""
+    if isinstance(detail, dict):
+        text = _AUTH_ERRORS.get(str(detail.get("code") or ""), "")
+        if not text:
+            text = str(detail.get("message") or "").strip()
+    elif isinstance(detail, list):
+        # 422 от pydantic: список объектов с `msg`.
+        text = "; ".join(
+            str(d.get("msg") if isinstance(d, dict) else d) for d in detail
+        ).strip()
+    elif isinstance(detail, str):
+        text = detail.strip()
+
+    retry = resp.headers.get("retry-after", "")
+    if resp.status_code == 429 or text.lower() == _TOO_MANY:
+        text = "Слишком много попыток." + (_retry_after_text(retry) or " Попробуйте позже.")
+    else:
+        # Незнакомую фразу отдаём как есть: английский текст объясняет хоть
+        # что-то, а придуманный русский — только вводит в заблуждение.
+        text = _AUTH_MESSAGES.get(text.strip().lower(), text)
+
+    out = Response(
+        json.dumps({"detail": text or "Не удалось выполнить запрос"}, ensure_ascii=False),
+        resp.status_code,
+        media_type="application/json",
+    )
+    if retry:
+        out.headers["retry-after"] = retry
+    return out
+
+
 async def _auth_bridge(kind: str, request: Request) -> Response:
     ours = "/api/auth/" + kind
     body = await request.body()
@@ -801,7 +943,7 @@ async def _auth_bridge(kind: str, request: Request) -> Response:
                               **_forwarded(request)},
                      **extra)
     if up.status_code >= 400:
-        return Response(up.content, up.status_code, media_type="application/json")
+        return _auth_error(up)
     data = up.json() if up.content else {}
     if "register" in target and not any(_tokens(data)):
         # Их регистрация сессии не открывает: сперва подтверждение почты. Наш
