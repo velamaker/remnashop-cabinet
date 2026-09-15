@@ -98,3 +98,24 @@ jobs:
           print(f'применено правок: {len(op.applied())}')
           sys.exit(1 if bad else 0)
           "
+
+  adapter:
+    name: Адаптер «Бедолага» — тесты
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # `compose.py` тянет httpx и fastapi — они есть только внутри образа
+      # адаптера, поэтому тесты гоняем там же, как и тесты бэкенда.
+      - name: Собрать образ адаптера
+        run: docker build -t remnashop-adapter-ci adapter
+
+      # Что именно заперто: перевод условий реферальной программы чужого бота.
+      # Их v4.5 завела вторую схему наград, при которой прежний процент не
+      # платится вовсе, — и кабинет месяцами показывал бы человеку награду,
+      # которой он не получит. Обещание денег обязано быть под тестом.
+      - name: Тесты
+        run: |
+          docker run --rm -v "$PWD/adapter/tests:/tmp/tests:ro" remnashop-adapter-ci \
+            sh -c 'pip install -q --target /tmp/pylibs pytest &&
+                   PYTHONPATH=/tmp/pylibs python -m pytest /tmp/tests -q -p no:cacheprovider'

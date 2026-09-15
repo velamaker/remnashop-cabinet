@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { BrandingProvider } from "@/contexts/BrandingContext";
 import { AuthProvider } from "@/contexts/AuthContext";
@@ -76,6 +76,14 @@ export default function App() {
             <Route path="/status" element={<StatusPage />} />
             <Route path="/pricing" element={<PricingPage />} />
             <Route path="/plans" element={<PricingPage />} />
+            {/* Возврат со шлюза после оплаты подарка.
+
+                Адрес возврата задаёт не кабинет, а бэкенд: бот «Бедолага» жёстко
+                подставляет {CABINET_URL}/gift/result?token=… и передать ему свой
+                нечем. Без этой строки человек, только что заплативший за подарок,
+                попадал в пустоту. Ведём на «Баланс» — там и лежит история
+                подарков с готовым кодом. */}
+            <Route path="/gift/result" element={<Navigate to="/balance" replace />} />
             <Route
               path="/login"
               element={
