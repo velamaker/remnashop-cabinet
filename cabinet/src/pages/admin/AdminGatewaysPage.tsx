@@ -2,23 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { AlertCircle, KeyRound, X, Settings2, FlaskConical } from "lucide-react";
 import { gatewaysAdminApi, type AdminGateway, type GatewayField } from "@/api/admin";
 import { ApiError } from "@/types/api";
-
-const GATEWAY_NAMES: Record<string, string> = {
-  TELEGRAM_STARS: "Telegram Stars ⭐",
-  YOOKASSA: "ЮKassa",
-  YOOMONEY: "ЮMoney",
-  CRYPTOMUS: "Cryptomus",
-  HELEKET: "Heleket",
-  CRYPTOPAY: "CryptoPay",
-  FREEKASSA: "FreeKassa",
-  MULENPAY: "MulenPay",
-  PAYMASTER: "PayMaster",
-  PLATEGA: "Platega",
-  ROBOKASSA: "RoboKassa",
-  URLPAY: "UrlPay",
-  WATA: "Wata",
-  VALUTIX: "Valutix",
-};
+import { GATEWAY_NAMES } from "@/lib/gatewayNames";
 
 const CURRENCY_SYMBOLS: Record<string, string> = {
   RUB: "₽", USD: "$", EUR: "€", XTR: "⭐",

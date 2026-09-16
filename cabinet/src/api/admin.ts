@@ -250,6 +250,20 @@ export interface MetricsTopGateway {
   revenue: number;
   count: number;
 }
+export interface MetricsRefundsCurrency {
+  currency: string;
+  count: number;
+  amount: number;
+}
+/** Возвраты за 30 дней по дате возврата; валюты не складываются. */
+export interface MetricsRefunds {
+  count_30d: number;
+  by_currency: MetricsRefundsCurrency[];
+  /** Активные шлюзы, которые сообщают об отзыве платежа (ставят REFUNDED). */
+  reporting_gateways: string[];
+  /** Активные шлюзы, которые о возвратах молчат: их возвратов бот не видит. */
+  silent_gateways: string[];
+}
 export interface MetricsResponse {
   currency: string;
   mrr: number;
@@ -262,6 +276,8 @@ export interface MetricsResponse {
   conversion: { trials: number; converted: number; pct: number };
   churn: { active_now: number; churned_30d: number; pct: number };
   payments: { completed_30d: number; canceled_30d: number; success_pct: number };
+  /** Нет поля — бэкенд возвраты не считает, плитку не рисуем. */
+  refunds?: MetricsRefunds;
   top_plans: MetricsTopPlan[];
   top_gateways: MetricsTopGateway[];
 }

@@ -1,10 +1,42 @@
 import { useEffect, useState } from "react";
-import { statisticsApi, type MetricsResponse } from "@/api/admin";
+import { statisticsApi, type MetricsRefunds, type MetricsResponse } from "@/api/admin";
+import { formatAdminMoney } from "@/lib/adminMoney";
+import { gatewayName } from "@/lib/gatewayNames";
 
 // Админка осознанно на русском (см. роадмап, Фаза 12) — не i18n.
 
 function fmtMoney(v: number, currency: string): string {
   return `${Math.round(v).toLocaleString("ru-RU")} ${currency === "RUB" ? "₽" : currency}`;
+}
+
+/**
+ * Что показать в плитке «Возвраты (30 дн)».
+ *
+ * Главная ловушка — «0 ₽». Бот знает о возврате, только если шлюз о нём сообщает
+ * (сейчас Platega и Valutix); ЮMoney и звёзды молчат. Поэтому ноль без оговорки
+ * читался бы как «возвратов не было», хотя на деле «не знаем»: рядом с числом
+ * всегда перечисляем молчащие шлюзы, а если молчат ВСЕ подключённые — вместо нуля
+ * ставим прочерк.
+ *
+ * Суммы по валютам не складываем (499 ₽ и 5 $ — не «504») и пишем тем же
+ * форматом, что блок «Продажи» и графики на этой же странице.
+ */
+export function refundsTile(
+  r: MetricsRefunds,
+  blockCurrency: string,
+): { value: string; hint: string; tone?: "warning" } {
+  if (r.count_30d === 0 && r.reporting_gateways.length === 0) {
+    return { value: "—", hint: "подключённые шлюзы о возвратах не сообщают" };
+  }
+  const value =
+    r.count_30d > 0
+      ? r.by_currency.map((c) => formatAdminMoney(c.currency, c.amount)).join(" · ")
+      : formatAdminMoney(blockCurrency, 0);
+  let hint = `платежей: ${r.count_30d}`;
+  if (r.silent_gateways.length > 0) {
+    hint += ` · не сообщают: ${r.silent_gateways.map(gatewayName).join(", ")}`;
+  }
+  return r.count_30d > 0 ? { value, hint, tone: "warning" } : { value, hint };
 }
 
 /** Одна KPI-плитка. */
@@ -36,7 +68,7 @@ function Tile({
   );
 }
 
-/** Продуктовые KPI: MRR, ARPU/ARPPU, конверсия trial→оплата, отток, топы. */
+/** Продуктовые KPI: MRR, ARPU/ARPPU, конверсия trial→оплата, отток, возвраты, топы. */
 export function MetricsCards() {
   const [data, setData] = useState<MetricsResponse | null>(null);
   const [error, setError] = useState(false);
@@ -56,6 +88,8 @@ export function MetricsCards() {
     data.payments.success_pct >= 70 ? "success" : data.payments.success_pct >= 40 ? "warning" : "danger";
   const convTone: "success" | "warning" | "danger" =
     data.conversion.pct >= 15 ? "success" : data.conversion.pct >= 5 ? "warning" : "danger";
+  // Старый бэкенд и адаптер «Бедолаги» поля не отдают — тогда плитки просто нет.
+  const refunds = data.refunds ? refundsTile(data.refunds, cur) : null;
 
   return (
     <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
@@ -66,6 +100,14 @@ export function MetricsCards() {
       <p className="mb-3 text-xs text-fg-muted">
         Денежные метрики — в {cur === "RUB" ? "рублях" : cur} (валюты не суммируются). MRR — оценка по
         последнему платежу активных подписчиков, нормированному к 30 дням.
+        {data.refunds && (
+          <>
+            {" "}
+            Возвраты — платежи, которые шлюз отозвал уже после оплаты (чарджбэк), по дню, когда
+            бот об этом узнал; в выручку и MRR они не входят. Возврат, сделанный вручную в кабинете
+            шлюза или кошелька, и возвраты по выключенным шлюзам бот не видит.
+          </>
+        )}
       </p>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
@@ -108,6 +150,9 @@ export function MetricsCards() {
           hint={`${data.payments.completed_30d} ок · ${data.payments.canceled_30d} отмен`}
           tone={successTone}
         />
+        {refunds && (
+          <Tile label="Возвраты (30 дн)" value={refunds.value} hint={refunds.hint} tone={refunds.tone} />
+        )}
       </div>
 
       <div className="mt-4 grid gap-4 md:grid-cols-2">

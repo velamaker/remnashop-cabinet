@@ -10,18 +10,7 @@ import { ApiError } from "@/types/api";
 import { DailyCharts } from "@/components/admin/DailyCharts";
 import { CohortHeatmap } from "@/components/admin/CohortHeatmap";
 import { MetricsCards } from "@/components/admin/MetricsCards";
-
-// Форматирование выручки по валюте (RUB → ₽, USD → $, XTR → ⭐ звёзды Telegram).
-function fmtMoney(currency: string, amount: number): string {
-  const n = amount.toLocaleString("ru-RU", { maximumFractionDigits: 0 });
-  switch (currency) {
-    case "RUB": return `${n} ₽`;
-    case "USD": return `$${n}`;
-    case "EUR": return `€${n}`;
-    case "XTR": return `${n} ⭐`;
-    default: return `${n} ${currency}`;
-  }
-}
+import { formatAdminMoney as fmtMoney } from "@/lib/adminMoney";
 
 function StatCard({
   label,

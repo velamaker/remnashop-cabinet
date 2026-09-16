@@ -8,23 +8,13 @@ import {
 } from "recharts";
 import { LineChart } from "lucide-react";
 import { statisticsApi, type DailyStatsResponse } from "@/api/admin";
+import { formatAdminMoney as fmtMoney } from "@/lib/adminMoney";
 
 const PERIODS = [30, 60, 90] as const;
 
 function shortDate(iso: string): string {
   const d = new Date(iso);
   return `${d.getDate()}.${d.getMonth() + 1}`;
-}
-
-function fmtMoney(currency: string, amount: number): string {
-  const n = amount.toLocaleString("ru-RU", { maximumFractionDigits: 0 });
-  switch (currency) {
-    case "RUB": return `${n} ₽`;
-    case "USD": return `$${n}`;
-    case "EUR": return `€${n}`;
-    case "XTR": return `${n} ⭐`;
-    default: return `${n} ${currency}`;
-  }
 }
 
 const TOOLTIP_STYLE = {

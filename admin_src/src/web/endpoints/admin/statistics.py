@@ -281,13 +281,86 @@ async def get_transaction_stats(
     }
 
 
+# Шлюзы, чей вебхук сообщает об отзыве платежа (ставит REFUNDED): Platega — CHARGEBACKED,
+# Valutix — CHARGEBACK. Остальные о возвратах молчат. Сверяется с базой тестом
+# tests/test_metrics_refunds.py::test_reporting_gateways_match_base.
+REFUND_REPORTING_GATEWAYS: frozenset[str] = frozenset({"PLATEGA", "VALUTIX"})
+
+
+async def compute_refunds_30d(session: AsyncSession) -> dict[str, Any]:
+    """Возвраты за 30 дней — по дате возврата, по каждой валюте отдельно.
+
+    Отдельной функцией, чтобы запрос можно было проверить на настоящем Postgres
+    без таблицы подписок (tests/test_metrics_refunds_sql.py). Почему `updated_at`
+    и почему «молчащие» шлюзы — см. docstring compute_metrics.
+    """
+    # Та же граница «клиент», что у выручки: без проверочных оплат и без учёток
+    # персонала. Иначе возврат собственной проверки владельца выглядел бы потерей.
+    rows = (
+        await session.execute(
+            text(
+                "SELECT currency::text AS currency, count(*) AS cnt, "
+                "coalesce(sum((pricing->>'final_amount')::numeric), 0) AS amt "
+                "FROM transactions WHERE status::text = 'REFUNDED' "
+                "AND is_test = false AND user_id NOT IN (SELECT su.id FROM users su WHERE su.role::text <> 'USER') "
+                "AND (pricing->>'final_amount')::numeric > 0 "
+                "AND updated_at >= now() - interval '30 days' "
+                "GROUP BY currency"
+            )
+        )
+    ).all()
+    # RUB первой, остальные по коду: порядок стабилен, и плитка не прыгает между
+    # обновлениями страницы.
+    by_currency = sorted(
+        (
+            {"currency": r.currency, "count": int(r.cnt or 0), "amount": round(float(r.amt or 0), 2)}
+            for r in rows
+        ),
+        key=lambda c: (c["currency"] != "RUB", c["currency"]),
+    )
+    # Только тип и флаг: в `settings` этой таблицы лежат ключи шлюзов, их не выбираем
+    # даже ради удобства.
+    active = {
+        r.gw
+        for r in (
+            await session.execute(
+                text("SELECT type::text AS gw FROM payment_gateways WHERE is_active = true")
+            )
+        ).all()
+    }
+    return {
+        "count_30d": sum(c["count"] for c in by_currency),
+        "by_currency": by_currency,
+        "reporting_gateways": sorted(active & REFUND_REPORTING_GATEWAYS),
+        "silent_gateways": sorted(active - REFUND_REPORTING_GATEWAYS),
+    }
+
+
 async def compute_metrics(session: AsyncSession) -> dict[str, Any]:
     """Продуктовые KPI (вынесено из эндпоинта ради тестируемости).
 
-    Денежные метрики считаем в RUB (доминирующая валюта; XTR-звёзды и USD в
-    MRR/ARPU не подмешиваем — валюты не суммируются). «Возвратов» как статуса в
-    БД нет (только COMPLETED/CANCELED), поэтому вместо refund показываем success
-    rate платежей = COMPLETED / (COMPLETED + CANCELED).
+    Денежные метрики — в RUB (валюты не суммируются). Исключение — возвраты: их
+    мало и они бывают в любой валюте, поэтому отдаются разбивкой `refunds.by_currency`.
+
+    ВОЗВРАТЫ. REFUNDED в enum `transaction_status` есть. Ставит его только вебхук
+    шлюза, умеющего сообщить об отзыве платежа: Platega (CHARGEBACKED) и Valutix
+    (CHARGEBACK), и только из COMPLETED (ProcessPayment._execute). ЮMoney, Telegram
+    Stars и остальные о возвратах не сообщают, ручной возврат в кабинете шлюза
+    оставляет счёт COMPLETED. Вебхуки выключенных шлюзов база отбивает (404): отзыв
+    платежа через выключенный шлюз тоже не виден. Возврат на ₽-баланс при сбое
+    продления (overlay_balance) — не REFUNDED, счёт уходит в FAILED. Проверочная
+    оплата владельца звёздами пишется как CANCELED.
+
+    «Когда вернули»: отдельного поля нет, берём updated_at. transition_status
+    выставляет его в момент перехода, после REFUNDED строку никто не переписывает.
+    Заперто тестами test_metrics_refunds.py (перечень писателей). Сдвинуть дату может
+    только повторный вебхук Platega с другим способом оплаты — пренебрегаем.
+
+    Ставший REFUNDED платёж задним числом выпадает из выручки, MRR, топов и success
+    rate. Так и надо: денег нет.
+
+    Success rate = COMPLETED / (COMPLETED + CANCELED) — про другое: сколько начатых
+    оплат доходит до денег.
     """
     RUB = "AND currency::text = 'RUB' "
 
@@ -386,7 +459,7 @@ async def compute_metrics(session: AsyncSession) -> dict[str, Any]:
     churn_base = active_now + churned
     churn_pct = round(churned * 100 / churn_base, 1) if churn_base else 0.0
 
-    # ── Success rate платежей за 30 дней (вместо «возвратов») ──────────────────
+    # ── Success rate платежей за 30 дней ──────────────────────────────────────
     pay = (
         await session.execute(
             text(
@@ -436,6 +509,9 @@ async def compute_metrics(session: AsyncSession) -> dict[str, Any]:
         ).all()
     ]
 
+    # ── Возвраты за 30 дней (по дате возврата, по валютам) ────────────────────
+    refunds = await compute_refunds_30d(session)
+
     return {
         "currency": "RUB",
         "mrr": round(mrr, 2),
@@ -452,6 +528,7 @@ async def compute_metrics(session: AsyncSession) -> dict[str, Any]:
             "canceled_30d": canceled_30,
             "success_pct": success_pct,
         },
+        "refunds": refunds,
         "top_plans": top_plans,
         "top_gateways": top_gateways,
     }
@@ -463,7 +540,7 @@ async def get_metrics(
     _admin: AdminUser,
     session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
-    """Продуктовые KPI: MRR, ARPU/ARPPU, конверсия trial→оплата, отток, топы."""
+    """Продуктовые KPI: MRR, ARPU/ARPPU, конверсия trial→оплата, отток, топы, возвраты."""
     return await compute_metrics(session)
 
 
