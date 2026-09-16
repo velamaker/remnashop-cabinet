@@ -69,6 +69,99 @@ def _xray_alert_after_min() -> int:
     return _env_int("NODE_XRAY_ALERT_AFTER_MIN", 15)
 
 
+def _dns_alert_after_min() -> int:
+    """Сколько минут имя должно не резолвиться, прежде чем будить владельца.
+
+    Порог, а не мгновенный алерт: разовый сбой резолвера — обычное дело, и
+    будить из-за него так же вредно, как из-за перезапуска xray на пару минут.
+    """
+    return _env_int("NODE_DNS_ALERT_AFTER_MIN", 15)
+
+
+def _token_days_left(token: str) -> Optional[int]:
+    """Сколько дней осталось у нашего API-токена панели. None — срок не прочитать.
+
+    ЗАЧЕМ. Токен панели — единственный ключ ко всему: истечёт, и бот перестанет
+    выдавать подписки, продлевать и видеть статус. Узнать об этом владелец
+    сегодня может только по жалобам, потому что за сроком не следит ничто. У
+    панели поле `expire_at` у токенов есть, и один из токенов на боевой установке
+    уже протух незамеченным — просто он не использовался.
+
+    ПОЧЕМУ ЧИТАЕМ САМ ТОКЕН, А НЕ СПРАШИВАЕМ ПАНЕЛЬ. Токен панели — это JWT, и
+    срок лежит прямо в нём (`exp`). Значит не нужен ни лишний запрос, ни право на
+    чтение чужих токенов, и ответ относится ИМЕННО К ТОМУ ключу, которым ходит
+    бот, а не к какому-то из списка.
+
+    Подпись НЕ проверяем намеренно: ключа от неё у нас нет и быть не должно, а
+    подделывать нам самим себе собственный токен незачем. Читается только `exp`.
+    """
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None  # не JWT (опаковый ключ) — сроку взяться неоткуда
+    try:
+        import base64
+
+        raw = parts[1]
+        payload = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
+        exp = payload.get("exp")
+        if not isinstance(exp, (int, float)):
+            return None
+        left = datetime.fromtimestamp(float(exp), timezone.utc) - datetime.now(timezone.utc)
+        return int(left.total_seconds() // 86400)
+    except Exception:  # noqa: BLE001 — чужой формат не повод ронять мониторинг
+        return None
+
+
+# Пороги предупреждения о сроке токена. Три ступени, а не одна: за месяц ключ
+# успевают перевыпустить спокойно, за неделю — напоминание, за сутки — уже срочно.
+#
+# ПОРЯДОК ВОЗРАСТАЮЩИЙ, И ЭТО НЕ КОСМЕТИКА. Ступень выбирается первым подходящим
+# (`next(d for d in TOKEN_WARN_DAYS if days <= d)`), то есть БЛИЖАЙШИМ сверху. При
+# убывающем порядке первым подходящим всегда оказывался бы 30, и после единственного
+# сообщения на тридцатом дне владелец не услышал бы ничего до самого истечения.
+# Именно так и было написано сначала — а тест запирал неверный порядок как
+# «правильный», поэтому ошибка и дожила до боя.
+TOKEN_WARN_DAYS = (1, 7, 30)
+
+
+def token_alerts(state: dict[str, Any], token: str) -> list[str]:
+    """Что сказать про срок API-токена панели. Меняет `state` (память о ступенях).
+
+    Вынесено из задачи, чтобы лестницу порогов можно было проверить тестом на всех
+    значениях, а не на одном.
+    """
+    token_state = state.setdefault("_panel_token", {})
+    try:
+        days = _token_days_left(token)
+    except Exception:  # noqa: BLE001 — чужой формат не повод ронять мониторинг
+        days = None
+    if days is None:
+        return []
+
+    if days < 0:
+        if token_state.get("expired"):
+            return []
+        token_state["expired"] = True
+        return [
+            "🔑 <b>Токен панели ИСТЁК</b>. Бот больше не может ни выдавать подписки, "
+            "ни продлевать, ни видеть статус — выпустите новый в панели и пропишите "
+            "в <code>REMNAWAVE_TOKEN</code>."
+        ]
+
+    token_state.pop("expired", None)
+    hit = next((d for d in TOKEN_WARN_DAYS if days <= d), None)
+    if hit is None:
+        token_state.pop("warned_at", None)
+        return []
+    if token_state.get("warned_at") == hit:
+        return []
+    token_state["warned_at"] = hit
+    return [
+        f"🔑 <b>Токен панели</b>: осталось <b>{days} дн.</b> Когда он истечёт, бот "
+        f"потеряет панель целиком — выпустите новый заранее."
+    ]
+
+
 def _auto_restart_enabled() -> bool:
     """Авто-рестарт ноды при упавшем xray. По умолчанию ВЫКЛ (осторожно)."""
     return (os.environ.get("NODE_AUTO_RESTART_XRAY") or "false").strip().lower() in (
@@ -462,10 +555,85 @@ async def _diagnose_xray_down(
 async def _resolve_ip(host: str) -> Optional[str]:
     try:
         loop = asyncio.get_running_loop()
-        infos = await loop.getaddrinfo(host, None, family=socket.AF_INET)
+        # family=0 (AF_UNSPEC), а не только AF_INET: имя с одной AAAA-записью
+        # раньше выглядело неразрешимым, и после появления алерта про мёртвое
+        # имя такая нода объявлялась бы сломанной на ровном месте.
+        infos = await loop.getaddrinfo(host, None, family=0)
         return infos[0][4][0] if infos else None
     except Exception:
         return None
+
+
+def dns_alerts(
+    name: str,
+    address: str,
+    st: dict[str, Any],
+    ip: Optional[str],
+    now_iso: str,
+    after_min: int,
+) -> list[str]:
+    """Что сказать владельцу про DNS ноды. Меняет `st` (память между прогонами).
+
+    ПОЧЕМУ ПРОПАВШЕЕ ИМЯ — ОТДЕЛЬНЫЙ АЛЕРТ, А НЕ МОЛЧАНИЕ.
+    Раньше здесь не делалось НИЧЕГО: не резолвится — идём дальше. Из-за этого
+    пропавшая DNS-запись не была видна вообще. Мало того, в состоянии остаётся
+    прежний `ip`, и все проверки ниже продолжают идти ПО НЕМУ — то есть мониторинг
+    рапортует о здоровье АДРЕСА, а не имени, по которому к ноде ходит панель.
+
+    На боевой установке так и вышло: DNS-запись одной из нод исчезла, здесь было
+    тихо, здоровье считалось по сохранённому адресу, а панель молчала со своей
+    стороны — она держала уже установленное соединение и имя не перерезолвливала.
+    Вскрылось только при её перезапуске, то есть в самый неудобный момент.
+
+    Порог (а не мгновенный алерт) — по той же причине, что у xray: разовый сбой
+    резолвера будить владельца не должен.
+    """
+    out: list[str] = []
+
+    if ip:
+        old_ip = st.get("ip")
+        if old_ip and ip != old_ip:
+            out.append(
+                f"🔀 <b>{html.escape(name)}</b>: сменился IP <code>{old_ip}</code> → "
+                f"<code>{ip}</code>. Проверьте DNS/серт/доступность."
+            )
+        st["ip"] = ip
+
+        # ОДИН УДАЧНЫЙ ОТВЕТ — ЕЩЁ НЕ ВЫЗДОРОВЛЕНИЕ. Если стирать засечку при первом
+        # же успехе, мерцающий резолв (сломано делегирование, один из двух NS мёртв,
+        # SERVFAIL через раз) не накопит порога НИКОГДА: провал, провал, успех — и
+        # счётчик обнулён, хотя панель в это время половину попыток проваливает.
+        # Поэтому забываем поломку только после двух удачных прогонов подряд.
+        streak = int(st.get("dns_ok_streak") or 0) + 1
+        if streak < 2 and st.get("dns_down_since"):
+            st["dns_ok_streak"] = streak
+            return out
+        st.pop("dns_ok_streak", None)
+        was_warned = st.pop("dns_warned", None)
+        st.pop("dns_down_since", None)
+        if was_warned:
+            out.append(
+                f"✅ <b>{html.escape(name)}</b>: имя <code>{html.escape(address)}</code> "
+                f"снова резолвится (<code>{ip}</code>)."
+            )
+        return out
+
+    st["dns_ok_streak"] = 0
+    st.setdefault("dns_down_since", now_iso)
+    if _minutes_since(st.get("dns_down_since")) >= after_min and not st.get("dns_warned"):
+        saved = st.get("ip")
+        tail = (
+            f" Проверки идут по сохранённому адресу <code>{html.escape(str(saved))}</code>, "
+            f"поэтому нода может числиться здоровой, пока панель до неё не достучится."
+            if saved
+            else " Сохранённого адреса нет — проверить ноду сейчас нечем."
+        )
+        out.append(
+            f"🕳 <b>{html.escape(name)}</b>: имя <code>{html.escape(address)}</code> "
+            f"больше не резолвится.{tail}"
+        )
+        st["dns_warned"] = True
+    return out
 
 
 def _cert_days_left_sync(host: str, port: int = 443) -> Optional[int]:
@@ -506,18 +674,21 @@ async def check_node_health(
     if not _enabled():
         return
 
-    try:
-        nodes = await _fetch_nodes(config)
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"node_health: не смог получить ноды: {e}")
-        return
-    if not nodes:
-        return
-
     state = _load_state()
     warn_days = _cert_warn_days()
     alerts: list[str] = []
     now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Срок токена проверяем ДО похода в панель — иначе предупреждение об истёкшем
+    # токене недостижимо ровно в той ситуации, ради которой написано: с протухшим
+    # ключом панель отвечает 401, список нод не приходит, и задача выходит раньше.
+    alerts.extend(token_alerts(state, config.remnawave.token.get_secret_value()))
+
+    try:
+        nodes = await _fetch_nodes(config)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"node_health: не смог получить ноды: {e}")
+        nodes = []
 
     for n in nodes:
         if not isinstance(n, dict):
@@ -603,14 +774,10 @@ async def check_node_health(
         # 1b) история аптайма для /status (нода на связи и xray жив).
         _record_uptime(st, connected and not xray_down)
 
-        # 2) смена IP ноды (DNS)
+        # 2) DNS ноды: смена IP и — отдельно — пропавшее имя
         if address:
             ip = await _resolve_ip(address)
-            if ip:
-                old_ip = st.get("ip")
-                if old_ip and ip != old_ip:
-                    alerts.append(f"🔀 <b>{html.escape(name)}</b>: сменился IP <code>{old_ip}</code> → <code>{ip}</code>. Проверьте DNS/серт/доступность.")
-                st["ip"] = ip
+            alerts.extend(dns_alerts(name, address, st, ip, now_iso, _dns_alert_after_min()))
 
         # 3) срок сертификата (сам замер — не чаще раза в 6 часов)
         if address and _minutes_since(st.get("cert_checked_at")) >= 360:
@@ -660,8 +827,19 @@ async def check_node_health(
             alerts.append(f"✅ <b>{html.escape(url)}</b>: снова отвечает (HTTP {code}).")
             web_state[key] = False
 
-    _save_state(state)
-
+    # ПОРЯДОК ВАЖЕН: сначала отправить, потом запомнить.
+    #
+    # Раньше состояние сохранялось ДО отправки, а неудача отправки лишь писалась в
+    # лог. Из-за этого одноразовое предупреждение («имя ноды не резолвится», «токен
+    # скоро истечёт») терялось НАВСЕГДА: флаг «уже предупредили» уже лежал на диске,
+    # а сообщение не ушло. Задача объявлена с retry_on_error=False, второй попытки
+    # нет — владелец не узнал бы о поломке до тех пор, пока она не починится и не
+    # случится заново.
+    #
+    # Цена нового порядка: при недоступном Telegram теряется один прогон истории
+    # аптайма и обновление ip/срока серта. Это дёшево — на следующем прогоне всё
+    # перечитывается заново, а вот пропущенный алерт не восстановить ничем.
+    delivered = True
     if alerts:
         sent = 0
         for chunk in _chunk_alerts(alerts):
@@ -679,5 +857,14 @@ async def check_node_health(
                 )
                 sent += 1
             except Exception as e:  # noqa: BLE001
+                delivered = False
                 logger.warning(f"node_health: не смог отправить алерт: {e}")
         logger.info(f"node_health: отправлено {len(alerts)} алертов админам в {sent} сообщ.")
+
+    if delivered:
+        _save_state(state)
+    else:
+        logger.error(
+            "node_health: алерты не доставлены — состояние НЕ сохраняем, "
+            "чтобы предупреждение повторилось на следующем прогоне"
+        )
