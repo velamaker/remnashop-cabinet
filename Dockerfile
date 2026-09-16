@@ -79,6 +79,13 @@ COPY scripts/sitecustomize.py /opt/remnashop/.venv/lib/python3.12/site-packages/
 # Overlay admin API files on top of the base image
 COPY admin_src/src/ /opt/remnashop/src/
 
+# Инструменты для разбора вручную. Сторож двойников (tasks/account_duplicates.py)
+# присылает владельцу ГОТОВУЮ команду на merge-duplicate.py — а её нечем было
+# выполнить: папка scripts/ в образ не попадала и никуда не монтируется, то есть
+# уведомление предлагало то, чего в системе нет.
+COPY scripts/merge-duplicate.py /opt/remnashop/scripts/merge-duplicate.py
+COPY scripts/check-panel-compat.py /opt/remnashop/scripts/check-panel-compat.py
+
 # Версия форка (её читает планировщик для уведомлений об обновлении). Это версия,
 # на которой собран образ — ровно то, что сейчас работает.
 COPY VERSION /opt/remnashop/VERSION
