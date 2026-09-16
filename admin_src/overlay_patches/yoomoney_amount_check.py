@@ -141,12 +141,28 @@ def apply() -> str:
     for qualname, sha in BASE_METHODS.items():
         expect_source(target, qualname, sha, qualname)
 
-    async def _alert_owner(self, text_message: str) -> None:
-        """Сказать владельцу. Никогда не мешает основному пути."""
+    async def _alert_owner(self, text_message: str, payment_id: Any = None) -> None:
+        """Сказать владельцу. Никогда не мешает основному пути.
+
+        Под НЕПРОВЕДЁННЫМ платежом вешаем кнопки разбора: уведомление требует
+        решения («вернуть деньги или выдать подписку»), и раньше не давало ничем
+        это сделать — владелец шёл искать счёт в админке руками. Кнопки зовут
+        штатный ProcessPayment, см. telegram/routers/overlay_payment_review.py.
+
+        Кнопок нет у сообщения о ПЕРЕПЛАТЕ: там подписка уже выдана, решать нечего.
+        """
+        markup = None
+        if payment_id is not None:
+            try:
+                from src.telegram.routers.overlay_payment_review import keyboard
+
+                markup = keyboard(payment_id, "YOOMONEY")
+            except Exception as exc:  # noqa: BLE001 — без кнопок, но с текстом
+                logger.warning(f"ЮMoney: не собрал кнопки разбора: {exc}")
         try:
             owner_id = self.config.bot.owner_id
             if owner_id:
-                await self.bot.send_message(int(owner_id), text_message)
+                await self.bot.send_message(int(owner_id), text_message, reply_markup=markup)
         except Exception as exc:  # noqa: BLE001 — не уведомили, но и не сломали
             logger.warning(f"ЮMoney: не смог предупредить владельца: {exc}")
 
@@ -169,7 +185,13 @@ def apply() -> str:
         allow, message = verdict(data, paid, invoice)
 
         if message:
-            await _alert_owner(self, f"{message}\n\nСчёт: {payment_id}")
+            # Кнопки — только там, где платёж НЕ проведён: при переплате подписка
+            # уже выдана, и «выдать» второй раз предлагать нечего.
+            await _alert_owner(
+                self,
+                f"{message}\n\nСчёт: {payment_id}",
+                payment_id=None if allow else payment_id,
+            )
 
         if not allow:
             logger.warning(

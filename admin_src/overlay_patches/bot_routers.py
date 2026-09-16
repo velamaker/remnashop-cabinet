@@ -32,6 +32,7 @@ from . import PatchTargetChanged
 _ROUTERS = (
     ("src.telegram.routers.overlay_abuse", "раздел абьюза (только владельцу)"),
     ("src.telegram.routers.overlay_gift", "подарочные подписки"),
+    ("src.telegram.routers.overlay_payment_review", "разбор спорных платежей"),
 )
 
 
