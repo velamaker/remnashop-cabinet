@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Trash2, Layers } from "lucide-react";
 import { subscriptionApi } from "@/api/subscription";
 import { useT } from "@/i18n/I18nContext";
 import { Card, CardHeader } from "@/components/ui/Card";
@@ -10,6 +10,7 @@ import { PlatformIcon } from "@/components/PlatformIcon";
 import { formatDate, formatRelativeOnline } from "@/lib/format";
 import type { DeviceResponse, DevicesResponse } from "@/types/api";
 import { ApiError } from "@/types/api";
+import { appFromUserAgent, freeableSlots, sameDeviceGroups } from "@/lib/deviceGroups";
 
 type ActivityTone = "online" | "recent" | "idle" | "stale";
 
@@ -32,9 +33,13 @@ const TONE_COLOR: Record<ActivityTone, string> = {
 function DeviceRow({
   device,
   onDelete,
+  showApp = false,
 }: {
   device: DeviceResponse;
   onDelete: (hwid: string) => void;
+  /** Показать имя приложения: нужно там, где слоты дублируются одним аппаратом —
+      иначе строки неразличимы и непонятно, какую удалять. */
+  showApp?: boolean;
 }) {
   const t = useT();
   const [isDeleting, setIsDeleting] = useState(false);
@@ -84,7 +89,9 @@ function DeviceRow({
           {device.device_model || device.platform || t("devices.unknown")}
         </p>
         <p className="truncate text-xs text-fg-subtle">
-          {device.os_version || device.user_agent || device.hwid}
+          {showApp && appFromUserAgent(device.user_agent)
+            ? `${appFromUserAgent(device.user_agent)} · ${device.os_version || device.hwid}`
+            : device.os_version || device.user_agent || device.hwid}
           {/* Дата подключения: когда устройств несколько и они одинаковые, только
               по ней и понятно, какое лишнее. */}
           {device.created_at && (
@@ -109,6 +116,36 @@ function DeviceRow({
       >
         <Trash2 className="h-4 w-4" />
       </Button>
+    </div>
+  );
+}
+
+function SameDeviceHint({ devices }: { devices: DeviceResponse[] }) {
+  const t = useT();
+  const groups = useMemo(() => sameDeviceGroups(devices), [devices]);
+  if (!groups.length) return null;
+
+  return (
+    <div className="flex gap-3 rounded-xl border border-warning/30 bg-warning/5 p-3">
+      <Layers className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+      <div className="min-w-0 text-sm">
+        <p className="font-medium text-fg">{t("devices.sameDeviceTitle")}</p>
+        <p className="mt-0.5 text-xs text-fg-muted">
+          {t("devices.sameDeviceText", { n: freeableSlots(groups) })}
+        </p>
+        <ul className="mt-2 space-y-1">
+          {groups.map((g) => (
+            <li key={g.label} className="text-xs text-fg-subtle">
+              <span className="text-fg-muted">{g.label}</span>
+              {" — "}
+              {/* Имя приложения здесь и есть главное: по нему человек понимает,
+                  какой слот лишний. В самой строке устройства его не видно, пока
+                  у записи заполнена версия ОС. */}
+              {g.apps.join(", ")}
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }
@@ -146,6 +183,16 @@ export default function DevicesPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Слоты, похожие на один аппарат: только у них показываем приложение —
+  // в остальных строках это лишний шум.
+  const duplicateHwids = useMemo(() => {
+    const set = new Set<string>();
+    for (const g of sameDeviceGroups(data?.devices ?? [])) {
+      for (const d of g.devices) set.add(d.hwid);
+    }
+    return set;
+  }, [data]);
 
   const handleDeviceDeleted = (hwid: string) => {
     setData((prev) =>
@@ -215,11 +262,13 @@ export default function DevicesPage() {
 
         {!isLoading && data && data.devices.length > 0 && (
           <div className="flex flex-col gap-2">
+            <SameDeviceHint devices={data.devices} />
             {data.devices.map((device) => (
               <DeviceRow
                 key={device.hwid}
                 device={device}
                 onDelete={handleDeviceDeleted}
+                showApp={duplicateHwids.has(device.hwid)}
               />
             ))}
           </div>
