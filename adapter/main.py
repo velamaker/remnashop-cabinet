@@ -765,8 +765,10 @@ async def auth_bridge(kind: str, request: Request) -> Response:
 # Коды отказов их моста авторизации → человеческая причина. Переводим по КОДУ, а
 # не по фразе: код — договор, английский текст рядом они правят когда угодно.
 _AUTH_ERRORS = {
+    # Общий текст на случай, когда список документов не пришёл; обычно фраза
+    # собирается по факту — см. _legal_text().
     "legal_consent_required": (
-        "Чтобы создать аккаунт, примите оферту и политику конфиденциальности"
+        "Чтобы создать аккаунт, примите документы сервиса"
     ),
     "registration_invite_required": (
         "Регистрация сейчас только по приглашению — попросите ссылку у того, "
@@ -774,6 +776,14 @@ _AUTH_ERRORS = {
     ),
     "registration_check_unavailable": (
         "Не удалось проверить приглашение — попробуйте ещё раз через минуту"
+    ),
+    # Оператор выключил вход по почте. Кабинет об этом узнаёт из оформления и
+    # прячет форму, но окно всё равно есть: кэш оформления живёт около минуты, а
+    # уже открытая вкладка держит его до перезагрузки. В это окно человек жмёт
+    # «Войти» и получает ответ — он обязан быть на его языке и говорить, что
+    # делать дальше.
+    "email_auth_disabled": (
+        "Вход по почте на этом сервисе отключён — войдите через Telegram"
     ),
 }
 
@@ -810,6 +820,8 @@ _AUTH_MESSAGES = {
     "password login not configured for this account":
         "У этого аккаунта нет пароля — войдите через Telegram",
     "email verification is disabled": "Подтверждение почты отключено",
+    "email authentication is disabled":
+        "Вход по почте на этом сервисе отключён — войдите через Telegram",
     "email service is not configured": "Почта не настроена — напишите в поддержку",
     "invalid or expired telegram authentication data":
         "Данные входа через Telegram устарели — нажмите кнопку ещё раз",
@@ -830,6 +842,28 @@ def _retry_after_text(seconds: str) -> str:
     if left < 90:
         return f" Повторите через {left} с."
     return f" Повторите через {max(1, round(left / 60))} мин."
+
+
+# Как называются их документы по-русски. Ключи — те же, что в кабинете
+# (`components/LegalConsent.tsx`), чтобы отказ и галочки говорили одинаково.
+_LEGAL_DOCS = {
+    "public_offer": "оферту",
+    "privacy_policy": "политику конфиденциальности",
+}
+
+
+def _legal_text(detail: dict) -> str:
+    """«Примите …» по ФАКТИЧЕСКОМУ списку, а не по обоим документам сразу.
+
+    Их 428 несёт `missing`/`documents`. Требовать принять оферту там, где нужна
+    одна политика, — мелкая ложь, но ровно та, из-за которой человек ищет на
+    экране галочку, которой нет.
+    """
+    keys = detail.get("missing") or detail.get("documents") or []
+    names = [_LEGAL_DOCS[k] for k in keys if isinstance(k, str) and k in _LEGAL_DOCS]
+    if not names:
+        return _AUTH_ERRORS["legal_consent_required"]
+    return "Чтобы создать аккаунт, примите " + " и ".join(names)
 
 
 def _auth_error(resp: httpx.Response) -> Response:
@@ -853,7 +887,11 @@ def _auth_error(resp: httpx.Response) -> Response:
     detail = body.get("detail") if isinstance(body, dict) else None
     text = ""
     if isinstance(detail, dict):
-        text = _AUTH_ERRORS.get(str(detail.get("code") or ""), "")
+        code = str(detail.get("code") or "")
+        if code == "legal_consent_required":
+            text = _legal_text(detail)
+        else:
+            text = _AUTH_ERRORS.get(code, "")
         if not text:
             text = str(detail.get("message") or "").strip()
     elif isinstance(detail, list):

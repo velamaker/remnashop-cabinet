@@ -284,6 +284,30 @@ def _current(subs: list[dict[str, Any]]) -> dict[str, Any] | None:
     return max(pool, key=lambda s: str(s.get("end_date") or ""))
 
 
+def needs_pin(subs: list[dict[str, Any]], target: dict[str, Any] | None) -> bool:
+    """Надо ли адресовать подписку явно (`subscription_id`).
+
+    Их `subscription_id` включает «закреплённый» режим синхронизации с панелью, а
+    тот начинается с fail-closed: при пустом `subscriptions.remnawave_id` он пишет
+    warning и ВЫХОДИТ, не тронув панель, причём их же код результат не смотрит. То
+    есть лишнее закрепление превращает «продлено» в «отвечено успехом, а до панели
+    не доехало».
+
+    Поэтому закрепляем РОВНО там, где целимся не в ту подписку, которую выбрал бы
+    сам бот. Их выбор — ПЕРВАЯ АКТИВНАЯ (`routes/admin_users.py`), наш `_current` —
+    активная с самым дальним сроком. Совпали — молчим; разошлись — обязаны сказать,
+    иначе продлится чужая подписка.
+
+    Считать по количеству («шлём, если подписок больше одной») нельзя: тогда
+    закрепление включается и там, где выбор совпадает, — то есть ровно у тех, ради
+    кого правка и делалась.
+    """
+    if target is None or not subs:
+        return False
+    their_choice = next((s for s in subs if s.get("is_active")), subs[0])
+    return _int(their_choice.get("id")) != _int(target.get("id"))
+
+
 @handler("GET", "/api/admin/subscriptions/user/{id}")
 async def user_subscription(ctx: Ctx) -> dict[str, Any]:
     """Карточка подписки пользователя — вкладка «Подписка» открывается первой.
@@ -373,18 +397,21 @@ async def extend(ctx: Ctx) -> dict[str, Any]:
     """
     days = _days(ctx.payload().get("days"))
     uid = ctx.param("id")
-    current = _current(_subs_of(await _card(ctx, uid)))
+    subs = _subs_of(await _card(ctx, uid))
+    current = _current(subs)
     if current is None:
         raise _fail(404, _ERRORS["User has no subscription"])
-    data = await _act(
-        ctx,
-        f"/cabinet/admin/users/{uid}/subscription",
-        json={
-            "action": "extend" if days > 0 else "shorten",
-            "days": abs(days),
-            "subscription_id": _int(current.get("id")),
-        },
-    )
+    payload: dict[str, Any] = {
+        "action": "extend" if days > 0 else "shorten",
+        "days": abs(days),
+    }
+    # Закрепляем по тому же правилу, что и выдача (см. needs_pin): не по количеству
+    # подписок, а по расхождению нашего выбора с выбором бота. Счёт подписок
+    # включал закрепление и там, где выбор совпадает, — то есть ровно у тех, у кого
+    # оно ломает синхронизацию с панелью.
+    if needs_pin(subs, current):
+        payload["subscription_id"] = _int(current.get("id"))
+    data = await _act(ctx, f"/cabinet/admin/users/{uid}/subscription", json=payload)
     sub = data.get("subscription")
     return {
         "success": True,
@@ -406,11 +433,20 @@ async def grant(ctx: Ctx) -> dict[str, Any]:
     берёт у того же адаптера (`GET /api/admin/plans`), и там id их же, так что
     пересчитывать нечего.
 
-    Поведение повторяет наш бэкенд (`grant_subscription`): есть подписка —
-    продлеваем её и переводим на выбранный тариф («extended»), нет — заводим
-    новую («created»). Своей воли здесь нет: многотарифный режим у бота выключен,
-    и на вторую подписку их API отвечает 400 — то есть «выдать ещё одну» не
-    существует как операция, и притворяться, что мы её сделали, нельзя.
+    ТРИ ИСХОДА, И ПОРЯДОК ВАЖЕН:
+      • подписки нет               → `create` («created»);
+      • подписка НА ЭТОТ ЖЕ тариф  → `extend` именно её («extended»). Ищем её
+        среди ВСЕХ подписок, а не только «текущей»: при мультитарифе нужная может
+        быть не той, у которой срок дальше, и тогда их API отвечает 409 «уже есть
+        активная подписка на этот тариф» (а без мультитарифа — 500 на уникальном
+        индексе), то есть «выдать» не делало ничего;
+      • подписка на ДРУГОЙ тариф   → сначала пробуем `create` (вторая подписка), и
+        только на их 400/409 — прежний путь `change_tariff` + `extend`.
+
+    ПОЧЕМУ CREATE ПЕРВЫМ. Раньше здесь безусловно шёл `change_tariff`: администратор
+    хотел ДОБАВИТЬ человеку подписку, а отнимал действующую, переведя её на другой
+    тариф. В мультитарифном режиме это прямая потеря. В обычном режиме их `create`
+    отвечает 400 «User already has a subscription…» — тогда и переводим, как было.
 
     ПОЧЕМУ ДВА ЗАПРОСА НА СМЕНЕ ТАРИФА. Одной операции «смени тариф и продли» у
     них нет: `change_tariff` меняет тариф (и пишет в их журнал транзакцию на 0 ₽
@@ -432,8 +468,28 @@ async def grant(ctx: Ctx) -> dict[str, Any]:
     user_id = _int(ctx.params.get("id"))
     # Их же карточка отвечает на два вопроса разом: есть ли права (403 от RBAC) и
     # есть ли у человека подписка.
-    current = _current(_subs_of(await _card(ctx, uid)))
+    subs = _subs_of(await _card(ctx, uid))
+    current = _current(subs)
     path = f"/cabinet/admin/users/{uid}/subscription"
+
+    # Подписку АДРЕСУЕМ только когда наш выбор РАСХОДИТСЯ с их собственным.
+    #
+    # Раньше `subscription_id` слался всегда, и это ломало синхронизацию с панелью:
+    # у них он включает «закреплённый» режим, а тот начинается с fail-closed — при
+    # пустом `subscriptions.remnawave_id` синхронизация пишет warning и ВЫХОДИТ, не
+    # тронув панель, причём их же код результат не смотрит. Админка отвечала
+    # «успех», а до панели не доезжало.
+    #
+    # Считать по количеству подписок («шлём, только если их больше одной») — тоже
+    # мимо: закрепление нужно ровно там, где мы целимся не в ту подписку, которую
+    # выбрал бы бот. Их выбор — ПЕРВАЯ активная (routes/admin_users.py), наш
+    # `_current` — активная с самым дальним сроком. Совпали — закреплять нечего и
+    # синхронизация пойдёт обычным путём; разошлись — закрепляем, иначе продлится
+    # чужая подписка.
+    def with_sub(payload: dict[str, Any], target: dict[str, Any]) -> dict[str, Any]:
+        if not needs_pin(subs, target):
+            return payload
+        return {**payload, "subscription_id": _int(target.get("id"))}
 
     if current is None:
         result = await _act(ctx, path, json={
@@ -446,17 +502,66 @@ async def grant(ctx: Ctx) -> dict[str, Any]:
         })
         action = "created"
     else:
-        sub_id = _int(current.get("id"))
-        if _int(current.get("tariff_id")) != plan_id:
-            await _act(ctx, path, json={
-                "action": "change_tariff", "tariff_id": plan_id, "subscription_id": sub_id,
-            })
+        # Подписка НА ЭТОТ ЖЕ ТАРИФ может быть не «текущей»: при мультитарифе их у
+        # человека несколько, а `_current` — та, у которой срок дальше. Раньше мы
+        # целились только в неё, и «выдать» на тариф соседней строки упиралось в их
+        # 409 «уже есть активная подписка на этот тариф» (а в немультитарифном
+        # режиме — в 500 на уникальном индексе). Их 409 прямо отсылает «продлите
+        # её» — вот её и продлеваем.
+        # ТОЛЬКО СРЕДИ ЖИВЫХ. Брать подписку нужного тарифа любого статуса нельзя:
+        # тогда «Выдать подписку» оживляло бы давно истёкшую строку вместо выдачи
+        # новой — человек получал бы продление того, что уже закончилось, а
+        # действующая подписка оставалась бы нетронутой.
+        same = next(
+            (s for s in subs if _int(s.get("tariff_id")) == plan_id and s.get("is_active")),
+            None,
+        )
+        if same is not None:
+            current = same
+        same_tariff = _int(current.get("tariff_id")) == plan_id
+
+        if not same_tariff:
+            # СНАЧАЛА пробуем ВЫДАТЬ ВТОРУЮ подписку, а не переводить имеющуюся.
+            #
+            # Раньше здесь безусловно шёл `change_tariff`, и «Выдать подписку» на
+            # другом тарифе ПЕРЕВОДИЛО человека с его действующей подписки вместо
+            # того, чтобы добавить вторую. В мультитарифном режиме это прямая
+            # потеря: администратор хотел дать ещё одну, а отнял первую.
+            # Их `create` в обычном (немультитарифном) режиме отвечает 400
+            # «User already has a subscription…» — вот тогда и переводим, как
+            # раньше. На тот же тариф они отвечают 409, но сюда мы с ним не заходим.
+            try:
+                result = await _act(ctx, path, json={
+                    "action": "create",
+                    "tariff_id": plan_id,
+                    "days": days,
+                    "is_trial": bool(body.get("is_trial")),
+                })
+                return {
+                    "success": True,
+                    "subscription": (
+                        _sub(result.get("subscription"), user_id, {})
+                        if isinstance(result.get("subscription"), dict) else None
+                    ),
+                    "action": "created",
+                }
+            except UpstreamError as exc:
+                # 400/409 — их «вторая подписка невозможна»: переводим, как раньше.
+                # 502 — сюда же: `_send` схлопывает в него ЛЮБОЙ их 5xx, а на 5xx
+                # прежний код спокойно делал смену тарифа. Не откатиться значило бы
+                # сломать то, что работало, ради случая, которого могло и не быть.
+                if exc.resp.status_code not in (400, 409, 502):
+                    raise
+            await _act(ctx, path, json=with_sub(
+                {"action": "change_tariff", "tariff_id": plan_id}, current
+            ))
+
         try:
-            result = await _act(ctx, path, json={
-                "action": "extend", "days": days, "subscription_id": sub_id,
-            })
+            result = await _act(ctx, path, json=with_sub(
+                {"action": "extend", "days": days}, current
+            ))
         except UpstreamError as exc:
-            if _int(current.get("tariff_id")) == plan_id:
+            if same_tariff:
                 raise
             raise _fail(
                 exc.resp.status_code,

@@ -28,17 +28,50 @@ def detail_of(out) -> str:
     return json.loads(bytes(out.body).decode())["detail"]
 
 
-def test_legal_consent_is_explained():
-    """428 с их кодом — в понятную фразу, а не в сырой объект."""
+def test_legal_consent_names_exactly_the_missing_documents():
+    """428 с их кодом — в понятную фразу, и по ФАКТИЧЕСКОМУ списку документов.
+
+    Требовать принять оферту там, где нужна одна политика, — мелкая ложь, но ровно
+    та, из-за которой человек ищет на экране галочку, которой нет.
+    """
     out = main._auth_error(resp(428, {"detail": {
         "code": "legal_consent_required",
         "message": "Consent to the legal documents is required to create an account",
-        "documents": [], "missing": ["offer"], "prechecked": False,
+        "documents": ["privacy_policy"], "missing": ["privacy_policy"], "prechecked": False,
     }}))
     assert out.status_code == 428
+    assert detail_of(out) == "Чтобы создать аккаунт, примите политику конфиденциальности"
+
+
+def test_legal_consent_lists_both_documents_when_both_missing():
+    out = main._auth_error(resp(428, {"detail": {
+        "code": "legal_consent_required",
+        "missing": ["public_offer", "privacy_policy"],
+    }}))
     assert detail_of(out) == (
         "Чтобы создать аккаунт, примите оферту и политику конфиденциальности"
     )
+
+
+def test_legal_consent_falls_back_when_list_is_empty_or_unknown():
+    """Список не пришёл или ключи незнакомые — общий текст, а не пустая фраза."""
+    for detail in (
+        {"code": "legal_consent_required"},
+        {"code": "legal_consent_required", "missing": []},
+        {"code": "legal_consent_required", "missing": ["что-то_новое"]},
+    ):
+        assert detail_of(main._auth_error(resp(428, {"detail": detail}))) == (
+            "Чтобы создать аккаунт, примите документы сервиса"
+        )
+
+
+def test_disabled_email_auth_is_explained():
+    """Окно есть даже при спрятанной форме: кэш оформления ~минуту, а открытая
+    вкладка держит его до перезагрузки — ответ обязан быть на языке человека."""
+    out = main._auth_error(resp(403, {"detail": {"code": "email_auth_disabled"}}))
+    assert "войдите через Telegram" in detail_of(out)
+    out = main._auth_error(resp(403, {"detail": "Email authentication is disabled"}))
+    assert "войдите через Telegram" in detail_of(out)
 
 
 def test_invite_only_is_explained():

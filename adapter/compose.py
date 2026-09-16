@@ -599,6 +599,13 @@ async def appearance(ctx: Ctx) -> dict[str, Any]:
     colors = await ctx.json("/cabinet/branding/colors", {}, soft=True) or {}
     widget = await ctx.json("/cabinet/branding/telegram-widget", {}, soft=True) or {}
     support = await ctx.json("/cabinet/info/support-config", {}, soft=True) or {}
+    # Оператор может выключить вход по почте целиком, а кабинет об этом не знал и
+    # продолжал рисовать форму: человек вводил пароль и получал отказ, не понимая,
+    # что этот способ здесь просто не работает.
+    email_auth = await ctx.json("/cabinet/branding/email-auth", {}, soft=True) or {}
+    # Согласие с офертой и политикой: без галочек их регистрация отвечает 428 и не
+    # заводит аккаунт вовсе. Мягко — на старых сборках ручки нет.
+    legal = await ctx.json("/cabinet/info/legal-consent", {}, soft=True) or {}
 
     username = support.get("support_username") or None
     if isinstance(username, str):
@@ -615,7 +622,29 @@ async def appearance(ctx: Ctx) -> dict[str, Any]:
         # Их логотип отдаётся байтами по своему пути — заворачиваем в наш,
         # чтобы кабинету не пришлось знать про префикс «Бедолаги».
         "logo_url": "/api/appearance/logo" if brand.get("has_custom_logo") else None,
-        "telegram_oidc_enabled": bool(widget.get("oidc_enabled")),
+        # ВСЕГДА False, пока адаптер не умеет их OIDC-поток.
+        #
+        # Кабинет по этому флагу ПРЯЧЕТ классический виджет входа и ведёт на
+        # /api/auth/telegram/oidc/start — а этого пути у адаптера нет, он отвечает
+        # 501. То есть включённый у бота OIDC не добавлял способ входа, а УБИРАЛ
+        # единственный рабочий: человек оставался с формой почты и мёртвой кнопкой.
+        # Отдавать их значение можно будет, когда появится проброс start/callback →
+        # POST /cabinet/auth/telegram/oidc.
+        "telegram_oidc_enabled": False,
+        # Их тумблер входа по почте. Пустой ответ (старая сборка) — считаем, что
+        # вход есть: молча спрятать рабочую форму хуже, чем показать лишнюю.
+        "email_auth_enabled": bool(email_auth.get("enabled", True)),
+        # Требование согласия с документами. Кабинет обязан показать галочки и
+        # прислать `accepted_legal_documents`, иначе регистрация упрётся в 428.
+        "legal_consent_required": bool(legal.get("required")),
+        "legal_consent_prechecked": bool(legal.get("prechecked")),
+        # ТОЛЬКО КЛЮЧИ, и это их решение: «тексты и ссылки на них у кабинета
+        # свои» (их же `routes/info.py`). Публичной ручки с текстом оферты и
+        # политики у них нет вовсе — есть только админские, — поэтому подписи
+        # кабинет берёт из своего словаря, а ссылку дать неоткуда.
+        "legal_documents": [
+            str(key) for key in (legal.get("documents") or []) if isinstance(key, str) and key
+        ],
         # Прямая ссылка подписки: у них тумблер живёт в самой подписке
         # (hide_subscription_link), общего запрета нет — значит, показываем.
         "sub_link_enabled": True,
