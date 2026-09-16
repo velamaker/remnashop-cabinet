@@ -50,6 +50,7 @@ from src.web.endpoints.public.apps import router as apps_router
 from src.web.endpoints.public.auth_oidc import router as auth_oidc_router
 from src.web.endpoints.public.balance import router as balance_router
 from src.web.endpoints.public.email_manage import router as email_manage_router
+from src.web.endpoints.public.email_optout import router as email_optout_router
 from src.web.endpoints.public.info_content import router as info_content_router
 from src.web.endpoints.public.me_role import router as me_role_router
 from src.web.endpoints.public.password_reset import router as password_reset_router
@@ -138,6 +139,7 @@ def _overlay_public_router() -> APIRouter:
     router.include_router(info_content_router)
     router.include_router(auth_oidc_router)
     router.include_router(email_manage_router)
+    router.include_router(email_optout_router)
     router.include_router(push_router)
     router.include_router(promocode_router)
     router.include_router(referral_stats_router)

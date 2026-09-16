@@ -31,7 +31,7 @@ from src.application.common.email_sender import EmailSender
 from src.core.config import AppConfig
 from src.core.constants import EMAIL_VERIFICATION_SUBJECT
 from src.core.exceptions import EmailDeliveryError
-from src.infrastructure.services.email_settings import load_email_settings
+from src.infrastructure.services.email_settings import PRESETS, load_email_settings
 from src.infrastructure.services.email_template_config import fill, load_email_template
 
 from src.infrastructure.services.email_sender import SmtpEmailSender as BaseSmtpEmailSender
@@ -175,7 +175,16 @@ def _cabinet_url() -> str:
     return (os.environ.get("WEB_CABINET_URL") or "").strip().rstrip("/")
 
 
-def _render_branded(subject: str, body: str, from_name: str) -> tuple[str, str, str]:
+def _render_branded(
+    subject: str,
+    body: str,
+    from_name: str,
+    *,
+    button_label: str = "Открыть кабинет",
+    footer_note: str = "",
+    unsubscribe_url: str = "",
+    unsubscribe_label: str = "",
+) -> tuple[str, str, str]:
     """Обычное письмо в том же оформлении, что и письмо с кодом.
 
     ЧТО БЫЛО. Оформлено было ТОЛЬКО письмо с кодом подтверждения. Всё остальное —
@@ -186,6 +195,14 @@ def _render_branded(subject: str, body: str, from_name: str) -> tuple[str, str, 
 
     Шапка, подвал и логотип те же, что у письма с кодом, — намеренно: два разных
     оформления от одного отправителя выглядят как подделка одного из них.
+
+    Необязательные параметры нужны рассылкам (месячная сводка): подпись кнопки на
+    языке получателя и строка «почему пришло + Отписаться» в подвале. Без них
+    письмо выходит байт в байт прежним — остальные письма их не передают.
+
+    Ссылку отписки экранируем `_escape` плюс кавычка, а НЕ `html.escape`: имя
+    `html` ниже — локальная переменная с разметкой, модуль `html` здесь не
+    импортирован, и вызов упал бы уже при отправке, под живым получателем.
     """
     safe_brand = _escape(from_name or "VPN")
     logo_src = _logo_src()
@@ -201,10 +218,20 @@ def _render_branded(subject: str, body: str, from_name: str) -> tuple[str, str, 
         f'<div style="text-align:center;margin:24px 0 4px;">'
         f'<a href="{_escape(cabinet)}" style="display:inline-block;background:#5b5bd6;'
         'color:#ffffff;text-decoration:none;font-size:15px;font-weight:600;'
-        'padding:12px 28px;border-radius:12px;">Открыть кабинет</a></div>'
+        f'padding:12px 28px;border-radius:12px;">{_escape(button_label)}</a></div>'
         if cabinet
         else ""
     )
+    unsubscribe = ""
+    if unsubscribe_url:
+        safe_url = _escape(unsubscribe_url).replace('"', "&quot;")
+        label = unsubscribe_label or "Отписаться"
+        note = f"{_escape(footer_note)} " if footer_note else ""
+        unsubscribe = (
+            '<p style="margin:0 0 6px;font-size:12px;color:#9aa1ab;">'
+            f'{note}<a href="{safe_url}" style="color:#6b7280;text-decoration:underline;">'
+            f"{_escape(label)}</a></p>\n      "
+        )
     html = f"""\
 <div style="font-family:'Segoe UI',Arial,Helvetica,sans-serif;background:#f4f5f7;padding:32px 16px;">
   <div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:16px;
@@ -218,12 +245,17 @@ def _render_branded(subject: str, body: str, from_name: str) -> tuple[str, str, 
       {button}
     </div>
     <div style="background:#fafbfc;padding:14px 28px;border-top:1px solid #eef0f2;">
-      <span style="font-size:12px;color:#9aa1ab;">© {safe_brand}</span>
+      {unsubscribe}<span style="font-size:12px;color:#9aa1ab;">© {safe_brand}</span>
     </div>
   </div>
 </div>"""
     # Текстовая версия — с адресом кабинета: почтовики без HTML показывают её.
     text = f"{body}\n\n{cabinet}" if cabinet else body
+    if unsubscribe_url:
+        # Ссылка отписки обязана быть и в тексте: без неё письмо в почтовике без
+        # HTML не даёт отписаться ничем, кроме кнопки «Спам».
+        note = f"{footer_note}\n" if footer_note else ""
+        text = f"{text}\n\n{note}{unsubscribe_label or 'Отписаться'}: {unsubscribe_url}"
     return subject, text, html
 
 
@@ -278,6 +310,92 @@ class OverlaySmtpEmailSender(BaseSmtpEmailSender):
                 "Failed to send verification email. Please try again later."
             ) from e
 
+    @staticmethod
+    def branded_from_allowed(s: dict) -> bool:
+        """Можно ли письму-рассылке уйти со СВОЕГО адреса, а не с основного.
+
+        Пресеты Gmail/Яндекс/Mail.ru подменить From не дают: письмо с чужим
+        адресом они либо отклонят, либо перепишут. Brevo (API или его SMTP-релей)
+        и произвольный SMTP — дают. Правило одно на отправку и на админку
+        (`overlay_digest_email.effective_from`), иначе карточка показывала бы один
+        адрес отправителя, а письмо уходило бы с другого.
+        """
+        return str(s.get("provider") or "").lower() not in PRESETS
+
+    @staticmethod
+    def _brand(s: dict) -> str:
+        # Как у письма с кодом: имя отправителя, иначе бренд установки.
+        from_name = (s.get("from_name") or "").strip()
+        if from_name:
+            return from_name
+        try:
+            from src.web.endpoints.public.appearance import resolve_brand_name
+
+            return resolve_brand_name() or "VPN"
+        except Exception:  # noqa: BLE001 — бренд не повод не отправить письмо
+            return "VPN"
+
+    def render_branded(
+        self, *, subject: str, body: str, brand: str = "", **opts: str
+    ) -> tuple[str, str, str]:
+        """(subject, text, html) письма-рассылки — ровно то, что уйдёт получателю.
+
+        Отдельно от отправки — для предпросмотра в админке: владелец смотрит на
+        настоящую вёрстку, а не на её пересказ. `brand` — имя в шапке; рассылка
+        передаёт то же имя, что стоит в теме, чтобы шапка и тема не разошлись.
+        """
+        return _render_branded(subject, body, brand or self._brand(self._settings()), **opts)
+
+    async def send_branded(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        from_email: str = "",
+        list_unsubscribe_url: str = "",
+        brand: str = "",
+        **opts: str,
+    ) -> None:
+        """Письмо-рассылка: оформление, свой адрес отправителя, ссылка отписки.
+
+        ПОЧЕМУ СВОЙ АДРЕС. Brevo ставит в каждое письмо свой List-Unsubscribe, и
+        «Отписаться» в почтовике блокирует у Brevo ВСЕ письма от этого
+        отправителя. Уйди сводка с общего адреса — человек без Telegram одним
+        нажатием потерял бы коды входа и сброс пароля. С отдельного адреса
+        блокировка ложится только на рассылку.
+
+        ЗАГОЛОВКИ ОТПИСКИ ставим только на SMTP-пути. Brevo свой ставит сам, а
+        второй List-Unsubscribe в том же письме почтовики трактуют по-разному.
+
+        Письмо с кодом сюда не ходит: у него своя вёрстка и свой путь (`send`).
+        """
+        try:
+            s = dict(self._settings())
+            if from_email and self.branded_from_allowed(s):
+                s["from_email"] = from_email
+            subject, text, html = _render_branded(subject, body, brand or self._brand(s), **opts)
+            if self._use_brevo(s):
+                await self._send_brevo(s, to=to, subject=subject, text=text, html=html)
+            else:
+                headers = (
+                    {
+                        "List-Unsubscribe": f"<{list_unsubscribe_url}>",
+                        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+                    }
+                    if list_unsubscribe_url
+                    else None
+                )
+                await asyncio.to_thread(
+                    self._send_smtp, s, to=to, subject=subject, text=text, html=html,
+                    headers=headers,
+                )
+        except Exception as e:
+            # Адрес получателя в лог не пишем: рассылка идёт пачкой, и лог превратился
+            # бы в список почт клиентов. Кому не ушло — видно по журналу отправок.
+            logger.error(f"Failed to send branded email: {e}")
+            raise EmailDeliveryError("Failed to send email. Please try again later.") from e
+
     async def _send_brevo(self, s: dict, *, to: str, subject: str, text: str, html: str) -> None:
         from_name = (s["from_name"] or "").strip()
         from_email = (s["from_email"] or "").strip()
@@ -304,13 +422,24 @@ class OverlaySmtpEmailSender(BaseSmtpEmailSender):
             )
         logger.info(f"Email sent to '{to}' via Brevo (status {resp.status_code})")
 
-    def _send_smtp(self, s: dict, *, to: str, subject: str, text: str, html: str) -> None:
+    def _send_smtp(
+        self,
+        s: dict,
+        *,
+        to: str,
+        subject: str,
+        text: str,
+        html: str,
+        headers: dict | None = None,
+    ) -> None:
         message = EmailMessage()
         message["Subject"] = subject
         from_name = (s["from_name"] or "").strip()
         from_email = (s["from_email"] or "").strip()
         message["From"] = f"{from_name} <{from_email}>" if from_name else from_email
         message["To"] = to
+        for name, value in (headers or {}).items():
+            message[name] = value
         message.set_content(text)
         message.add_alternative(html, subtype="html")
 

@@ -53,6 +53,9 @@ echo "[1/5] fresh upgrade → все overlay-таблицы + версия"
 run_alembic >/dev/null
 [ "$(q "SELECT to_regclass('admin_2fa')::text")" = "admin_2fa" ] || fail "admin_2fa не создана"
 [ "$(q "SELECT to_regclass('session_invalidations')::text")" = "session_invalidations" ] || fail "session_invalidations не создана"
+# 0007: журнал писем сводки и отписки. Без журнала проход писем не шлёт ничего.
+[ "$(q "SELECT to_regclass('digest_email_sends')::text")" = "digest_email_sends" ] || fail "digest_email_sends не создана"
+[ "$(q "SELECT to_regclass('email_opt_outs')::text")" = "email_opt_outs" ] || fail "email_opt_outs не создана"
 [ "$(q "SELECT version_num FROM alembic_version_overlay")" = "$HEAD" ] || fail "версия != $HEAD"
 [ "$(q "SELECT count(*) FROM information_schema.columns WHERE table_name='users' AND column_name='cabinet_balance'")" = "1" ] || fail "users.cabinet_balance нет"
 CREATED="$(q "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")"

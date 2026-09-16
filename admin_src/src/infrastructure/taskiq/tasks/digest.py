@@ -7,6 +7,10 @@
 
 Конфиг assets/digest.json (админка). Дефолт ВЫКЛ. Юзеров без трафика пропускаем.
 Best-effort: ошибка по одному не роняет проход; пауза между вызовами SDK.
+
+Письмом (тумблер `email_enabled`, тоже ВЫКЛ) — тем, у кого нет ни Telegram, ни
+push, но есть подтверждённая почта. Тот же проход и те же цифры; вся механика
+писем и их защиты — services/overlay_digest_email.py.
 """
 
 import asyncio
@@ -23,8 +27,19 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common import Remnawave
+from src.application.common.email_sender import EmailSender
 from src.core.config import AppConfig
 from src.infrastructure.services.overlay_digest import load_config
+from src.infrastructure.services.overlay_digest_email import (
+    SHORT_FAV as _FAV,
+    SHORT_MESSAGES as _MSG,
+    TG_AUDIENCE_SQL,
+    DbLedger,
+    fetch_usage,
+    run_email_pass,
+    select_email_audience_safe,
+    sender_settings,
+)
 from src.infrastructure.services.overlay_push import _fill, notify_user_push
 from src.infrastructure.taskiq.broker import broker
 
@@ -32,18 +47,6 @@ ASSETS_DIR = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets"))
 STATE_PATH = ASSETS_DIR / "digest_state.json"
 _GB = 1024 ** 3
 _SLEEP = 0.1
-
-_MSG = {
-    "ru": (
-        "📊 Ваш месяц с VPN",
-        "За месяц вы использовали {gb} ГБ.{fav} Спасибо, что с нами!",
-    ),
-    "en": (
-        "📊 Your month with VPN",
-        "This month you used {gb} GB.{fav} Thanks for being with us!",
-    ),
-}
-_FAV = {"ru": " Любимый сервер — {name}.", "en": " Favorite server — {name}."}
 
 
 def _sent_month() -> str:
@@ -67,6 +70,7 @@ async def run_digest(
     session: FromDishka[AsyncSession],
     remnawave: FromDishka[Remnawave],
     config: FromDishka[AppConfig],
+    email_sender: FromDishka[EmailSender],
 ) -> None:
     cfg = load_config()
     if not cfg["enabled"]:
@@ -84,23 +88,17 @@ async def run_digest(
         return
 
     # Активные USER с подпиской и хотя бы одним каналом (Telegram или push).
-    rows = (
-        await session.execute(
-            text(
-                "SELECT u.id, lower(u.language::text), u.telegram_id, s.user_remna_id "
-                "FROM users u "
-                "JOIN subscriptions s ON u.current_subscription_id = s.id "
-                "WHERE u.role = 'USER' AND s.status = 'ACTIVE' AND s.user_remna_id IS NOT NULL "
-                "AND (u.telegram_id IS NOT NULL "
-                "     OR EXISTS(SELECT 1 FROM push_subscriptions p WHERE p.user_id = u.id))"
-            )
-        )
-    ).all()
+    rows = (await session.execute(text(TG_AUDIENCE_SQL))).all()
+    # Письмом — те, у кого нет ни одного из этих каналов. Выбираем сразу, ДО первой
+    # отправки: условия двух выборок взаимоисключающие только на один и тот же
+    # момент. Выбери письма после Telegram-части (а она идёт минутами) — человек,
+    # отвязавший за это время Telegram, получил бы сводку дважды.
+    email_rows = await select_email_audience_safe(session) if cfg["email_enabled"] else []
 
     # Отметим месяц сразу — чтобы при повторном запуске в тот же час не задваивать.
     _save_month(month_key)
 
-    if not rows:
+    if not rows and not email_rows:
         return
 
     end = now
@@ -113,21 +111,12 @@ async def run_digest(
 
     sent = 0
     for uid, lang, tg_id, uuid in rows:
-        try:
-            result = await sdk.bandwidthstats.get_stats_user_usage(
-                uuid=str(uuid),
-                top_nodes_limit=5,
-                start=start.strftime("%Y-%m-%d"),
-                end=end.strftime("%Y-%m-%d"),
-            )
-            data = getattr(result, "root", result)
-            nodes = getattr(data, "top_nodes", None) or []
-            total = sum(int(getattr(n, "total", 0) or 0) for n in nodes)
-            fav = max(nodes, key=lambda n: int(getattr(n, "total", 0) or 0), default=None)
-        except Exception as e:  # noqa: BLE001
-            logger.debug(f"digest: usage user_id={uid} не получен: {e}")
+        usage = await fetch_usage(sdk, uuid, start, end)
+        if usage is None:
+            logger.debug(f"digest: usage user_id={uid} не получен")
             await asyncio.sleep(_SLEEP)
             continue
+        total, fav_name = usage
 
         if total <= 0:
             await asyncio.sleep(_SLEEP)
@@ -136,8 +125,8 @@ async def run_digest(
         gb = round(total / _GB, 1)
         l = (lang or "ru")[:2]
         fav_txt = ""
-        if fav is not None and getattr(fav, "name", None):
-            fav_txt = _fill(_FAV.get(l, _FAV["ru"]), {"name": fav.name})
+        if fav_name:
+            fav_txt = _fill(_FAV.get(l, _FAV["ru"]), {"name": fav_name})
         title, body_tpl = _MSG.get(l, _MSG["ru"])
         # Через _fill, а не .format(): оба вызова стоят внутри цикла по людям и
         # вне try, а у задачи retry_on_error=False — расхождение шаблона и
@@ -164,3 +153,31 @@ async def run_digest(
             pass
 
     logger.info(f"digest: месячная сводка отправлена {sent} юзерам")
+
+    if email_rows:
+        # notify_user_push глотает ошибки базы без отката: одна сорвавшаяся запись
+        # в ленту оставила бы транзакцию прерванной, и журнал писем упал бы на
+        # первом же INSERT — проход писем обнулился бы по чужой вине.
+        try:
+            await session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            summary = await run_email_pass(
+                sender=email_sender,
+                cfg=cfg,
+                settings=sender_settings(email_sender),
+                sdk=sdk,
+                secret=config.crypt_key.get_secret_value(),
+                month=month_key,
+                start=start,
+                end=end,
+                recipients=email_rows,
+                ledger=DbLedger(session),
+                session_for_feed=session,
+            )
+            logger.info(f"digest: письма — {summary}")
+        except Exception as e:  # noqa: BLE001
+            # Журнал недоступен — проход прерван до следующей записи. Кому письмо
+            # успело уйти, у того строка уже `sent`/`sending`: повтора не будет.
+            logger.error(f"digest: проход писем прерван: {type(e).__name__}: {e}")

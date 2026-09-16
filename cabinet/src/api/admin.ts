@@ -990,6 +990,68 @@ export const digestAdminApi = {
   update: (data: Partial<DigestConfig>) => adminApi.put<DigestConfig>("/digest", data),
 };
 
+// Сводка письмом — тем, у кого нет ни Telegram, ни push. Отдельные ручки: у
+// кабинета поверх чужого бота их нет (501), и карточка тогда не рисуется.
+
+/** Итог последнего месяца рассылки по исходам. */
+export interface DigestEmailLast {
+  month: string;
+  sent: number;
+  failed: number;
+  no_traffic: number;
+  usage_error: number;
+  over_limit: number;
+  provider_blocked: number;
+  sending: number;
+}
+
+export interface DigestEmailStatus {
+  email_enabled: boolean;
+  /** Адрес отправителя сводки; "" — основной. У «только просмотра» — "***". */
+  email_from: string;
+  /** С какого адреса письмо уйдёт на самом деле (пресеты Gmail/Яндекс/Mail.ru — с основного). */
+  effective_from: string;
+  /** Почта идёт через Brevo — отдельный адрес отправителя обязателен. */
+  needs_separate_sender: boolean;
+  digest_enabled: boolean;
+  day_of_month: number;
+  hour: number;
+  audience: number;
+  opted_out: number;
+  max_per_run: number;
+  /** Что мешает слать; непусто — включить нельзя и в день рассылки писем не будет. */
+  blockers: string[];
+  last: DigestEmailLast | null;
+}
+
+export interface DigestEmailPreview {
+  subject: string;
+  text: string;
+  html: string;
+}
+
+export type DigestEmailOutcome = "would_send" | "no_traffic" | "usage_error" | "already_this_month";
+
+export interface DigestEmailDryRun {
+  audience: number;
+  examined: number;
+  truncated: boolean;
+  would_send: number;
+  blockers: string[];
+  items: { user_id: number | null; gb: number | null; favorite: string | null; outcome: DigestEmailOutcome }[];
+}
+
+export const digestEmailAdminApi = {
+  get: () => adminApi.get<DigestEmailStatus>("/digest/email"),
+  update: (data: { email_enabled?: boolean; email_from?: string }) =>
+    adminApi.put<DigestEmailStatus>("/digest/email", data),
+  preview: (lang: "ru" | "en" = "ru") =>
+    adminApi.get<DigestEmailPreview>(`/digest/email/preview?lang=${lang}`),
+  dryRun: () => adminApi.get<DigestEmailDryRun>("/digest/email/dry-run"),
+  test: (to: string) =>
+    adminApi.post<{ success: boolean; to: string; from: string }>("/digest/email/test", { to }),
+};
+
 // ---------- Уведомление «трафик заканчивается» ----------
 
 export interface TrafficAlertConfig {

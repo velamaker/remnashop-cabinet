@@ -1,5 +1,5 @@
 import { BarChart3 } from "lucide-react";
-import { DigestCard } from "./AdminSettingsPage";
+import { DigestCard, DigestEmailCard } from "./AdminSettingsPage";
 
 // «Месячный дайджест» — вынесен из «Настроек» в раздел Маркетинг.
 export default function AdminDigestPage() {
@@ -10,6 +10,7 @@ export default function AdminDigestPage() {
         <h1 className="text-lg font-bold text-fg md:text-xl">Месячный дайджест</h1>
       </div>
       <DigestCard />
+      <DigestEmailCard />
     </div>
   );
 }

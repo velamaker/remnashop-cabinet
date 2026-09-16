@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Save, AlertCircle, CheckCircle2, Bell, Lock, SlidersHorizontal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { settingsAdminApi, topupAdminApi, morningSummaryAdminApi, trialDiscountAdminApi, reserveAdminApi, plansAdminApi, promoBannerAdminApi, winbackAdminApi, digestAdminApi, trafficAlertAdminApi, newDeviceAdminApi, loginAlertAdminApi, emailGateAdminApi, freezeAdminApi, type AdminSettings, type TopupAdminConfig, type TopupApplicability, type MorningSummaryConfig, type TrialDiscountConfig, type TrialDiscountDryRun, type ReserveConfig, type ReserveSquadCheck, type AdminSquad, type PromoBannerConfig, type WinbackConfig, type DigestConfig, type TrafficAlertConfig, type NewDeviceConfig, type LoginAlertConfig, type FreezeConfig } from "@/api/admin";
+import { settingsAdminApi, topupAdminApi, morningSummaryAdminApi, trialDiscountAdminApi, reserveAdminApi, plansAdminApi, promoBannerAdminApi, winbackAdminApi, digestAdminApi, digestEmailAdminApi, trafficAlertAdminApi, newDeviceAdminApi, loginAlertAdminApi, emailGateAdminApi, freezeAdminApi, type AdminSettings, type TopupAdminConfig, type TopupApplicability, type MorningSummaryConfig, type TrialDiscountConfig, type TrialDiscountDryRun, type ReserveConfig, type ReserveSquadCheck, type AdminSquad, type PromoBannerConfig, type WinbackConfig, type DigestConfig, type DigestEmailStatus, type DigestEmailPreview, type DigestEmailDryRun, type DigestEmailOutcome, type TrafficAlertConfig, type NewDeviceConfig, type LoginAlertConfig, type FreezeConfig } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -1089,6 +1089,274 @@ export function DigestCard() {
         <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
           <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
         </button>
+      </div>
+    </Section>
+  );
+}
+
+// Исходы холостого прогона — словами, которыми их прочтёт владелец.
+const DIGEST_EMAIL_OUTCOMES: Record<DigestEmailOutcome, string> = {
+  would_send: "уйдёт",
+  no_traffic: "без трафика — не шлём",
+  usage_error: "панель не ответила",
+  already_this_month: "уже отправлено в этом месяце",
+};
+
+/** Сводка письмом — тем, у кого нет ни Telegram, ни push.
+ *
+ *  Отдельная карточка, а не поля в «Месячном дайджесте»: у кабинета поверх чужого
+ *  бота дайджест есть, а писем нет. Там ручка отвечает 501 (у голого бэкенда без
+ *  неё — 404), и карточки просто нет — «Не удалось загрузить» на месте функции,
+ *  которой не бывает, читалось бы как поломка.
+ *
+ *  Сохраняем только изменённые поля: включение проверяется на бэкенде (409 с
+ *  причиной), и лишнее поле в теле не должно тянуть за собой чужой отказ. */
+export function DigestEmailCard() {
+  const [st, setSt] = useState<DigestEmailStatus | null>(null);
+  const [hidden, setHidden] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [enabled, setEnabled] = useState(false);
+  const [from, setFrom] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<DigestEmailPreview | null>(null);
+  const [previewLang, setPreviewLang] = useState<"ru" | "en">("ru");
+  const [previewErr, setPreviewErr] = useState<string | null>(null);
+  const [dry, setDry] = useState<DigestEmailDryRun | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [dryErr, setDryErr] = useState<string | null>(null);
+  const [testTo, setTestTo] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const apply = (s: DigestEmailStatus) => {
+    setSt(s);
+    setEnabled(s.email_enabled);
+    setFrom(s.email_from);
+  };
+
+  useEffect(() => {
+    digestEmailAdminApi
+      .get()
+      .then(apply)
+      .catch((e) => {
+        if (e instanceof ApiError && (e.status === 404 || e.status === 501)) setHidden(true);
+        else setLoadErr("Не удалось загрузить");
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  const save = async () => {
+    if (!st) return;
+    const body: { email_enabled?: boolean; email_from?: string } = {};
+    if (from.trim() !== st.email_from) body.email_from = from.trim();
+    if (enabled !== st.email_enabled) body.email_enabled = enabled;
+    setError(null);
+    if (Object.keys(body).length === 0) {
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+      return;
+    }
+    setSaving(true);
+    try {
+      apply(await digestEmailAdminApi.update(body));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      // 409 — включить нельзя, причина в detail дословно. Введённое не сбрасываем:
+      // владелец поправит адрес и нажмёт ещё раз.
+      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const showPreview = async (lang: "ru" | "en") => {
+    setPreviewLang(lang);
+    setPreviewErr(null);
+    try {
+      setPreview(await digestEmailAdminApi.preview(lang));
+    } catch (e) {
+      setPreview(null);
+      setPreviewErr(e instanceof ApiError ? e.detail : "Не удалось показать письмо");
+    }
+  };
+
+  const check = async () => {
+    setChecking(true);
+    setDryErr(null);
+    try {
+      setDry(await digestEmailAdminApi.dryRun());
+    } catch (e) {
+      setDry(null);
+      setDryErr(e instanceof ApiError ? e.detail : "Не удалось проверить");
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const sendTest = async () => {
+    const to = testTo.trim();
+    if (!to) return;
+    setTesting(true);
+    setTestMsg(null);
+    try {
+      const r = await digestEmailAdminApi.test(to);
+      setTestMsg({
+        ok: true,
+        text: `Тестовое письмо отправлено на ${r.to} с адреса ${r.from}. Ссылка «Отписаться» в нём относится к вашему аккаунту.`,
+      });
+    } catch (e) {
+      setTestMsg({ ok: false, text: e instanceof ApiError ? e.detail : "Не удалось отправить" });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  if (loading || hidden) return null;
+  if (!st) return <Section title="Сводка письмом">{loadErr ?? "Ошибка"}</Section>;
+
+  const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
+  const ghostBtn = "inline-flex shrink-0 items-center gap-2 rounded-xl border border-border-subtle px-3 py-2 text-sm font-medium text-fg hover:bg-bg-subtle disabled:opacity-50";
+  const last = st.last;
+
+  return (
+    <Section
+      title="Сводка письмом"
+      desc="Тем, у кого нет ни Telegram, ни push-уведомлений, та же сводка уходит на подтверждённую почту — в тот же день и час, что и основная. В письме есть ссылка «Отписаться»."
+    >
+      {!st.digest_enabled && (
+        <p className="rounded-xl border border-border-subtle bg-bg px-4 py-3 text-xs text-warning">
+          Дайджест выключен — письма тоже не уйдут.
+        </p>
+      )}
+      {st.blockers.length > 0 && (
+        <ul className="space-y-1 rounded-xl border border-border-subtle bg-bg px-4 py-3 text-xs leading-snug text-warning">
+          {st.blockers.map((b) => (
+            <li key={b}>{b}</li>
+          ))}
+        </ul>
+      )}
+      <Field
+        label={st.needs_separate_sender ? "Адрес отправителя сводки (для Brevo обязателен)" : "Адрес отправителя сводки"}
+        value={from}
+        onChange={setFrom}
+        type="email"
+        hint="Отдельный от адреса для кодов входа. В Brevo его нужно добавить в «Senders». Для Gmail/Яндекс/Mail.ru не используется — письмо уйдёт с основного адреса."
+      />
+      {st.effective_from && (
+        <p className="text-xs text-fg-muted">Сейчас письма уходят с адреса: {st.effective_from}</p>
+      )}
+      <Toggle
+        label="Отправлять письмом"
+        sub="По умолчанию выключено. Письма уходят только вместе с включённым дайджестом"
+        checked={enabled}
+        onChange={setEnabled}
+      />
+      <p className="text-xs leading-snug text-fg-muted">
+        Получат письмо: {st.audience} (активная подписка, подтверждённая почта, нет Telegram и push). Отписались: {st.opted_out}.
+      </p>
+      {last && (
+        <p className="text-xs leading-snug text-fg-muted">
+          Рассылка за {last.month}: отправлено {last.sent}, не доставлено {last.failed}, без трафика {last.no_traffic}, панель не ответила {last.usage_error}, сверх лимита {last.over_limit}, заблокированы в Brevo {last.provider_blocked}.
+          {last.sending > 0 && ` Оборвалось на отправке: ${last.sending} — повторно не шлём.`}
+        </p>
+      )}
+      <div className="flex items-center justify-between gap-3 pt-1">
+        <span className="text-xs">
+          {error && <span className="text-danger">{error}</span>}
+          {saved && <span className="text-success">Сохранено</span>}
+        </span>
+        <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
+          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+        </button>
+      </div>
+
+      <div className="space-y-3 rounded-xl border border-border-subtle bg-bg px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <button onClick={() => showPreview(previewLang)} className={ghostBtn}>
+            Посмотреть письмо
+          </button>
+          {preview && (
+            <select
+              value={previewLang}
+              onChange={(e) => showPreview(e.target.value as "ru" | "en")}
+              className="rounded-xl border border-border-subtle bg-bg px-2 py-2 text-sm text-fg"
+              aria-label="Язык письма"
+            >
+              <option value="ru">Русский</option>
+              <option value="en">English</option>
+            </select>
+          )}
+          <button onClick={check} disabled={checking} className={ghostBtn}>
+            {checking ? "…" : "Кому уйдёт"}
+          </button>
+        </div>
+        {previewErr && <p className="text-xs text-danger">{previewErr}</p>}
+        {preview && (
+          <div className="space-y-2">
+            <p className="text-xs text-fg-muted">Тема: <span className="text-fg">{preview.subject}</span></p>
+            {/* sandbox без разрешений: вёрстка письма не исполняет скриптов и не
+                трогает страницу админки. Ссылка отписки в примере — заглушка. */}
+            <iframe
+              title="Предпросмотр письма"
+              sandbox=""
+              srcDoc={preview.html}
+              className="h-[520px] w-full rounded-xl border border-border-subtle bg-white"
+            />
+          </div>
+        )}
+        {dryErr && <p className="text-xs text-danger">{dryErr}</p>}
+        {dry && (
+          <div className="space-y-2 text-xs text-fg-muted">
+            <p className="text-fg">
+              Осмотрено {dry.examined}, уйдёт писем {dry.would_send}. Ничего не отправлено и не записано.
+            </p>
+            {dry.truncated && <p>Показаны первые {dry.examined} из {dry.audience}.</p>}
+            {dry.items.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-fg-muted">
+                      <th className="py-1 pr-3 font-medium">ID</th>
+                      <th className="py-1 pr-3 font-medium">ГБ за 30 дней</th>
+                      <th className="py-1 pr-3 font-medium">Любимый сервер</th>
+                      <th className="py-1 pr-3 font-medium">Итог</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dry.items.map((item, i) => (
+                      <tr key={item.user_id ?? `row-${i}`} className="border-t border-border-subtle text-fg">
+                        <td className="py-1 pr-3">{item.user_id ?? "—"}</td>
+                        <td className="py-1 pr-3">{item.gb ?? "—"}</td>
+                        <td className="py-1 pr-3">{item.favorite ?? "—"}</td>
+                        <td className="py-1 pr-3">{DIGEST_EMAIL_OUTCOMES[item.outcome] ?? item.outcome}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="min-w-0 flex-1">
+            <label className="mb-1 block text-xs text-fg-muted">Тестовое письмо на адрес</label>
+            <input
+              type="email"
+              value={testTo}
+              onChange={(e) => setTestTo(e.target.value)}
+              className={inputCls}
+              placeholder="you@example.com"
+            />
+          </div>
+          <button onClick={sendTest} disabled={testing || !testTo.trim()} className={ghostBtn}>
+            {testing ? "…" : "Отправить тест"}
+          </button>
+        </div>
+        {testMsg && <p className={`text-xs ${testMsg.ok ? "text-success" : "text-danger"}`}>{testMsg.text}</p>}
       </div>
     </Section>
   );

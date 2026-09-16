@@ -11,6 +11,7 @@ import LoginPage from "@/pages/LoginPage";
 import RegisterPage from "@/pages/RegisterPage";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
 import VerifyEmailPage from "@/pages/VerifyEmailPage";
+import EmailUnsubscribePage from "@/pages/EmailUnsubscribePage";
 import StatusPage from "@/pages/StatusPage";
 import PricingPage from "@/pages/PricingPage";
 import DashboardPage from "@/pages/DashboardPage";
@@ -111,6 +112,8 @@ export default function App() {
             {/* Подтверждение почты по ссылке из письма. Открыто и вошедшим, и
                 гостям: письмо могли открыть на другом устройстве. */}
             <Route path="/verify-email" element={<VerifyEmailPage />} />
+            {/* Отписка от месячной сводки по ссылке из письма — тоже без входа. */}
+            <Route path="/email/unsubscribe" element={<EmailUnsubscribePage />} />
 
             <Route path="/" element={<RootPage />} />
             <Route
