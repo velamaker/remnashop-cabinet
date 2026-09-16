@@ -25,6 +25,9 @@ export interface RegisterRequest {
   password: string;
   name?: string;
   referral_code?: string;
+  // Ключи документов, с которыми человек согласился на форме. Бэкенд, который
+  // требует согласия, без этого списка аккаунт не создаёт вовсе (428).
+  accepted_legal_documents?: string[];
 }
 
 export interface LoginRequest {
@@ -44,6 +47,10 @@ export interface TelegramAuthRequest {
 
 export interface TelegramWebAppAuthRequest {
   init_data: string;
+  // Согласие с документами. Нужно там, где бэкенд его требует: без списка он не
+  // создаёт аккаунт вовсе. Телеграмом заходит подавляющее большинство людей,
+  // поэтому без этого поля «обязательное согласие» закрывало регистрацию всем.
+  accepted_legal_documents?: string[];
 }
 
 export interface ChangePasswordRequest {

@@ -14,6 +14,7 @@ import { BrandWordmark } from "@/components/BrandWordmark";
 import { BrandLogo } from "@/components/BrandLogo";
 import { safeInternalPath } from "@/lib/nav";
 import { useBranding } from "@/contexts/BrandingContext";
+import { TelegramConsentRetry } from "@/components/TelegramConsentRetry";
 
 const TELEGRAM_BOT_USERNAME = import.meta.env.VITE_TELEGRAM_BOT_USERNAME || "";
 
@@ -23,8 +24,10 @@ function getTelegramInitData(): string | null {
 
 export default function LoginPage() {
   const { login, loginWithTelegram, loginWithTelegramWebApp, user } = useAuth();
+  // Данные входа Mini App, ждущие согласия с документами (см. TelegramConsentRetry).
+  const [consentInitData, setConsentInitData] = useState<string | null>(null);
   const t = useT();
-  const { telegramOidcEnabled } = useBranding();
+  const { telegramOidcEnabled, emailAuthEnabled } = useBranding();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   // Куда вернуть после входа (напр. /devices из кнопки «Подключиться» в боте).
@@ -67,6 +70,14 @@ export default function LoginPage() {
       loginWithTelegramWebApp({ init_data: initData })
         .then(() => navigate(next))
         .catch((err) => {
+          // 428 — «нужно согласие с документами». Это не отказ, а недостающий
+          // шаг: показываем галочки и повторяем вход с ними. Без этого экрана
+          // человек, зашедший из телеграма, видел одну строку ошибки без единой
+          // кнопки — то есть тупик, а телеграмом заходят почти все.
+          if (err instanceof ApiError && err.status === 428) {
+            setConsentInitData(initData);
+            return;
+          }
           setError(
             err instanceof ApiError
               ? err.detail
@@ -111,6 +122,14 @@ export default function LoginPage() {
       await loginWithTelegram(data);
       navigate(next);
     } catch (err) {
+      // 428 — «нужно согласие». Через кнопку-виджет его передать нечем: бэкенд
+      // «Бедолаги» кладёт список принятых документов в проверку подписи, и запрос с
+      // ним ломает хэш. Просить принять документы на странице без единой галочки —
+      // тупик; отправляем туда, где согласие спросить можно.
+      if (err instanceof ApiError && err.status === 428) {
+        setError(t("legal.viaBot"));
+        return;
+      }
       setError(
         err instanceof ApiError ? err.detail : t("login.errTelegramShort"),
       );
@@ -121,10 +140,15 @@ export default function LoginPage() {
   const isMiniApp = miniAppPending || Boolean(getTelegramInitData());
   if (isMiniApp) {
     return (
-      <div className="app-scroll flex min-h-screen items-center justify-center bg-bg">
-        <div className="text-center">
+      <div className="app-scroll flex min-h-screen items-center justify-center bg-bg p-5">
+        <div className="w-full max-w-sm text-center">
           <BrandLogo size={48} className="mx-auto mb-4" />
-          {error ? (
+          {consentInitData ? (
+            <TelegramConsentRetry
+              initData={consentInitData}
+              onDone={() => navigate(next)}
+            />
+          ) : error ? (
             <p className="text-sm text-danger">{error}</p>
           ) : (
             <p className="text-sm text-fg-subtle">{t("login.signingIn")}</p>
@@ -202,6 +226,12 @@ export default function LoginPage() {
             </p>
           )}
 
+          {/* Текст ошибки — вне формы почты: при выключенном входе по почте форма
+              пропадает, и вместе с ней пропадал бы единственный способ сказать
+              человеку, что вход через Telegram не прошёл. */}
+          {!emailAuthEnabled && error && <p className="mb-4 text-xs text-danger">{error}</p>}
+
+          {emailAuthEnabled && (
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <Input
               label="Email"
@@ -237,14 +267,17 @@ export default function LoginPage() {
               {t("login.submit")}
             </Button>
           </form>
+          )}
         </div>
 
+        {emailAuthEnabled && (
         <p className="mt-4 text-center text-sm text-fg-subtle">
           {t("login.noAccount")}{" "}
           <Link to="/register" className="font-medium text-fg hover:text-accent transition-colors">
             {t("login.register")}
           </Link>
         </p>
+        )}
         <div className="mt-5 flex justify-center">
           <Link
             to="/status"

@@ -7,6 +7,11 @@ import type { Lang } from "./config";
 type Dict = Record<string, string>;
 
 const ru: Dict = {
+  "legal.accept": "Я принимаю",
+  "legal.required": "Чтобы создать аккаунт, отметьте все пункты",
+  "legal.docOffer": "оферту",
+  "legal.docPrivacy": "политику конфиденциальности",
+  "legal.viaBot": "Чтобы зарегистрироваться, откройте кабинет через бота в Telegram — там можно принять документы",
   "pricing.subtitle": "Быстрый и надёжный сервис. Выберите тариф — подключение за минуту, оплата в кабинете.",
   "pricing.from": "от",
   "pricing.perMonth": "/ мес",
@@ -550,6 +555,11 @@ const ru: Dict = {
 };
 
 const en: Dict = {
+  "legal.accept": "I accept",
+  "legal.required": "To create an account, tick every box",
+  "legal.docOffer": "the public offer",
+  "legal.docPrivacy": "the privacy policy",
+  "legal.viaBot": "To sign up, open the cabinet from the Telegram bot — you can accept the documents there",
   "pricing.subtitle": "Fast and reliable service. Pick a plan — connect in a minute, pay in your account.",
   "pricing.from": "from",
   "pricing.perMonth": "/ mo",
@@ -1072,6 +1082,11 @@ const en: Dict = {
 };
 
 const tr: Dict = {
+  "legal.accept": "Kabul ediyorum",
+  "legal.required": "Hesap oluşturmak için tüm kutuları işaretleyin",
+  "legal.docOffer": "kamu teklifini",
+  "legal.docPrivacy": "gizlilik politikasını",
+  "legal.viaBot": "Kaydolmak için kabini Telegram botundan açın — belgeleri orada kabul edebilirsiniz",
   "ref.earnedTitle": "Referans kazançları",
   "ref.earnedDays": "{n} gün",
   "ref.earnedCount": "ödül: {n}",
@@ -1594,6 +1609,11 @@ const tr: Dict = {
 };
 
 const kk: Dict = {
+  "legal.accept": "Мен қабылдаймын",
+  "legal.required": "Аккаунт жасау үшін барлық тармақты белгілеңіз",
+  "legal.docOffer": "офертаны",
+  "legal.docPrivacy": "құпиялылық саясатын",
+  "legal.viaBot": "Тіркелу үшін кабинетті Telegram боты арқылы ашыңыз — құжаттарды сонда қабылдайсыз",
   "ref.earnedTitle": "Рефералдардан табыс",
   "ref.earnedDays": "{n} күн",
   "ref.earnedCount": "есептеу: {n}",
@@ -2116,6 +2136,11 @@ const kk: Dict = {
 };
 
 const ky: Dict = {
+  "legal.accept": "Мен кабыл алам",
+  "legal.required": "Аккаунт түзүү үчүн бардык пункттарды белгилеңиз",
+  "legal.docOffer": "офертаны",
+  "legal.docPrivacy": "купуялык саясатын",
+  "legal.viaBot": "Катталуу үчүн кабинетти Telegram боту аркылуу ачыңыз — документтерди ошол жерде кабыл аласыз",
   "ref.earnedTitle": "Рефералдардан киреше",
   "ref.earnedDays": "{n} күн",
   "ref.earnedCount": "чегерүү: {n}",
@@ -2638,6 +2663,11 @@ const ky: Dict = {
 };
 
 const uz: Dict = {
+  "legal.accept": "Men qabul qilaman",
+  "legal.required": "Hisob yaratish uchun barcha bandlarni belgilang",
+  "legal.docOffer": "ommaviy ofertani",
+  "legal.docPrivacy": "maxfiylik siyosatini",
+  "legal.viaBot": "Ro‘yxatdan o‘tish uchun kabinetni Telegram bot orqali oching — hujjatlarni o‘sha yerda qabul qilasiz",
   "ref.earnedTitle": "Referal daromadlari",
   "ref.earnedDays": "{n} kun",
   "ref.earnedCount": "hisoblangan: {n}",
@@ -3160,6 +3190,11 @@ const uz: Dict = {
 };
 
 const tg: Dict = {
+  "legal.accept": "Ман қабул мекунам",
+  "legal.required": "Барои сохтани ҳисоб ҳамаи бандҳоро қайд кунед",
+  "legal.docOffer": "офертаро",
+  "legal.docPrivacy": "сиёсати махфиятро",
+  "legal.viaBot": "Барои сабти ном кабинетро тавассути боти Telegram кушоед — ҳуҷҷатҳоро дар он ҷо қабул мекунед",
   "ref.earnedTitle": "Даромад аз рефералҳо",
   "ref.earnedDays": "{n} рӯз",
   "ref.earnedCount": "ҳисоб: {n}",
@@ -3682,6 +3717,11 @@ const tg: Dict = {
 };
 
 const hy: Dict = {
+  "legal.accept": "Ես ընդունում եմ",
+  "legal.required": "Հաշիվ ստեղծելու համար նշեք բոլոր կետերը",
+  "legal.docOffer": "հրապարակային օֆերտան",
+  "legal.docPrivacy": "գաղտնիության քաղաքականությունը",
+  "legal.viaBot": "Գրանցվելու համար բացեք անձնական էջը Telegram բոտից՝ փաստաթղթերն այնտեղ կարող եք ընդունել",
   "ref.earnedTitle": "Եկամուտ ռեֆերալներից",
   "ref.earnedDays": "{n} օր",
   "ref.earnedCount": "հաշվարկումներ՝ {n}",
@@ -4204,6 +4244,11 @@ const hy: Dict = {
 };
 
 const az: Dict = {
+  "legal.accept": "Qəbul edirəm",
+  "legal.required": "Hesab yaratmaq üçün bütün bəndləri işarələyin",
+  "legal.docOffer": "ofertanı",
+  "legal.docPrivacy": "məxfilik siyasətini",
+  "legal.viaBot": "Qeydiyyatdan keçmək üçün kabineti Telegram botu vasitəsilə açın — sənədləri orada qəbul edə bilərsiniz",
   "ref.earnedTitle": "Referallardan qazanc",
   "ref.earnedDays": "{n} gün",
   "ref.earnedCount": "hesablama: {n}",
@@ -4726,6 +4771,11 @@ const az: Dict = {
 };
 
 const be: Dict = {
+  "legal.accept": "Я прымаю",
+  "legal.required": "Каб стварыць акаўнт, адзначце ўсе пункты",
+  "legal.docOffer": "аферту",
+  "legal.docPrivacy": "палітыку канфідэнцыяльнасці",
+  "legal.viaBot": "Каб зарэгістравацца, адкрыйце кабінет праз бота ў Telegram — там можна прыняць дакументы",
   "ref.earnedTitle": "Заробак на рэфералах",
   "ref.earnedDays": "{n} дн.",
   "ref.earnedCount": "налічэнняў: {n}",
@@ -5248,6 +5298,11 @@ const be: Dict = {
 };
 
 const ro: Dict = {
+  "legal.accept": "Accept",
+  "legal.required": "Pentru a crea un cont, bifați toate punctele",
+  "legal.docOffer": "oferta publică",
+  "legal.docPrivacy": "politica de confidențialitate",
+  "legal.viaBot": "Pentru a vă înregistra, deschideți cabinetul din botul Telegram — acolo puteți accepta documentele",
   "ref.earnedTitle": "Câștiguri din recomandări",
   "ref.earnedDays": "{n} zile",
   "ref.earnedCount": "recompense: {n}",
@@ -5770,6 +5825,11 @@ const ro: Dict = {
 };
 
 const es: Dict = {
+  "legal.accept": "Acepto",
+  "legal.required": "Para crear una cuenta, marca todas las casillas",
+  "legal.docOffer": "la oferta pública",
+  "legal.docPrivacy": "la política de privacidad",
+  "legal.viaBot": "Para registrarte, abre el gabinete desde el bot de Telegram — allí podrás aceptar los documentos",
   "maintenance.registrationClosed": "Estamos en mantenimiento — los nuevos registros están pausados. Vuelve más tarde, por favor.",
   "maintenance.paymentsClosed": "Estamos en mantenimiento — los pagos no están disponibles temporalmente. Vuelve más tarde, por favor.",
   "pricing.subtitle": "Servicio rápido y confiable. Elige un plan — conéctate en un minuto, paga en tu cuenta.",

@@ -23,6 +23,12 @@ interface BrandingValue {
   supportUsername: string | null;
   /** Вход через Telegram по OIDC включён на боте (иначе — классический виджет). */
   telegramOidcEnabled: boolean;
+  /** Вход по почте доступен. Неизвестно — считаем, что да. */
+  emailAuthEnabled: boolean;
+  /** Ключи документов, с которыми надо согласиться. Пусто — согласие не требуется. */
+  legalDocuments: string[];
+  /** Галочки согласия проставлены заранее (решение оператора). */
+  legalPrechecked: boolean;
   appearance: Appearance | null;
   /** Бэкенд бота не отвечает: показываем заглушку, бренд берём из кэша. */
   offline: boolean;
@@ -214,6 +220,11 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
       brandName: appearance?.brand_name || DEFAULT_BRAND,
       supportUsername: appearance?.support_username ?? null,
       telegramOidcEnabled: appearance?.telegram_oidc_enabled ?? false,
+      emailAuthEnabled: appearance?.email_auth_enabled ?? true,
+      legalDocuments: appearance?.legal_consent_required
+        ? (appearance.legal_documents ?? [])
+        : [],
+      legalPrechecked: appearance?.legal_consent_prechecked ?? false,
       appearance,
       refresh,
       offline,

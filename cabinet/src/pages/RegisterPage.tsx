@@ -10,11 +10,13 @@ import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { useBranding } from "@/contexts/BrandingContext";
 import { BrandLogo } from "@/components/BrandLogo";
 import { ApiError } from "@/types/api";
+import { TelegramAuthBlock } from "@/components/TelegramAuthBlock";
+import { LegalConsent } from "@/components/LegalConsent";
 
 export default function RegisterPage() {
   const t = useT();
   const { register } = useAuth();
-  const { appearance } = useBranding();
+  const { appearance, emailAuthEnabled } = useBranding();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -29,10 +31,17 @@ export default function RegisterPage() {
   const [referralCode] = useState(searchParams.get("ref") || "");
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  // Согласие с документами: сам блок и вся его логика — в LegalConsent.
+  const [legalKeys, setLegalKeys] = useState<string[]>([]);
+  const [legalOk, setLegalOk] = useState(true);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (regBlocked) return;
+    if (!legalOk) {
+      setError(t("legal.required"));
+      return;
+    }
     setError(null);
     setIsLoading(true);
     try {
@@ -41,6 +50,7 @@ export default function RegisterPage() {
         password,
         name: name || undefined,
         referral_code: referralCode || undefined,
+        accepted_legal_documents: legalKeys.length ? legalKeys : undefined,
       });
       navigate("/");
     } catch (err) {
@@ -72,7 +82,26 @@ export default function RegisterPage() {
           </div>
         )}
 
+        {/* Вход через Telegram — и на странице РЕГИСТРАЦИИ. Ссылка приглашения
+            (/register?ref=…) ведёт именно сюда, а кнопки здесь не было: телеграмом
+            в кабинет заходит подавляющее большинство, и приглашённый попадал туда,
+            где привычного способа входа нет. При закрытой регистрации не
+            показываем: вход создал бы аккаунт в обход запрета. */}
+        {!regBlocked && <TelegramAuthBlock onError={setError} />}
+
+        {/* Текст ошибки — ВНЕ формы почты: оператор может выключить вход по почте
+            целиком, и тогда форма пропадает, а вместе с ней пропадал бы и
+            единственный способ сказать человеку, что пошло не так. */}
+        {!emailAuthEnabled && error && <p className="mb-4 text-sm text-danger">{error}</p>}
+
+        {emailAuthEnabled && (
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <LegalConsent
+            onChange={(keys, all) => {
+              setLegalKeys(keys);
+              setLegalOk(all);
+            }}
+          />
           <Input
             label={t("register.name")}
             name="name"
@@ -106,6 +135,7 @@ export default function RegisterPage() {
             {t("register.submit")}
           </Button>
         </form>
+        )}
 
         <p className="mt-5 text-center text-sm text-fg-subtle">
           {t("register.haveAccount")}{" "}

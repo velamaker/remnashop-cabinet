@@ -34,7 +34,7 @@ export function TelegramAuthBlock({
   const t = useT();
   const navigate = useNavigate();
   const { loginWithTelegram } = useAuth();
-  const { telegramOidcEnabled } = useBranding();
+  const { telegramOidcEnabled, emailAuthEnabled } = useBranding();
 
   if (!telegramOidcEnabled && !TELEGRAM_BOT_USERNAME) return null;
 
@@ -43,6 +43,15 @@ export function TelegramAuthBlock({
       await loginWithTelegram(data);
       navigate(next);
     } catch (err) {
+      // 428 — «нужно согласие с документами». Через кнопку-виджет его не передать:
+      // их ручка кладёт список принятых документов В ПРОВЕРКУ ПОДПИСИ, поэтому
+      // запрос с ним ломает хэш и получает 401, а без него — тот же 428. Обойти
+      // это на нашей стороне нечем, но и молчать нельзя: отправляем человека туда,
+      // где согласие спросить можно — в бота (Mini App).
+      if (err instanceof ApiError && err.status === 428) {
+        onError?.(t("legal.viaBot"));
+        return;
+      }
       onError?.(err instanceof ApiError ? err.detail : t("login.errTelegramShort"));
     }
   };
@@ -69,11 +78,16 @@ export function TelegramAuthBlock({
           </div>
         )}
       </div>
-      <div className="my-6 flex items-center gap-3">
-        <div className="h-px flex-1 bg-border-subtle" />
-        <span className="mono-label text-fg-subtle">{t("common.or")}</span>
-        <div className="h-px flex-1 bg-border-subtle" />
-      </div>
+      {/* Разделитель «или» — только когда под ним ЕСТЬ что разделять. Оператор
+          может выключить вход по почте целиком: форма тогда не рисуется, и
+          разделитель повисал над пустотой. */}
+      {emailAuthEnabled && (
+        <div className="my-6 flex items-center gap-3">
+          <div className="h-px flex-1 bg-border-subtle" />
+          <span className="mono-label text-fg-subtle">{t("common.or")}</span>
+          <div className="h-px flex-1 bg-border-subtle" />
+        </div>
+      )}
     </>
   );
 }
