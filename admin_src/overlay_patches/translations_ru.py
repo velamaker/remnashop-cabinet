@@ -232,6 +232,19 @@ PLAN_CHANGE_SUCCESS_NEW = (
     "    }\n"
 )
 
+# Подтверждение промокода: база пишет «остаток дней и трафик будут сброшены» при
+# ЛЮБОЙ действующей подписке (и того же тарифа, где дни складываются). Точные числа
+# покажет второе подтверждение (promocode_gift_confirm.py) — здесь нейтрально и честно.
+PROMO_REPLACE_OLD = (
+    f"        [1] {_WARN} <i>У вас уже есть активная подписка. Она будет заменена новым планом, "
+    "текущий остаток дней и трафик будут сброшены.</i>\n"
+)
+
+PROMO_REPLACE_NEW = (
+    f"        [1] {_WARN} <i>У вас уже есть активная подписка — подарок изменит её. "
+    "Что будет с оставшимися днями — покажем при подтверждении.</i>\n"
+)
+
 # (файл, что заменяем, на что, короткое имя для лога)
 PATCHES = [
     ("utils.ftl", UTILS_USER_OLD, UTILS_USER_NEW, "frg-user: пустая почта"),
@@ -247,6 +260,7 @@ PATCHES = [
     ("messages.ftl", PLAN_CHANGE_LINK_OLD, PLAN_CHANGE_LINK_NEW, "msg-subscription-plan: смена тарифа"),
     ("messages.ftl", PLAN_CHANGE_CONFIRM_OLD, PLAN_CHANGE_CONFIRM_NEW, "msg-subscription-confirm: перенос остатка"),
     ("messages.ftl", PLAN_CHANGE_SUCCESS_OLD, PLAN_CHANGE_SUCCESS_NEW, "msg-subscription-change-success: пересчёт"),
+    ("messages.ftl", PROMO_REPLACE_OLD, PROMO_REPLACE_NEW, "msg-promocode: подарок и остаток"),
 ]
 
 # Локаль, к которой относится таблица. Остальные не трогаем вовсе.

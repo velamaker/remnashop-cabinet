@@ -279,6 +279,55 @@ async def test_journal_write_lookup_freeze_and_lock(db):
     assert await carry.transaction_status(session, uuid.uuid4()) is None
 
 
+async def test_promo_default_currency_and_prices(db):
+    """Подарок: цена дня — из таблицы тарифа в валюте по умолчанию из settings."""
+    await db.conn.execute("CREATE TABLE settings (id serial PRIMARY KEY, default_currency currency NOT NULL)")
+    assert await carry.default_currency(db.session) == "RUB", "настроек нет — рубли"
+    await db.session.rollback()
+    await db.conn.execute("INSERT INTO settings (default_currency) VALUES ('XTR')")
+    assert await carry.default_currency(db.session) == "XTR"
+    await db.session.rollback()
+
+    uid, sid, created = await person(db.conn, days_left=29, plan_id=10)
+    await invoice(db.conn, uid, kind="NEW", at=created - timedelta(seconds=1), final="120", currency="XTR")
+    await db.conn.execute("INSERT INTO plans (id, is_active) VALUES (10, true), (20, true)")
+    did = await db.conn.fetchval("INSERT INTO plan_durations (plan_id, days) VALUES (20, 30) RETURNING id")
+    await db.conn.execute("INSERT INTO plan_prices (plan_duration_id, currency, price) VALUES ($1, 'XTR', 240)", did)
+    sub = SimpleNamespace(
+        id=sid, expire_at=NOW + timedelta(days=29), status="ACTIVE", is_trial=False,
+        plan_snapshot=SimpleNamespace(id=10), created_at=created,
+    )
+    carried = await carry.promo_carry(db.session, user_id=uid, subscription=sub, plan_id=20, duration=30, now=NOW)
+    await db.session.rollback()
+    assert carried.currency == "XTR"
+    # 29 дн. по 4/день = 116 → подарок 240/30 = 8/день → 14 дн.
+    assert carried.result.mode == "carry" and carried.result.bonus_days == 14
+
+
+async def test_savepoint_isolates_failed_read_and_keeps_outer_work(db):
+    """Как в зачислении: сбой в SAVEPOINT откатывает только его, внешняя работа коммитится."""
+    uid, sid, created = await person(db.conn, days_left=29)
+    session = db.session
+    row = await carry.lock_current_subscription(session, uid)  # внешняя транзакция уже идёт
+    try:
+        async with session.begin_nested():
+            await carry.record_carryover(
+                session, source="purchase", payment_id=uuid.uuid4(), user_id=uid, old_subscription_id=sid,
+                subscription_id=sid, old_plan_id=10, new_plan_id=20, new_duration=30, currency="RUB",
+                result=carry.CarryResult("carry", 0, 0, Fraction(0), None, 0, 0, 0, False,
+                                         source_payment_ids=("not-a-uuid",)),
+                expire_before=row.expire_at, expire_after=NOW,
+            )
+    except Exception:  # noqa: BLE001 — битый uuid в источниках: запись не легла
+        pass
+    async with session.begin_nested():
+        state = await carry.load_carry_state(session, user_id=uid, subscription=row, now=NOW)
+    await carry.close_freeze(session, uid)
+    await session.commit()
+    assert state.old_plan_id == 10
+    assert await db.conn.fetchval("SELECT count(*) FROM plan_change_carryovers") == 0
+
+
 async def test_user_fk_is_declared_for_duplicate_merge(db):
     """merge-duplicate.py переносит таблицы по FK на users(id) — журнал обязан его иметь."""
     fk = await db.conn.fetchval(

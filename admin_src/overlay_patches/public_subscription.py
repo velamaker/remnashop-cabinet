@@ -34,6 +34,7 @@ from src.application.common import Remnawave
 from src.application.common.dao import (
     PaymentGatewayDao,
     PlanDao,
+    PromocodeDao,
     SubscriptionDao,
     TransactionDao,
 )
@@ -403,8 +404,21 @@ async def activate_promocode_web(
     body: PromocodeActivateRequest,
     user: CurrentUser,
     activate_promocode: FromDishka[ActivatePromocode],
+    session: FromDishka[AsyncSession],
+    subscription_dao: FromDishka[SubscriptionDao],
+    promocode_dao: FromDishka[PromocodeDao],
 ) -> PromocodeActivateResponse:
     _assert_web_purchase_email_verified(user)
+    # Подарок другого тарифа, при котором пропадут дни, веб не активирует (подтверждения
+    # тут нет) — см. overlay_plan_change.promo_web_refusal.
+    from src.infrastructure.services import overlay_plan_change as carry
+
+    refusal = await carry.promo_web_refusal(
+        session, user=user, code=body.code, subscription_dao=subscription_dao,
+        promocode_dao=promocode_dao, now=datetime_now(),
+    )
+    if refusal:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=refusal)
     try:
         promo = await activate_promocode(user, ActivatePromocodeDto(code=body.code, user=user))
     except PromocodeNotFoundError as e:

@@ -1,10 +1,10 @@
 """Второе подтверждение, когда промокод — это подарочная подписка.
 
 ЧТО ДЕЛАЕМ. Промокод с наградой SUBSCRIPTION у человека с ДРУГИМ действующим
-тарифом не продлевает подписку, а заменяет её: срок считается заново, остаток
-сгорает. Одного нажатия для такого мало — показываем, что именно произойдёт
-(текущий тариф и дату окончания против новых), и просим подтвердить повторно.
-Тот же тариф складывается днями и второго подтверждения не требует.
+тарифом не продлевает подписку, а заменяет её тариф. Остаток при этом пересчитывается
+в дни подарка по цене дня (promocode_gift_days.py), а где это невозможно — сгорает.
+Одного нажатия для такого мало — показываем, что именно произойдёт (сколько дней
+добавится или что остаток не переносится), и просим подтвердить повторно.
 
 КУДА ВСТРАИВАЕМСЯ. Обработчик кнопки подставляется в окно диалога по имени —
 `dialog.py` делает `from .promocode_handlers import on_promocode_confirm` и кладёт
@@ -27,13 +27,14 @@ from . import PatchTargetChanged, expect_source
 # ровном месте. Тяжесть импортов здесь не страшна: сам этот модуль подгружается
 # лениво — только когда бот дошёл до промокодов.
 from datetime import timedelta
-from typing import Any, cast
+from typing import Any, Optional, cast
 from aiogram.types import CallbackQuery, Message
 from aiogram_dialog import DialogManager, ShowMode, StartMode
 from aiogram_dialog.widgets.kbd import Button
 from dishka import FromDishka
 from dishka.integrations.aiogram_dialog import inject
 from loguru import logger
+from sqlalchemy.ext.asyncio import AsyncSession
 import src.telegram.routers.subscription.promocode_handlers as target
 from src.application.common import EventPublisher, Notifier
 from src.application.common.dao import PromocodeDao, SubscriptionDao
@@ -44,6 +45,7 @@ from src.core.constants import USER_KEY
 from src.core.enums import PromocodeRewardType
 from src.telegram.states import MainMenu
 from src.telegram.utils import is_double_click
+from src.core.utils.time import datetime_now
 from src.application.use_cases.promocode.commands.activate import (
     ActivatePromocode,
     ActivatePromocodeDto,
@@ -67,6 +69,93 @@ PROMO_CONFIRM_STAGE_KEY = "overlay_gift_confirm_stage"
 
 # sha256 обработчика on_promocode_confirm в базе v0.8.2 (вместе с декоратором).
 BASE_HANDLER_SHA256 = "97d0c1b63a00fbec4c1f71b2377c03cf035d0448fef99764f2d1b539a0590386"
+
+# Имя тарифа в тексте всплывающего окна — не длиннее: в alert Telegram ~200 символов.
+PLAN_NAME_MAX = 24
+
+
+def _carry() -> Any:
+    """Сервис переноса — лениво (пакет services тяжёлый, см. plan_change_carryover)."""
+    from src.infrastructure.services import overlay_plan_change
+
+    return overlay_plan_change
+
+
+def _fmt_date(value: Any) -> str:
+    try:
+        return value.strftime("%d.%m.%Y")
+    except Exception:  # noqa: BLE001
+        return "—"
+
+
+def _short(name: str) -> str:
+    return name if len(name) <= PLAN_NAME_MAX else name[: PLAN_NAME_MAX - 1] + "…"
+
+
+def gift_warning(current: Any, plan: Any, carried: Optional[Any] = None) -> str:
+    """Текст всплывающего предупреждения перед активацией подарка.
+
+    Собираем на месте (без ftl): в alert Telegram помещается ~200 символов, а текст
+    зависит от данных — тот же тариф или другой, сколько дней добавит перенос остатка.
+    `carried` — расчёт переноса (overlay_plan_change.promo_carry) или None.
+    """
+    plan_name = getattr(plan, "name", "") or "подписка"
+    days = getattr(plan, "duration", 0) or 0
+    if current is None:
+        return f"Будет активирован тариф «{plan_name}» на {days} дн. Нажмите ещё раз для подтверждения."
+
+    cur_plan = getattr(current, "plan_snapshot", None)
+    cur_name = getattr(cur_plan, "name", "") or "текущий тариф"
+    cur_id = getattr(cur_plan, "id", None)
+    expire = getattr(current, "expire_at", None)
+    same = cur_id is not None and cur_id == getattr(plan, "id", None)
+
+    if same:
+        new_date = _fmt_date(expire + timedelta(days=days)) if expire else "—"
+        return (
+            f"Тариф тот же — {days} дн. добавятся к текущему сроку, "
+            f"подписка станет активна до {new_date}. Нажмите ещё раз для подтверждения."
+        )
+    result = getattr(carried, "result", None)
+    if result is not None and result.mode == "carry":
+        head = f"Тариф сменится «{_short(cur_name)}» → «{_short(plan_name)}». "
+        if result.lost_days > 0:
+            return (
+                head + f"К {days} дн. добавится {result.added_days} дн., ещё {result.lost_days} дн. "
+                "перенести нельзя. Нажмите ещё раз, если согласны."
+            )
+        return (
+            head + f"Остаток пересчитаем по цене дня: к {days} дн. добавится {result.added_days} дн. "
+            "Нажмите ещё раз."
+        )
+    return (
+        f"ВНИМАНИЕ: тариф сменится «{_short(cur_name)}» → «{_short(plan_name)}». "
+        f"Остаток текущей подписки (до {_fmt_date(expire)}) НЕ переносится, "
+        f"срок станет {days} дн. Нажмите ещё раз, если согласны."
+    )
+
+
+async def carry_preview(session: Any, user: Any, current: Any, plan: Any) -> Optional[Any]:
+    """Предпросмотр переноса для окна. Выключено, правка не встала или сбой — None."""
+    carry = _carry()
+    try:
+        if not carry.load_config().get("enabled") or not carry.promo_patch_applied():
+            return None
+        plan_id = getattr(plan, "id", None)
+        duration = getattr(plan, "duration", None)
+        if plan_id is None or duration is None:
+            return None
+        return await carry.promo_carry(
+            session, user_id=user.id, subscription=current, plan_id=int(plan_id),
+            duration=int(duration), now=datetime_now(),
+        )
+    except Exception as exc:  # noqa: BLE001 — предупреждение важнее предпросмотра
+        logger.warning(f"{user.log} предпросмотр переноса по подарку не удался: {exc}")
+        try:
+            await session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return None
 
 
 def apply() -> str:
@@ -95,43 +184,6 @@ def apply() -> str:
             "база сменила ключи диалога, второе подтверждение читало бы пустоту"
         ) from exc
 
-    def _fmt_date(value: Any) -> str:
-        try:
-            return value.strftime("%d.%m.%Y")
-        except Exception:  # noqa: BLE001
-            return "—"
-
-
-    def _gift_warning(current: Any, plan: Any) -> str:
-        """Текст всплывающего предупреждения перед активацией подарка.
-
-        Собираем на месте (без ftl): в alert Telegram помещается ~200 символов, а текст
-        зависит от данных — тот же тариф или другой, сложатся дни или сгорят.
-        """
-        plan_name = getattr(plan, "name", "") or "подписка"
-        days = getattr(plan, "duration", 0) or 0
-        if current is None:
-            return f"Будет активирован тариф «{plan_name}» на {days} дн. Нажмите ещё раз для подтверждения."
-
-        cur_plan = getattr(current, "plan_snapshot", None)
-        cur_name = getattr(cur_plan, "name", "") or "текущий тариф"
-        cur_id = getattr(cur_plan, "id", None)
-        expire = getattr(current, "expire_at", None)
-        same = cur_id is not None and cur_id == getattr(plan, "id", None)
-
-        if same:
-            new_date = _fmt_date(expire + timedelta(days=days)) if expire else "—"
-            return (
-                f"Тариф тот же — {days} дн. добавятся к текущему сроку, "
-                f"подписка станет активна до {new_date}. Нажмите ещё раз для подтверждения."
-            )
-        return (
-            f"ВНИМАНИЕ: тариф сменится «{cur_name}» → «{plan_name}». "
-            f"Остаток текущей подписки (до {_fmt_date(expire)}) НЕ переносится, "
-            f"срок станет {days} дн. Нажмите ещё раз, если согласны."
-        )
-
-
     @inject
     async def on_promocode_confirm(
         callback: CallbackQuery,
@@ -143,6 +195,7 @@ def apply() -> str:
         config: FromDishka[AppConfig],
         promocode_dao: FromDishka[PromocodeDao],
         subscription_dao: FromDishka[SubscriptionDao],
+        session: FromDishka[AsyncSession],
     ) -> None:
         user: TelegramUserDto = dialog_manager.middleware_data[USER_KEY]
         code = dialog_manager.dialog_data.get(pending_key)
@@ -168,7 +221,8 @@ def apply() -> str:
                 if isinstance(plan, dict):  # снимок хранится json-ом
                     plan = type("PlanView", (), plan)
                 current = await subscription_dao.get_current(user.id)
-                warning = _gift_warning(current, plan)
+                carried = await carry_preview(session, user, current, plan)
+                warning = gift_warning(current, plan, carried)
             except Exception as exc:  # noqa: BLE001 — предупреждение не должно ломать активацию
                 logger.warning(f"{user.log} не смог собрать предупреждение по подарку: {exc}")
                 warning = "Подарок изменит вашу подписку. Нажмите ещё раз для подтверждения."

@@ -104,7 +104,7 @@
 | GET | `/api/referral/earnings` | Сколько заработано по рефералке | earned, rewards_count |
 | POST | `/api/gift/create` | Купить подарочную подписку (с баланса — код сразу, через шлюз — после оплаты) | {plan_code,duration_days,gateway_type?} → {paid_by: balance/gateway, code?, payment_id?, payment_url?, plan_name, duration_days, price} |
 | GET | `/api/gift/my` | История купленных подарков и выданные коды | items[{payment_id,plan_name,duration_days,price,code,issued,created_at}] |
-| POST | `/api/promocode/activate` | Активация промокода из карточки на главной | {code} → {success, code, reward_type, reward} |
+| POST | `/api/promocode/activate` | Активация промокода из карточки на главной. Подарок другого тарифа переносит остаток по цене дня; если целиком перенести нельзя (бессрочная, возврат, дни без известной цены) — 409 с причиной в detail, дни не сгорают молча | {code} → {success, code, reward_type, reward} |
 | GET | `/api/promo-banner` | Промо-баннер в кабинете (аудитория/расписание решаются на бэкенде) | active, title, text, cta_text, cta_url, color, dismissible, version |
 | GET | `/api/trial-discount` | Персональная скидка на первую покупку — баннер с таймером | active, percent, expires_at |
 | GET | `/api/renewal-discount` | Скидка на продление ДО окончания подписки — показывается внутри плашки продления на Главной и блоком на оплате. Необязательно: 404/501/сеть → скидки нет, плашка прежняя | {active:false} \| {active:true, percent, expires_at} |

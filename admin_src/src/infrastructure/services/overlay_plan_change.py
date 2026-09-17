@@ -73,6 +73,7 @@ CREATE_WINDOW_BEFORE = 120
 CREATE_WINDOW_AFTER = 5
 
 PURCHASE_MODULE = "src.application.use_cases.subscription.commands.purchase"
+PROMOCODE_MODULE = "src.application.use_cases.promocode.commands.activate"
 
 # Режимы состояния (одинаковы для любой цели) и режимы конкретной цели.
 STATE_MODES = ("carry", "lifetime", "reserve", "refund", "none")
@@ -118,6 +119,11 @@ def _wrapped(module_name: str, class_name: str, method: str) -> bool:
 def patch_applied() -> bool:
     """Наша ли `PurchaseSubscription._execute` в ЭТОМ процессе."""
     return _wrapped(PURCHASE_MODULE, "PurchaseSubscription", "_execute")
+
+
+def promo_patch_applied() -> bool:
+    """Умеет ли активация промокода в ЭТОМ процессе переносить остаток (сессия в __init__)."""
+    return _wrapped(PROMOCODE_MODULE, "ActivatePromocode", "__init__")
 
 
 def overlay_active() -> bool:
@@ -552,8 +558,68 @@ def new_day_amount(
     return to_decimal(original, 6)
 
 
+def promo_list_amount(
+    prices: Mapping[tuple[int, int, str], Fraction], plan_id: int, duration: int, currency: str
+) -> Optional[Fraction]:
+    """Витринная цена подарка на его срок — основа цены дня при переносе по промокоду.
+
+    Счёта у подарка нет, поэтому цена — из таблицы тарифа в валюте по умолчанию: цена
+    ровно этого срока, а если такого срока в витрине нет — самая ВЫСОКАЯ цена дня тарифа
+    (короткий срок: цена дня выше — бонус меньше, магазин не дарит лишнего). Тарифа в
+    таблице нет — None: перенос невозможен, подарок работает «заменой», как раньше.
+    """
+    if duration <= 0:
+        return None
+    exact = prices.get((plan_id, duration, currency))
+    if exact is not None and exact > 0:
+        return exact
+    best: Optional[Fraction] = None
+    for (pid, days, cur), price in prices.items():
+        if pid != plan_id or cur != currency or days <= 0 or price is None or price <= 0:
+            continue
+        per_day = price / days
+        if best is None or per_day > best:
+            best = per_day
+    return best * duration if best is not None else None
+
+
+def promo_loses_days(result: CarryResult) -> bool:
+    """Пропадут ли дни при активации подарка другого тарифа (веб подтверждения не спрашивает)."""
+    if result.mode == "lifetime":
+        return True
+    if result.mode in ("refund", "unpriced", "failed"):
+        return (result.remaining_days or 0) >= 1
+    if result.mode == "carry":
+        return result.lost_days > 0
+    return False
+
+
+def promo_block_reason(result: CarryResult) -> str:
+    """Почему веб не активирует подарок другого тарифа — человеческим языком."""
+    if result.mode == "lifetime":
+        why = "бессрочная подписка станет срочной"
+    elif result.mode == "refund":
+        why = "по подписке был возврат оплаты"
+    elif result.mode == "carry" and result.lost_days > 0:
+        why = f"{result.lost_days} дн. без известной цены"
+    else:
+        why = "цена нового тарифа неизвестна"
+    return (
+        f"Этот подарок заменит ваш тариф, и остаток перенести нельзя: {why}. "
+        "Чтобы не потерять дни, обратитесь в поддержку."
+    )
+
+
+@dataclass(frozen=True)
+class PromoCarry:
+    result: CarryResult
+    state: CarryState
+    currency: str
+
+
 # ── SQL ─────────────────────────────────────────────────────────────────────
 
+DEFAULT_CURRENCY_SQL = "SELECT default_currency::text FROM settings ORDER BY id LIMIT 1"
 
 LOCK_CURRENT_SQL = (
     "SELECT s.id, s.expire_at, s.status::text, s.is_trial, "
@@ -815,6 +881,104 @@ async def load_carry_state(
         extras=tuple(extras),
         active_plan_ids=frozenset(active),
     )
+
+
+async def default_currency(session: Any) -> str:
+    row = (await session.execute(text(DEFAULT_CURRENCY_SQL))).first()
+    return str(row[0]) if row is not None and row[0] else "RUB"
+
+
+async def promo_carry(
+    session: Any,
+    *,
+    user_id: int,
+    subscription: Any,
+    plan_id: int,
+    duration: int,
+    now: datetime,
+) -> Optional[PromoCarry]:
+    """Перенос остатка при подарке ДРУГОГО тарифа. None — перенос тут ни при чём.
+
+    Ни при чём: подписки нет, это пробник, тариф тот же (дни и так складываются) или
+    подарок бессрочный. Иначе — расчёт той же чистой функцией, что у покупки; решает
+    вызывающий: `carry` — пересчитать, остальные режимы — «замена», как раньше.
+    """
+    if subscription is None or getattr(subscription, "is_trial", False):
+        return None
+    current_plan = getattr(subscription, "plan_snapshot", None)
+    current_id = getattr(current_plan, "id", None) if current_plan is not None else None
+    if current_id is not None and int(current_id) == int(plan_id):
+        return None
+    if duration <= 0:
+        return None
+    state = await load_carry_state(
+        session,
+        user_id=user_id,
+        subscription=sub_row_from_dto(subscription),
+        now=now,
+        exclude_payment_id=None,
+        extra_plan_ids=(plan_id,),
+    )
+    currency = await default_currency(session)
+    amount = promo_list_amount(state.prices, plan_id, duration, currency)
+    result = compute_carryover(
+        state,
+        new_plan_id=plan_id,
+        new_duration=duration,
+        new_list_amount=amount,
+        currency=currency,
+        now=now,
+    )
+    return PromoCarry(result=result, state=state, currency=currency)
+
+
+PROMO_CHECK_FAILED = "Не удалось проверить, что будет с остатком подписки. Попробуйте ещё раз позже."
+
+
+async def promo_web_refusal(
+    session: Any,
+    *,
+    user: Any,
+    code: str,
+    subscription_dao: Any,
+    promocode_dao: Any,
+    now: datetime,
+) -> Optional[str]:
+    """Причина НЕ активировать подарок другого тарифа в вебе — или None.
+
+    В боте подарок подтверждают дважды и видят, что будет с остатком. В вебе
+    подтверждения нет: раньше подарок молча сжигал оплаченный остаток. Теперь остаток
+    переносится по цене дня, а там, где целиком перенести нельзя (бессрочная, возврат,
+    дни без известной цены, нет цены подарка), веб отказывает с понятной причиной.
+    Выключатель выключен или правка активации не встала — поведение как раньше.
+    """
+    if not load_config().get("enabled") or not promo_patch_applied():
+        return None
+    try:
+        promo = await promocode_dao.get_by_code(code)
+        reward = getattr(getattr(promo, "reward_type", None), "value", getattr(promo, "reward_type", None))
+        if promo is None or str(reward) != "SUBSCRIPTION":
+            return None
+        snapshot = getattr(promo, "plan_snapshot", None) or {}
+        plan_id, duration = snapshot.get("id"), snapshot.get("duration")
+        if plan_id is None or duration is None:
+            return None
+        current = await subscription_dao.get_current(user.id)
+        carried = await promo_carry(
+            session, user_id=user.id, subscription=current, plan_id=int(plan_id),
+            duration=int(duration), now=now,
+        )
+    except Exception as exc:  # noqa: BLE001
+        try:
+            await session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        logger.warning(f"promocode: перенос остатка user_id={getattr(user, 'id', '?')} не проверен ({exc})")
+        # Не знаем, сгорят ли дни, — не активируем молча: деньги человека дороже минуты.
+        return PROMO_CHECK_FAILED
+    if carried is None or not promo_loses_days(carried.result):
+        return None
+    return promo_block_reason(carried.result)
 
 
 async def carry_already_applied(session: Any, payment_id: Any) -> bool:

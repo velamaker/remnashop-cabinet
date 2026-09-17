@@ -8,6 +8,11 @@
 
 Награду возвращаем машинными полями (reward_type/reward) — текст успеха собирает и
 локализует фронт (кабинет мультиязычный).
+
+Подарок ДРУГОГО тарифа пересчитывает остаток текущей подписки в дни подарка по цене
+дня. Где целиком перенести нельзя (бессрочная, возврат, дни без известной цены), здесь
+подтверждения нет — поэтому отказ 409 с причиной, а не молчаливое сгорание дней
+(overlay_plan_change.promo_web_refusal; в боте такой подарок подтверждают дважды).
 """
 
 from typing import Any
@@ -16,7 +21,9 @@ from dishka import FromDishka
 from dishka.integrations.fastapi import inject
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.application.common.dao import PromocodeDao, SubscriptionDao
 from src.application.use_cases.promocode.commands.activate import (
     ActivatePromocode,
     ActivatePromocodeDto,
@@ -27,6 +34,8 @@ from src.core.exceptions import (
     PromocodeNotAvailableError,
     PromocodeNotFoundError,
 )
+from src.core.utils.time import datetime_now
+from src.infrastructure.services.overlay_plan_change import promo_web_refusal
 from src.web.endpoints.public._common import CurrentUser
 
 router = APIRouter(prefix="/promocode", tags=["Public - Promocode"])
@@ -61,12 +70,22 @@ async def activate_promocode_endpoint(
     body: ActivateRequest,
     user: CurrentUser,
     activate_promocode: FromDishka[ActivatePromocode],
+    session: FromDishka[AsyncSession],
+    subscription_dao: FromDishka[SubscriptionDao],
+    promocode_dao: FromDishka[PromocodeDao],
 ) -> dict[str, Any]:
     code = body.code.strip()
     if not code:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Введите промокод"
         )
+
+    refusal = await promo_web_refusal(
+        session, user=user, code=code, subscription_dao=subscription_dao,
+        promocode_dao=promocode_dao, now=datetime_now(),
+    )
+    if refusal:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=refusal)
 
     try:
         promo = await activate_promocode(
