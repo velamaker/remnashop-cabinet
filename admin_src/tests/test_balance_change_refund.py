@@ -256,6 +256,18 @@ async def test_purchase_error_refunds_even_if_subscription_row_changed(monkeypat
     assert getattr(outcome, "status_code", None) == 502
 
 
+async def test_purchase_error_refunds_even_if_invoice_still_completed(monkeypatch):
+    """База не успела перевести счёт в FAILED (её отдельная запись статуса упала) — счёт
+    ещё COMPLETED, строка подписки сменилась соседом. PurchaseError всё равно значит
+    «выдача упала»: деньги возвращаем."""
+    from src.core.exceptions import PurchaseError
+
+    session, alerts, outcome = await pay(monkeypatch, grant=True, after=sub(6, 60), tx_status="COMPLETED",
+                                         error=PurchaseError(RuntimeError("panel down")))
+    assert session.refunds == 1
+    assert getattr(outcome, "status_code", None) == 502
+
+
 async def test_invoice_not_completed_refunds(monkeypatch):
     for status in ("PENDING", "FAILED", None):
         session, alerts, outcome = await pay(monkeypatch, grant=True, after=sub(6, 60), tx_status=status)
