@@ -270,18 +270,34 @@ def test_reporting_gateways_match_base() -> None:
 # ── Запросы ───────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_window_is_refund_date_not_payment_date() -> None:
-    """Окно — по дню возврата. По дате оплаты чарджбэк старой покупки не попал бы."""
+async def _refund_sql() -> str:
     session = FakeSession()
     await statistics.compute_refunds_30d(session)
 
     refund_sql = [s for s in session.seen if "'REFUNDED'" in s]
     assert len(refund_sql) == 1
-    sql = refund_sql[0]
+    return refund_sql[0]
+
+
+@pytest.mark.asyncio
+async def test_window_is_refund_date_not_payment_date() -> None:
+    """Окно — по дню возврата. По дате оплаты чарджбэк старой покупки не попал бы."""
+    sql = await _refund_sql()
     assert "status::text = 'REFUNDED'" in sql
     assert "updated_at >= now() - interval '30 days'" in sql
     assert "created_at" not in sql
+
+
+@pytest.mark.asyncio
+async def test_free_grants_are_not_refunds() -> None:
+    """Возврат — это вернувшиеся деньги: строка с нулевой суммой не считается.
+
+    Без условия бесплатная выдача, ставшая REFUNDED, попала бы в «платежей: N».
+    На Postgres это проверяет test_metrics_refunds_sql.py, но он opt-in и в CI
+    пропускается, поэтому условие держим и здесь, по тексту запроса.
+    """
+    sql = await _refund_sql()
+    assert "(pricing->>'final_amount')::numeric > 0" in sql
 
 
 @pytest.mark.asyncio
@@ -313,17 +329,37 @@ async def test_every_transactions_query_excludes_test_and_staff() -> None:
 
 @pytest.mark.asyncio
 async def test_currencies_are_not_summed() -> None:
-    """499 ₽ и 5 $ — две строки, а не «504»."""
-    session = FakeSession(refunds=[("USD", 1, "5"), ("RUB", 1, "499")], active=["VALUTIX"])
+    """998 ₽ и 5 $ — две строки, а не «1003». «Платежей» — возвраты, а не валюты.
+
+    В рублях ДВА возврата: счётчик, собранный как число валют, показал бы 2 вместо 3.
+    """
+    session = FakeSession(refunds=[("USD", 1, "5"), ("RUB", 2, "998")], active=["VALUTIX"])
     metrics = await statistics.compute_metrics(session)
 
     refunds = metrics["refunds"]
     assert refunds["by_currency"] == [
-        {"currency": "RUB", "count": 1, "amount": 499.0},
+        {"currency": "RUB", "count": 2, "amount": 998.0},
         {"currency": "USD", "count": 1, "amount": 5.0},
     ]
-    assert refunds["count_30d"] == 2
-    assert "504" not in json.dumps(metrics)
+    assert refunds["count_30d"] == 3
+    assert "1003" not in json.dumps(metrics)
+
+
+@pytest.mark.asyncio
+async def test_rub_first_then_by_code() -> None:
+    """Рубли — первой строкой, остальные валюты по коду, в каком бы порядке их ни отдал Postgres.
+
+    У базы сейчас валюты RUB, USD и XTR, и все три по алфавиту уже стоят «как надо».
+    Поэтому EUR здесь выдуманный: только код, который идёт по алфавиту раньше RUB,
+    отличает правило «RUB первым» от простой сортировки по коду.
+    """
+    session = FakeSession(
+        refunds=[("XTR", 1, "50"), ("USD", 1, "5"), ("EUR", 1, "4"), ("RUB", 1, "499")],
+        active=["VALUTIX"],
+    )
+    refunds = await statistics.compute_refunds_30d(session)
+
+    assert [c["currency"] for c in refunds["by_currency"]] == ["RUB", "EUR", "USD", "XTR"]
 
 
 @pytest.mark.asyncio
