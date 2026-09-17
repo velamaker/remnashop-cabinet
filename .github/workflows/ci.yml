@@ -99,6 +99,23 @@ jobs:
           sys.exit(1 if bad else 0)
           "
 
+  update-sh:
+    name: update.sh — ветвление без docker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # -S error — только настоящие ошибки (синтаксис, неверные конструкции): стиль
+      # скрипта, который владелец запускает на проде, CI не блокирует.
+      - name: shellcheck
+        run: shellcheck -S error update.sh scripts/tests/update-sh.sh
+
+      # Сценарии «обновить и бота / только кабинет», флаги, сервер кабинета, режим api,
+      # перезапуск тарбол-ветки. docker, git и curl подменены — ничего не собирается.
+      # Полное обновление сверяется с золотым журналом байт в байт.
+      - name: Сценарии
+        run: bash scripts/tests/update-sh.sh
+
   adapter:
     name: Адаптер «Бедолага» — тесты
     runs-on: ubuntu-latest

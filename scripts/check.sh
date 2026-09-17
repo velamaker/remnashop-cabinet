@@ -3,6 +3,7 @@
 #
 #   Кабинет (TS/React):  tsc -b (типы) + eslint
 #   Бэкенд (admin_src):  проверка синтаксиса python (py_compile, без установки зависимостей)
+#   update.sh:           сценарии стенда scripts/tests/update-sh.sh (docker/git/curl подменены)
 #
 # Использование:
 #   scripts/check.sh            # проверить ВЕСЬ кабинет + бэкенд (типы+линт)
@@ -27,6 +28,11 @@ fi
 
 need_cabinet() { [ "$STAGED_ONLY" = 0 ] || printf '%s\n' "$CH" | grep -qE '^cabinet/'; }
 need_backend() { [ "$STAGED_ONLY" = 0 ] || printf '%s\n' "$CH" | grep -qE '^admin_src/.*\.py$'; }
+# Стенд update.sh читает и манифесты возможностей бота — их формат ему тоже важен.
+need_update_sh() {
+  [ "$STAGED_ONLY" = 0 ] || printf '%s\n' "$CH" | grep -qxE \
+    'update\.sh|scripts/tests/update-sh\.sh|cabinet/src/lib/botCapabilities\.ts|admin_src/src/web/cabinet_capabilities\.py'
+}
 
 # ---------- Кабинет: типы + линт ----------
 if need_cabinet; then
@@ -67,6 +73,21 @@ if need_backend; then
     [ -n "$files" ] && { printf '%s\n' "$files" | xargs -r "$PY" -m py_compile || fail=1; }
   else
     echo "⚠ python3 не найден — пропускаю проверку бэкенда"
+  fi
+fi
+
+# ---------- update.sh: сценарии без docker ----------
+if need_update_sh; then
+  if command -v script >/dev/null 2>&1; then
+    echo "▶ update.sh: сценарии стенда (docker/git/curl подменены)…"
+    if ! upd_out="$(bash scripts/tests/update-sh.sh 2>&1)"; then
+      printf '%s\n' "$upd_out" | grep -E '✗|❌' >&2
+      fail=1
+    else
+      printf '%s\n' "$upd_out" | tail -1
+    fi
+  else
+    echo "⚠ нет утилиты script (util-linux) — пропускаю стенд update.sh"
   fi
 fi
 

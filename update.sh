@@ -4,11 +4,18 @@
 #
 #   ./update.sh                  # НАШ код: git pull → пересборка overlay+кабинета
 #                                #   (заодно сообщит, если вышла новая версия базы;
-#                                #    тарбол-установка без .git — код тянется свежим архивом)
+#                                #    тарбол-установка без .git — код тянется свежим архивом).
+#                                #   В терминале спросит, обновлять ли и бота (Enter = да)
+#   ./update.sh --with-bot       # бот и кабинет, без вопроса (как было всегда)
+#   ./update.sh --cabinet-only   # ТОЛЬКО кабинет (и адаптер «Бедолаги»), без вопроса:
+#                                #   бот, HA-копия, воркеры, база и миграции не трогаются;
+#                                #   функции кабинета, которым нужен новый бот, скрыты
+#                                #   до его обновления
 #   ./update.sh --base latest    # БАЗА бота: сам определит последнюю версию и обновит
 #   ./update.sh --base <тег>     # БАЗА бота: обновить базовый образ до конкретного <тег>
 #                                #   (snoups/remnashop) с валидацией и пересборкой
 #   ./update.sh --no-backup      # любой из режимов без бэкапа БД
+#                                #   (при --cabinet-only базу и так не дампим)
 #   ./update.sh --force          # git reset --hard origin/<ветка> (СОТРЁТ локальные
 #                                #   правки) перед сборкой — когда обычный pull не идёт
 #
@@ -18,6 +25,12 @@
 #   • базовый образ запиннен (BASE_TAG) ради стабильности — обновляется осознанно
 #     через `--base` с прогоном ./check-update.sh (не сломает overlay молча);
 #   • кабинет — в отдельном compose-файле.
+#
+# Без терминала (cron, ssh без -t, сессии агентов) вопроса нет и обновляется ВСЁ,
+# как раньше: молча перестать обновлять бота (а с ним и исправления безопасности)
+# хуже, чем обновить его как всегда. На сервере кабинета (режим site) скрипт
+# останавливается и подсказывает site-install.sh; в режиме api (бот без кабинета)
+# обновляет бота без вопроса.
 
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"
@@ -31,11 +44,17 @@ warn() { printf '%s!%s %s\n' "$YLW" "$RST" "$*"; }
 die()  { printf '✗ %s\n' "$*" >&2; exit 1; }
 
 # ── разбор аргументов ─────────────────────────────────────────────────────────
-BACKUP=1; BASE=0; BASE_TAG=""; FORCE=0
+# SCOPE: all — бот и кабинет; cabinet — только кабинет; пусто — спросить (или «all»
+# без терминала). Флаг переживает перезапуск тарбол-ветки: решение принимается
+# один раз, до скачивания.
+BACKUP=1; BASE=0; BASE_TAG=""; FORCE=0; SCOPE=""
+SCOPE_CONFLICT="--with-bot и --cabinet-only вместе не бывают: выберите одно."
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-backup) BACKUP=0 ;;
     --force)     FORCE=1 ;;
+    --with-bot)     [ "$SCOPE" != cabinet ] || die "$SCOPE_CONFLICT"; SCOPE=all ;;
+    --cabinet-only) [ "$SCOPE" != all ]     || die "$SCOPE_CONFLICT"; SCOPE=cabinet ;;
     --base)      BASE=1; shift; BASE_TAG="${1:-}"
                  { [ -n "$BASE_TAG" ] && [ "${BASE_TAG#-}" = "$BASE_TAG" ]; } || die "Укажите тег: ./update.sh --base <тег> (напр. v0.8.3)" ;;
     -h|--help)   grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -43,6 +62,40 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+# --base пересобирает БОТА на новом базовом образе — «только кабинет» тут не бывает.
+if [ "$BASE" = 1 ]; then
+  [ "$SCOPE" != cabinet ] || die "--base обновляет базовый образ бота — с --cabinet-only не сочетается."
+  SCOPE=all
+fi
+
+[ -f .env ] || die "Нет .env — это каталог установки бота?"
+
+# Значение ключа из .env (последнее, без кавычек); пусто — ключа нет.
+env_get() { grep -E "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"'"'" || true; }
+is_bedolaga() { grep -qE '^CABINET_BACKEND=bedolaga' .env 2>/dev/null; }
+
+# Тип установки. site — кабинет на отдельном сервере: install.sh site пишет только
+# ключи кабинета, бота там нет (BOT_TOKEN пуст), а /api уходит на API_UPSTREAM.
+# api — бот без кабинета: install.sh api пишет COMPOSE_FILE без файла кабинета.
+install_kind() {
+  if [ -z "$(env_get BOT_TOKEN)" ] && [ -n "$(env_get API_UPSTREAM)" ]; then echo site; return 0; fi
+  local cf; cf="$(env_get COMPOSE_FILE)"
+  if [ -n "$cf" ] && [[ ":$cf:" != *":cabinet/docker-compose.cabinet.yml:"* ]]; then echo api; return 0; fi
+  echo bot
+}
+INSTALL="$(install_kind)"
+case "$INSTALL" in
+  site)
+    # Раньше скрипт здесь брал docker-compose.yml и пытался собрать и поднять бота с
+    # базой, которых на сервере кабинета нет и быть не должно.
+    die "Это сервер кабинета (режим site): бота здесь нет, а update.sh пересобирает и его.
+   Обновление кабинета здесь — повтор установщика:
+     cd $PWD && DEST=\"\$PWD\" bash site-install.sh
+   Функции, которым нужен более новый бот, кабинет прячет сам и покажет, когда бота обновят." ;;
+  api)
+    [ "$SCOPE" != cabinet ] || die "Здесь нет кабинета (режим api: только бот) — обновлять «только кабинет» нечего. Запустите ./update.sh"
+    SCOPE=all ;;
+esac
 
 if docker compose version >/dev/null 2>&1; then DC="docker compose"
 elif command -v docker-compose >/dev/null 2>&1; then DC="docker-compose"
@@ -54,7 +107,7 @@ else die "Не найден 'docker compose'."; fi
 # маршрута, а вторая копия бэкенда оставалась на старом образе. install.sh пишет в
 # COMPOSE_FILE те же файлы, что стоят ниже по умолчанию, так что у стандартных
 # установок ничего не меняется.
-CF="$(grep -E '^COMPOSE_FILE=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"'"'" || true)"
+CF="$(env_get COMPOSE_FILE)"
 if [ -n "$CF" ]; then
   COMPOSE=()
   IFS=: read -ra _cf <<<"$CF"
@@ -66,8 +119,7 @@ fi
 # репозитория. Без этого файла обновление оставляло адаптер на СТАРОМ образе
 # (старые compose.py/route_map.json), а compose ругался «orphan containers»
 # и по этой подсказке предлагал снести живой контейнер.
-if grep -qE '^CABINET_BACKEND=bedolaga' .env 2>/dev/null \
-   && [[ ":$CF:" != *":cabinet/docker-compose.adapter.yml:"* ]]; then
+if is_bedolaga && [[ ":$CF:" != *":cabinet/docker-compose.adapter.yml:"* ]]; then
   COMPOSE+=(-f cabinet/docker-compose.adapter.yml)
 fi
 
@@ -91,8 +143,6 @@ fetch_latest_base() {
   [ -n "$tag" ] && echo "$tag"
 }
 
-[ -f .env ] || die "Нет .env — это каталог установки бота?"
-
 # записать VAR=VAL в .env (заменить строку или дописать)
 set_env() {
   local var="$1" val="$2"
@@ -103,13 +153,135 @@ set_env() {
   fi
 }
 
+# ── 0. Обновлять ли бота ──────────────────────────────────────────────────────
+# Что умеет РАБОТАЮЩИЙ бот, читаем из его образа, а не из контейнера и не по сети:
+# в контейнер на части установок примонтирован хостовый VERSION (после «только
+# кабинет» он новее кода), а сам бот может лежать. `docker run --entrypoint sh` с
+# --network none ничего не запускает и ни к чему не подключается. Один запуск на оба
+# файла — вопрос не должен ждать лишнюю секунду.
+BOT_PROBED=0; BOT_SEEN=0; BOT_VER=""; BOT_CAPS_FILE=""
+probe_bot() {
+  [ "$BOT_PROBED" = 0 ] || return 0
+  BOT_PROBED=1
+  local img out
+  img="$(docker inspect -f '{{.Image}}' remnashop 2>/dev/null || true)"
+  [ -n "$img" ] || return 0
+  out="$(docker run --rm --network none --entrypoint sh "$img" -c \
+    'cat /opt/remnashop/VERSION 2>/dev/null; echo @@; cat /opt/remnashop/src/web/cabinet_capabilities.py 2>/dev/null' \
+    2>/dev/null || true)"
+  case "$out" in *@@*) ;; *) return 0 ;; esac
+  BOT_SEEN=1
+  BOT_VER="$(printf '%s\n' "${out%%@@*}" | tr -d ' \r\n')"
+  BOT_CAPS_FILE="${out#*@@}"
+}
+# Форматы строк заперты тестами: admin_src/tests/test_cabinet_capabilities.py и
+# cabinet/src/lib/botCapabilities.test.ts. Разъедутся — sed молча потеряет записи.
+running_cabinet_caps() { printf '%s\n' "$BOT_CAPS_FILE" | sed -nE 's/^    "([a-z0-9_]+)",$/\1/p'; }
+running_bot_only()     { printf '%s\n' "$BOT_CAPS_FILE" | sed -nE 's/^    "([a-z0-9_]+)": "[^"]*",$/\1/p'; }
+known_cabinet_caps()   { sed -nE 's/^  ([a-z0-9_]+): \{ since: "[^"]*", label: "([^"]*)" \},$/\1\t\2/p' cabinet/src/lib/botCapabilities.ts 2>/dev/null || true; }
+known_bot_only()       { sed -nE 's/^    "([a-z0-9_]+)": "([^"]*)",$/\1\t\2/p' admin_src/src/web/cabinet_capabilities.py 2>/dev/null || true; }
+# Подписи записей из $1 (токен<TAB>подпись), которых нет в списке токенов $2, — «    • …».
+missing_labels() {
+  local have="$2" tok label
+  while IFS=$'\t' read -r tok label; do
+    [ -n "$tok" ] || continue
+    printf '%s\n' "$have" | grep -qxF -- "$tok" || printf '    • %s\n' "$label"
+  done <<<"$1"
+  return 0
+}
+
+ask_scope() {
+  [ -z "$SCOPE" ] || return 0
+  if [ ! -t 0 ]; then
+    SCOPE=all
+    info "Запуск без терминала — обновляю и бота, и кабинет (как раньше). Только кабинет: ./update.sh --cabinet-only"
+    return 0
+  fi
+  local missing=""
+  if ! is_bedolaga; then
+    probe_bot
+    [ "$BOT_SEEN" = 0 ] || missing="$(missing_labels "$(known_cabinet_caps)" "$(running_cabinet_caps)")"
+  fi
+  # Вопрос — в stderr: при `./update.sh | tee лог` stdout не терминал, а человек у экрана.
+  {
+    printf '\n%sОбновление RemnaShop%s\n' "$BOLD" "$RST"
+    if is_bedolaga; then
+      echo "  Кабинет работает поверх бота «Бедолага» через адаптер — адаптер обновится вместе"
+      echo "  с кабинетом. Наш бот на этом сервере на функции кабинета не влияет."
+      echo
+      echo "  Д — обновить и наш бот: бэкап его базы, пересборка, короткий перезапуск."
+      echo "  н — только кабинет и адаптер. Наш бот и его база не трогаются."
+    else
+      echo "  Кабинет (сайт и админка) обновится в любом случае. Решите, обновлять ли бота —"
+      echo "  его код, фоновые задачи и базу данных."
+      echo
+      if [ "$BOT_SEEN" = 1 ]; then
+        echo "  Сейчас работает бот версии ${BOT_VER:-неизвестной}."
+        if [ -n "$missing" ]; then
+          echo "  Нынешнему кабинету он уже не даёт (скрыто до обновления бота):"
+          printf '%s\n' "$missing"
+        fi
+      else
+        echo "  Бот сейчас не запущен (контейнера remnashop нет) — его версию не узнать."
+      fi
+      echo
+      echo "  Д — обновить всё, как раньше: бэкап базы, пересборка бота и кабинета,"
+      echo "      короткий перезапуск бота (пока он поднимается, Telegram-бот не отвечает)."
+      echo "  н — обновить только кабинет. Бот и база не трогаются, бот работает дальше"
+      echo "      на своей версии и не перезапускается."
+      echo "      Чем рискуете: функции кабинета, которым нужен новый бот, останутся скрыты,"
+      echo "      а исправления и защита в самом боте не установятся. Скрытое включится само,"
+      echo "      когда обновите бота (./update.sh --with-bot) — кабинет пересобирать не нужно."
+    fi
+    echo
+  } >&2
+  local answer tries=0
+  while :; do
+    printf 'Обновить и бота? [Д/н]: ' >&2
+    # EOF (Ctrl+D) — не «да»: выбор должен быть осознанным. Таймаута нет по той же
+    # причине; для запуска без присмотра есть флаги.
+    if ! IFS= read -r answer; then
+      printf '\n' >&2
+      die "Ответа нет — ничего не обновлял. Без вопроса: ./update.sh --with-bot или ./update.sh --cabinet-only"
+    fi
+    answer="${answer%$'\r'}"
+    answer="${answer#"${answer%%[![:space:]]*}"}"; answer="${answer%"${answer##*[![:space:]]}"}"
+    # Перечислением, а не ${answer,,}: под локалью C кириллица в нижний регистр не
+    # приводится. «н» и «y» — одна клавиша в разных раскладках, поэтому выбор ниже
+    # проговаривается словами: ошибившийся успеет нажать Ctrl+C до бэкапа и сборки.
+    case "$answer" in
+      ""|д|Д|да|Да|ДА|y|Y|yes|Yes|YES) SCOPE=all ;;
+      н|Н|нет|Нет|НЕТ|n|N|no|No|NO) SCOPE=cabinet ;;
+      *)
+        tries=$((tries + 1))
+        [ "$tries" -lt 3 ] || die "Не понял ответ — ничего не обновлял. Без вопроса: ./update.sh --with-bot или ./update.sh --cabinet-only"
+        printf 'Ответьте «д» — обновить и бота, или «н» — только кабинет.\n' >&2
+        continue ;;
+    esac
+    break
+  done
+  if [ "$SCOPE" = all ]; then info "Обновляю бота и кабинет."
+  elif is_bedolaga; then info "Обновляю только кабинет и адаптер «Бедолаги» — наш бот не трогаю."
+  else info "Обновляю только кабинет — бот и база не трогаются."; fi
+}
+# Флаг для перезапуска: решение уже принято, второй раз не спрашиваем.
+scope_flag() { if [ "$SCOPE" = cabinet ]; then echo --cabinet-only; else echo --with-bot; fi; }
+
+ask_scope
+
 # ── 1. Бэкап БД ───────────────────────────────────────────────────────────────
 # Дампы храним ВНЕ папки репозитория, чтобы дампы БД с данными физически не лежали
 # рядом с git (защита от случайной утечки). Путь можно переопределить: BACKUP_DIR=…
 BACKUP_DIR="${BACKUP_DIR:-/opt/remnashop-backups}"
 BACKUP_KEEP="${BACKUP_KEEP:-10}"   # сколько последних дампов хранить
 if [ "$BACKUP" = 1 ]; then
-  if docker ps --format '{{.Names}}' | grep -qx remnashop-db; then
+  if [ "$SCOPE" = cabinet ]; then
+    # Контейнеры бота не пересоздаются → миграции не запускаются, а кабинет в базу не
+    # пишет. Дамп был бы лишней минутой и лишней копией персональных данных на диске.
+    info "Бэкап базы не нужен: бот и база не меняются (только кабинет)"
+    # Каталог для бэкапа тома адаптера ниже — с теми же правами, что и для дампов.
+    if is_bedolaga; then mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR" 2>/dev/null || true; fi
+  elif docker ps --format '{{.Names}}' | grep -qx remnashop-db; then
     mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR" 2>/dev/null || true
     F="$BACKUP_DIR/backup-$(date +%F-%H%M%S).sql.gz"
     info "Бэкап БД → ${F}…"
@@ -126,7 +298,7 @@ if [ "$BACKUP" = 1 ]; then
   # Память адаптера (паузы подписок) живёт в docker-томе, а не в БД бота: сам
   # бот «Бедолага» о заморозке не знает. Потеря тома = человек остался на паузе,
   # а вернуть накопленные дни нечем — поэтому кладём рядом с дампом.
-  if grep -qE '^CABINET_BACKEND=bedolaga' .env 2>/dev/null; then
+  if is_bedolaga; then
     ADP="$(grep -E '^ADAPTER_CONTAINER=' .env 2>/dev/null | tail -1 | cut -d= -f2- || true)"
     ADP="${ADP:-remnashop-cabinet-adapter}"
     # ps -a, а не ps: у остановленного адаптера состояние ровно так же ценно,
@@ -257,18 +429,23 @@ else
         rm -rf "$TMP"
         ok "Код обновлён из архива"
         # Перезапуск на свежем update.sh (иначе bash может дочитать старую версию файла).
-        # Бэкап уже сделан этим запуском → на перезапуске его пропускаем.
-        exec env _SELF_UPDATED=1 bash "$0" --no-backup
+        # Бэкап уже сделан этим запуском → на перезапуске его пропускаем. Выбор «бот или
+        # только кабинет» передаём флагом: без него новый скрипт спросил бы второй раз,
+        # а без терминала молча обновил бы и бота вопреки --cabinet-only.
+        exec env _SELF_UPDATED=1 bash "$0" --no-backup "$(scope_flag)"
       fi
       rm -rf "$TMP"
       warn "Не удалось скачать архив (нет сети/доступа) — собираю из текущего кода."
     fi
   fi
-  # Заодно (best-effort) проверяем, не вышла ли новая версия базового бота.
-  CUR_BASE="$(current_base_tag)"; LATEST_BASE="$(fetch_latest_base 2>/dev/null || true)"
-  if [ -n "$LATEST_BASE" ] && [ "$LATEST_BASE" != "$CUR_BASE" ]; then
-    warn "Доступна новая версия базового бота: ${CUR_BASE} → ${LATEST_BASE}"
-    warn "Подтянуть (с проверкой совместимости): ./update.sh --base latest"
+  # Заодно (best-effort) проверяем, не вышла ли новая версия базового бота. При «только
+  # кабинет» бот не трогаем — и советовать сейчас обновить его базу не к месту.
+  if [ "$SCOPE" = all ]; then
+    CUR_BASE="$(current_base_tag)"; LATEST_BASE="$(fetch_latest_base 2>/dev/null || true)"
+    if [ -n "$LATEST_BASE" ] && [ "$LATEST_BASE" != "$CUR_BASE" ]; then
+      warn "Доступна новая версия базового бота: ${CUR_BASE} → ${LATEST_BASE}"
+      warn "Подтянуть (с проверкой совместимости): ./update.sh --base latest"
+    fi
   fi
 fi
 
@@ -277,10 +454,62 @@ fi
 restore_user_assets || true  # best-effort — не блокирует пересборку
 
 # ── 3. Пересборка и запуск (overlay бота + кабинет) ───────────────────────────
-info "Сборка и запуск (overlay бота + кабинет, --build)…"
-$DC "${COMPOSE[@]}" up -d --build
+if [ "$SCOPE" = cabinet ]; then
+  # Адаптер «Бедолаги» — реализация контракта кабинета, а не бот: он меняется в тех же
+  # коммитах, и новый кабинет со старым адаптером посчитал бы доступным то, что адаптер
+  # ещё не выключает. --no-deps: соседей (бот, HA-копию, воркеры, базу) не трогаем.
+  SERVICES=(cabinet)
+  if is_bedolaga; then SERVICES+=(cabinet-adapter); fi
+  info "Сборка и запуск ТОЛЬКО кабинета (${SERVICES[*]}, --build); бот не трогаю…"
+  $DC "${COMPOSE[@]}" up -d --build --no-deps "${SERVICES[@]}"
+else
+  info "Сборка и запуск (overlay бота + кабинет, --build)…"
+  $DC "${COMPOSE[@]}" up -d --build
+fi
 
-# ── 4. Логи ───────────────────────────────────────────────────────────────────
-echo
-ok "${BOLD}Обновление применено.${RST} Логи (${DIM}Ctrl+C — выход${RST}):"
-$DC "${COMPOSE[@]}" logs -f --tail=30
+# ── 4. Итог «только кабинет» ──────────────────────────────────────────────────
+# Владелец должен увидеть, что осталось скрытым и чем это включить. Что нужно кабинету —
+# из свежего кода кабинета, заметные изменения «только в боте» — из свежего кода бота,
+# что есть у работающего бота — из его образа (см. probe_bot).
+cabinet_only_summary() {
+  local rev="" hidden bot_only
+  if [ -d .git ]; then rev=" (код $(git rev-parse --short HEAD 2>/dev/null || echo '?'))"; fi
+  echo
+  if is_bedolaga; then
+    ok "Обновлены кабинет и адаптер «Бедолаги»${rev}. Наш бот не тронут."
+    return 0
+  fi
+  ok "Обновлён только кабинет${rev}. Бот не тронут."
+  probe_bot
+  if [ "$BOT_SEEN" = 0 ]; then
+    warn "Версию работающего бота узнать не удалось (нет контейнера remnashop)."
+  else
+    hidden="$(missing_labels "$(known_cabinet_caps)" "$(running_cabinet_caps)")"
+    bot_only="$(missing_labels "$(known_bot_only)" "$(running_bot_only)")"
+    if [ -z "$hidden" ]; then
+      ok "Бот (версия ${BOT_VER:-неизвестна}) умеет всё, что нужно этой версии кабинета."
+    else
+      warn "Бот работает на версии ${BOT_VER:-неизвестной}. До его обновления в кабинете не будет:"
+      printf '%s\n' "$hidden"
+    fi
+    if [ -n "$bot_only" ]; then
+      warn "В самом боте не установлено:"
+      printf '%s\n' "$bot_only"
+    fi
+  fi
+  echo "  Обновить бота, когда будете готовы:  ./update.sh --with-bot"
+  echo "  Любая ручная пересборка (docker compose up -d --build) тоже обновит бота —"
+  echo "  но без бэкапа базы. Обновляйте его через ./update.sh."
+}
+
+# ── 5. Логи ───────────────────────────────────────────────────────────────────
+if [ "$SCOPE" = cabinet ]; then
+  cabinet_only_summary
+  echo
+  ok "${BOLD}Обновление применено.${RST} Логи кабинета (${DIM}Ctrl+C — выход${RST}):"
+  $DC "${COMPOSE[@]}" logs -f --tail=30 "${SERVICES[@]}"
+else
+  echo
+  ok "${BOLD}Обновление применено.${RST} Логи (${DIM}Ctrl+C — выход${RST}):"
+  $DC "${COMPOSE[@]}" logs -f --tail=30
+fi
