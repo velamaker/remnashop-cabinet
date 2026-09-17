@@ -343,6 +343,11 @@ def install() -> None:
             "plan_change_carryover",
         ),
         (
+            "тексты смены тарифа в боте",
+            "src.telegram.routers.subscription.getters",
+            "plan_change_bot",
+        ),
+        (
             "письма в оформлении кабинета",
             "src.infrastructure.services",
             "email_sender",
