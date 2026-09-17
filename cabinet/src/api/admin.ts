@@ -1513,7 +1513,8 @@ export interface AdminAdLink {
   is_active: boolean;
   created_at: string | null;
   /** Готовая ссылка от бэкенда, если он её знает: у разных ботов формат свой
-   *  (наш сайт — `?ref=`, Telegram-боты — deep-link). Пусто — показываем код. */
+   *  (наш бот — `t.me/бот?start=ad_код`, «Бедолага» — `?start=код`). Пусто —
+   *  адрес бота сейчас не получить, показываем код. */
   url?: string;
   stats?: {
     registrations: number;
