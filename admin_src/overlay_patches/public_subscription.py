@@ -727,12 +727,56 @@ async def pay_with_balance(
             ),
         )
     except Exception as e:  # noqa: BLE001
+        # ВОЗВРАЩАТЬ ДЕНЬГИ МОЖНО, ТОЛЬКО ЕСЛИ ПОКУПКА НЕ ВЫДАНА. `try` накрывает и
+        # последний шаг успешного пути — живой вызов Telegram у заблокировавшего бота.
+        # Безусловный возврат там давал бесплатную покупку, а со сменой тарифа — ещё и
+        # перенос остатка бонусом. Судим по подписке, а не по сроку: новая строка
+        # после смены бывает с более ранним сроком (см. was_change_granted).
+        from src.infrastructure.services.overlay_balance import (
+            _alert_admins_balance,
+            was_change_granted,
+        )
+
+        try:
+            await session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        granted = await was_change_granted(subscription_dao, user.id, current)
+        if granted:
+            logger.error(
+                f"pay_with_balance: user_id={user.id} — покупка {purchase_type.value} ВЫДАНА, "
+                f"но шаг после выдачи упал ({e}). Деньги НЕ возвращаем."
+            )
+            await _alert_admins_balance(
+                f"Оплата с баланса: {purchase_type.value} выдана, но последний шаг упал "
+                f"(user_id={user.id}, {price} ₽). Деньги не возвращены — проверьте, "
+                "дошло ли уведомление.",
+                title="⚠️ Оплата с баланса",
+            )
+            return {
+                "success": True,
+                "purchase_type": purchase_type.value,
+                "spent": float(price),
+                "balance": float(Decimal(str(new_balance))),
+            }
+
         await session.execute(
             text("UPDATE users SET cabinet_balance = cabinet_balance + :amt WHERE id = :id"),
             {"amt": price, "id": user.id},
         )
         await session.commit()
-        logger.warning(f"pay_with_balance: выдача user_id={user.id} упала ({e}), деньги возвращены")
+        if granted is None:
+            logger.error(
+                f"pay_with_balance: user_id={user.id} упало ({e}), деньги возвращены, "
+                "но выдачу подтвердить НЕ удалось — проверьте вручную"
+            )
+            await _alert_admins_balance(
+                f"Оплата с баланса упала (user_id={user.id}, {price} ₽, {purchase_type.value}), "
+                "деньги вернули, но выдана ли покупка — неизвестно. Нужна проверка.",
+                title="⚠️ Оплата с баланса",
+            )
+        else:
+            logger.warning(f"pay_with_balance: выдача user_id={user.id} упала ({e}), деньги возвращены")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Не удалось активировать тариф — деньги возвращены на баланс. Попробуйте позже.",

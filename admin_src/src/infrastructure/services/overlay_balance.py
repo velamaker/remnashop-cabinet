@@ -63,12 +63,47 @@ async def was_subscription_granted(
     return bool(after_expire > expire_before)
 
 
-async def _alert_admins_balance(message: str) -> None:
+async def was_change_granted(
+    subscription_dao: SubscriptionDao, user_id: int, before: object
+) -> "bool | None":
+    """Выдана ли покупка с баланса (NEW / RENEW / CHANGE). None — определить не удалось.
+
+    ПОЧЕМУ НЕ ПО СРОКУ, как `was_subscription_granted`. Смена тарифа с переносом
+    остатка создаёт НОВУЮ строку подписки, и её срок бывает РАНЬШЕ старого: полгода
+    дешёвого тарифа превращаются в два месяца дорогого. Сравнение сроков сказало бы
+    «не выдано» — и деньги вернулись бы поверх выданной смены с бонусом. Поэтому
+    главный признак — сменилась ли строка; срок вперёд — признак продления.
+
+    `before` — текущая подписка ДО списания (SubscriptionDto или None).
+    """
+    try:
+        after = await subscription_dao.get_current(user_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"pay_with_balance: не смог сверить подписку после оплаты: {exc}")
+        return None
+
+    if after is None:
+        # Подписки не было и нет — выдачи точно не было. Была, а теперь нет — странно.
+        return False if before is None else None
+    if before is None:
+        return True
+    before_id = getattr(before, "id", None)
+    after_id = getattr(after, "id", None)
+    if before_id is not None and after_id is not None and after_id != before_id:
+        return True
+    before_expire = getattr(before, "expire_at", None)
+    after_expire = getattr(after, "expire_at", None)
+    if before_expire is None or after_expire is None:
+        return None
+    return bool(after_expire > before_expire)
+
+
+async def _alert_admins_balance(message: str, title: str = "⚠️ Продление с баланса") -> None:
     """Сказать владельцу. Никогда не мешает основному пути."""
     try:
         from src.infrastructure.services.overlay_push import push_admins_standalone
 
-        await push_admins_standalone({"title": "⚠️ Продление с баланса", "body": message})
+        await push_admins_standalone({"title": title, "body": message})
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"renew_current_from_balance: не предупредил владельца: {exc}")
 
