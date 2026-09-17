@@ -5,7 +5,7 @@ import { I18nProvider } from "@/i18n/I18nContext";
 import { STORAGE_KEY } from "@/i18n/config";
 import { translate } from "@/i18n/translate";
 import type { Appearance } from "@/api/appearance";
-import type { SubscriptionOffersResponse } from "@/types/api";
+import type { PlanChangeCarryEntry, SubscriptionOffersResponse } from "@/types/api";
 import { GW, offers, offersWithoutTerms, plan } from "@/test/offersFixtures";
 
 // Замок денежного пути. Смена тарифа у нас сжигает остаток срока, поэтому первый
@@ -176,5 +176,89 @@ describe("BillingPage: ссылка ?plan=&days= только предвыбир
     expect(selectButton()).toBeNull();
     await expand("DUO2");
     expect(document.body.textContent).toContain(ru("billing.forDays", { days: 30 }));
+  });
+});
+
+// ── перенос остатка по цене дня ──────────────────────────────────────────────
+
+const carryEntry = (code: string, days: number, bonus: number, lost = 0): PlanChangeCarryEntry => ({
+  plan_code: code,
+  duration_days: days,
+  currency: "RUB",
+  mode: "carry",
+  bonus_days: bonus,
+  lost_days: lost,
+  capped: false,
+});
+
+const carrying = (entries: PlanChangeCarryEntry[], over: Partial<SubscriptionOffersResponse> = {}) =>
+  offers(showcase(), {
+    plan_change_keeps_days: true,
+    carry_mode: "carry",
+    current_days_left: 29,
+    plan_change_carry: entries,
+    ...over,
+  });
+
+describe("BillingPage: перенос остатка — с первого клика, спрашиваем только при потере", () => {
+  it("шлюз: «добавится 14 дн.» видно до клика, purchase — с первого клика ровно раз", async () => {
+    open(carrying([carryEntry("DUO2", 30, 14)]));
+    await expand("DUO2");
+    expect(document.body.textContent).toContain(ru("billing.changeCarry", { left: 29, bonus: 14 }));
+    expect(document.body.textContent).not.toContain(ru("billing.changeWarn", { days: 29 }));
+
+    fireEvent.click(selectButton()!);
+    await waitFor(() => expect(purchase).toHaveBeenCalledTimes(1));
+    expect(purchase).toHaveBeenCalledWith({ plan_code: "DUO2", duration_days: 30, gateway_type: GW });
+    expect(yesButton()).toBeNull();
+  });
+
+  it("баланс: то же — списание с первого клика", async () => {
+    open(carrying([carryEntry("DUO2", 30, 14)]));
+    await expand("DUO2");
+    fireEvent.click(balanceButton()!);
+    await waitFor(() => expect(payWithBalance).toHaveBeenCalledTimes(1));
+    expect(yesButton()).toBeNull();
+  });
+
+  it("часть перенести нельзя: первый клик только спрашивает, «Да» платит один раз", async () => {
+    open(carrying([carryEntry("DUO2", 30, 11, 3)]));
+    await expand("DUO2");
+    expect(document.body.textContent).toContain(ru("billing.changeCarryLost", { bonus: 11, lost: 3 }));
+
+    fireEvent.click(selectButton()!);
+    await act(async () => {});
+    expect(purchase).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain(ru("billing.changeCarryConfirm", { lost: 3, bonus: 11 }));
+
+    fireEvent.click(yesButton()!);
+    await waitFor(() => expect(purchase).toHaveBeenCalledTimes(1));
+  });
+
+  it("смена срока 30 → 90 меняет число в тексте", async () => {
+    open(carrying([carryEntry("DUO2", 30, 14), carryEntry("DUO2", 90, 45)]));
+    await expand("DUO2");
+    expect(document.body.textContent).toContain(ru("billing.changeCarry", { left: 29, bonus: 14 }));
+    fireEvent.click(screen.getByRole("button", { name: ru("billing.termDays", { d: 90 }) }));
+    expect(document.body.textContent).toContain(ru("billing.changeCarry", { left: 29, bonus: 45 }));
+    expect(document.body.textContent).not.toContain(ru("billing.changeCarry", { left: 29, bonus: 14 }));
+  });
+
+  it("остаток дешевле дня нового тарифа — «ничего не добавится», без подтверждения", async () => {
+    open(carrying([carryEntry("DUO2", 30, 0)]));
+    await expand("DUO2");
+    expect(document.body.textContent).toContain(ru("billing.changeCarrySmall", { left: 29 }));
+    fireEvent.click(selectButton()!);
+    await waitFor(() => expect(purchase).toHaveBeenCalledTimes(1));
+  });
+
+  it("бессрочная при включённом переносе — подтверждение про «навсегда», как раньше", async () => {
+    open(carrying([], { carry_mode: "lifetime", current_is_unlimited: true, current_days_left: null }));
+    await expand("DUO2");
+    expect(document.body.textContent).toContain(ru("billing.changeWarnLifetime"));
+    fireEvent.click(selectButton()!);
+    await act(async () => {});
+    expect(purchase).not.toHaveBeenCalled();
+    expect(yesButton()).not.toBeNull();
   });
 });

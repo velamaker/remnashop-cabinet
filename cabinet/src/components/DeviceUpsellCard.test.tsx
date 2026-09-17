@@ -219,3 +219,43 @@ describe("DeviceUpsellCard на Главной", () => {
     expect(screen.queryByRole("link", { name: new RegExp(say("deviceUpsell.cta")) })).toBeNull();
   });
 });
+
+describe("DeviceUpsellCard: перенос остатка по цене дня", () => {
+  const carrying = (lost: number, days = 29) =>
+    offers(showcase(), {
+      plan_change_keeps_days: true,
+      carry_mode: "carry",
+      current_days_left: days,
+      plan_change_carry: [
+        { plan_code: "DUO2", duration_days: 30, currency: "RUB", mode: "carry", bonus_days: 14, lost_days: lost },
+      ],
+    });
+
+  it("«Устройства»: вместо «сгорит» — сколько перенесётся", async () => {
+    offersMock.mockResolvedValue(carrying(0));
+    view("devices", soloSub(), soloFull());
+    await screen.findByRole("link", { name: new RegExp(say("deviceUpsell.cta")) });
+    expect(document.body.textContent).toContain(say("deviceUpsell.carryDays", { left: 29, bonus: 14 }));
+    expect(document.body.textContent).not.toContain(say("deviceUpsell.keepDays", { days: 29 }));
+  });
+
+  it("«Устройства»: часть перенести нельзя — предупреждение с числами", async () => {
+    offersMock.mockResolvedValue(carrying(9));
+    view("devices", soloSub(), soloFull());
+    await screen.findByRole("link", { name: new RegExp(say("deviceUpsell.cta")) });
+    expect(document.body.textContent).toContain(say("billing.changeCarryLost", { bonus: 14, lost: 9 }));
+  });
+
+  it("Главная, последняя неделя: перенос без потерь — блок есть; потеря 9 дн. — пусто", async () => {
+    offersMock.mockResolvedValue(carrying(0, 5));
+    view("home", soloSub(5.5), soloFull());
+    await screen.findByRole("link", { name: new RegExp(say("deviceUpsell.cta")) });
+    cleanup();
+
+    offersMock.mockResolvedValue(carrying(9, 5));
+    const { container } = view("home", soloSub(5.5), soloFull());
+    await waitFor(() => expect(offersMock).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(container.textContent).toBe("");
+  });
+});

@@ -78,7 +78,14 @@ describe("i18n ключи из кода", () => {
     // молча стать зелёным. Ключи блока устройств и подтверждения смены тарифа
     // проверяем поимённо: их забыть при переносе дороже всего.
     expect(used.size).toBeGreaterThan(100);
-    for (const key of ["deviceUpsell.title", "billing.changeWarn", "billing.changeConfirmYes"]) {
+    for (const key of [
+      "deviceUpsell.title",
+      "billing.changeWarn",
+      "billing.changeConfirmYes",
+      "billing.changeCarry",
+      "billing.changeCarryConfirm",
+      "deviceUpsell.carryDays",
+    ]) {
       expect(used.has(key), `поиск не нашёл ${key} в коде`).toBe(true);
     }
     const missing = [...used.entries()]

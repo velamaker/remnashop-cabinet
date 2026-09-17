@@ -5,7 +5,7 @@ import type {
   SubscriptionInfoResponse,
   SubscriptionOffersResponse,
 } from "@/types/api";
-import type { ChangeLoss } from "@/lib/planChange";
+import type { ChangeTerms } from "@/lib/planChange";
 import { freeableSlots, sameDeviceGroups } from "@/lib/deviceGroups";
 import { daysUntil } from "@/lib/format";
 
@@ -17,8 +17,9 @@ import { daysUntil } from "@/lib/format";
  * счётчик «2 из 2» и шёл в поддержку. Теперь рядом — ближайший тариф, где устройств
  * больше, со ссылкой на оплату.
  *
- * ГЛАВНОЕ ОГРАНИЧЕНИЕ. Смена тарифа у нас сжигает остаток срока (см. planChange).
- * Поэтому на «Устройствах» блок честно пишет, сколько дней пропадёт, а на Главной
+ * ГЛАВНОЕ ОГРАНИЧЕНИЕ. Смена тарифа переносит остаток по цене дня, но не всегда
+ * целиком (см. planChange): перенос выключен, дни без известной цены, бессрочная.
+ * Поэтому на «Устройствах» блок честно пишет, что будет с остатком, а на Главной
  * появляется только тогда, когда пропадёт немного — иначе он звал бы платить и тут
  * же отговаривал.
  *
@@ -134,8 +135,9 @@ export function homePrecheck(sub: SubscriptionInfoResponse): boolean {
 }
 
 /** Главная после ответа витрины: потеря не больше недели (или её нет вовсе). */
-export function homeAllows(loss: ChangeLoss): boolean {
-  if (loss === null) return true;
-  if (loss.kind === "lifetime") return false;
-  return loss.days <= HOME_MAX_LOST_DAYS;
+export function homeAllows(terms: ChangeTerms): boolean {
+  if (terms === null) return true;
+  if (terms.kind === "lifetime") return false;
+  if (terms.kind === "carry") return terms.lost <= HOME_MAX_LOST_DAYS;
+  return terms.days <= HOME_MAX_LOST_DAYS;
 }

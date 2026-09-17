@@ -146,14 +146,32 @@ export interface PlanOfferResponse {
   durations: DurationOfferResponse[];
 }
 
+/**
+ * Сколько дней добавит перенос остатка при смене на (тариф, срок, валюта).
+ * `mode`: carry — по цене дня; same_plan — тот же тариф, 1:1; unpriced — у срока нет
+ * цены, перенести нельзя; none — новый тариф бессрочный, переносить нечего.
+ * `lost_days` уже включает упор в технический предел (`capped`).
+ */
+export interface PlanChangeCarryEntry {
+  plan_code: string;
+  duration_days: number;
+  currency: string;
+  mode: "carry" | "same_plan" | "unpriced" | "none" | string;
+  bonus_days: number;
+  lost_days: number;
+  capped?: boolean;
+  extras_lost?: number;
+}
+
 export interface SubscriptionOffersResponse {
   gateways: GatewayOfferResponse[];
   plans: PlanOfferResponse[];
   has_current_subscription: boolean;
   current_subscription_status: string | null;
-  // Условия смены тарифа (CHANGE). Шлёт только наш бэкенд: у нас смена = срок с
-  // нуля, и остаток текущей подписки сгорает. Поля нет (чужой бэкенд, старая
-  // сборка) — кабинет не предупреждает и смену тарифа сам не предлагает.
+  // Условия смены тарифа (CHANGE). Шлёт только наш бэкенд. true — остаток переносится
+  // по цене дня (сколько — в plan_change_carry); false — перенос выключен, смена
+  // начинает срок с нуля. Поля нет (чужой бэкенд, старая сборка) — кабинет не
+  // предупреждает и смену тарифа сам не предлагает.
   plan_change_keeps_days?: boolean;
   // Полные оставшиеся сутки (на паузе — сохранённый остаток); null у бессрочной.
   current_days_left?: number | null;
@@ -161,6 +179,10 @@ export interface SubscriptionOffersResponse {
   current_is_unlimited?: boolean | null;
   // null — бэкенд не смог узнать про паузу.
   current_frozen?: boolean | null;
+  // Режим текущей подписки при переносе: carry | lifetime | reserve | refund | none.
+  carry_mode?: string | null;
+  // Записи только при carry_mode = carry и только для тарифов со сменой.
+  plan_change_carry?: PlanChangeCarryEntry[] | null;
 }
 
 export interface PurchaseRequest {

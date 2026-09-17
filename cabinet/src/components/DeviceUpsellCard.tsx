@@ -10,7 +10,7 @@ import {
   homePrecheck,
   pickDeviceUpgrade,
 } from "@/lib/deviceUpsell";
-import { billingHref, changeLoss, paymentsBlocked } from "@/lib/planChange";
+import { billingHref, changeTerms, paymentsBlocked } from "@/lib/planChange";
 import type {
   DevicesResponse,
   SubscriptionInfoResponse,
@@ -44,9 +44,9 @@ function rememberHidden() {
  * - «Устройства» (variant="devices"): при упоре всегда — сюда панель сама отправляет
  *   тех, у кого новое устройство не подключилось. Если места заняли дубли одного
  *   аппарата и уборка снимает упор, молчим: там уже есть подсказка про дубли.
- * - Главная (variant="home"): тариф — только когда смена сжигает не больше недели
- *   (иначе блок звал бы платить и тут же отговаривал); при дублях — карточка
- *   «освободите места». Крестик прячет блок на неделю.
+ * - Главная (variant="home"): тариф — только когда при смене пропадёт не больше недели
+ *   (остаток переносится по цене дня; иначе блок звал бы платить и тут же
+ *   отговаривал); при дублях — карточка «освободите места». Крестик прячет блок на неделю.
  *
  * Запросов лишних не делает: ждёт оформление (на чужом бэкенде возможность может
  * быть выключена), ходит за витриной только при упоре и только один раз, а на
@@ -154,8 +154,8 @@ export function DeviceUpsellCard({
 
   if (state.kind !== "full" || !wantOffers || !offers || !upgrade || !devices) return null;
 
-  const loss = changeLoss(offers, upgrade.plan);
-  if (variant === "home" && !homeAllows(loss)) return null;
+  const terms = changeTerms(offers, upgrade.plan, upgrade.days, upgrade.price.currency);
+  if (variant === "home" && !homeAllows(terms)) return null;
 
   const { plan, days, price } = upgrade;
   const priceText = price.is_free
@@ -189,9 +189,23 @@ export function DeviceUpsellCard({
           <p className="tabular mt-0.5 text-xs text-fg-subtle">
             {priceText} · {t("billing.forDays", { days })}
           </p>
-          {loss?.kind === "days" && (
+          {terms?.kind === "days" && (
             <p className="mt-2 rounded-lg border border-warning/40 bg-warning/10 px-2.5 py-1.5 text-xs text-fg">
-              {t("deviceUpsell.keepDays", { days: loss.days })}
+              {t("deviceUpsell.keepDays", { days: terms.days })}
+            </p>
+          )}
+          {/* Остаток переносится: спокойная строка. Часть перенести нельзя — предупреждение
+              вместо неё (две строки подряд «не пропадёт» и «пропадёт» спорили бы). */}
+          {terms?.kind === "carry" && terms.lost === 0 && (
+            <p className="mt-2 rounded-lg border border-border-subtle bg-bg-subtle px-2.5 py-1.5 text-xs text-fg-muted">
+              {terms.samePlan
+                ? t("billing.changeCarrySamePlan", { left: terms.left })
+                : t("deviceUpsell.carryDays", { left: terms.left, bonus: terms.bonus })}
+            </p>
+          )}
+          {terms?.kind === "carry" && terms.lost > 0 && (
+            <p className="mt-2 rounded-lg border border-warning/40 bg-warning/10 px-2.5 py-1.5 text-xs text-fg">
+              {t("billing.changeCarryLost", { bonus: terms.bonus, lost: terms.lost })}
             </p>
           )}
           <Link

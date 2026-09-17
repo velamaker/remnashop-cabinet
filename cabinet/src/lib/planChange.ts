@@ -1,22 +1,34 @@
 import type { Appearance } from "@/api/appearance";
-import type { PlanOfferResponse, SubscriptionOffersResponse } from "@/types/api";
+import type { PaymentGatewayType, PlanOfferResponse, SubscriptionOffersResponse } from "@/types/api";
 
 /**
- * Смена тарифа и что при ней сгорает.
+ * Смена тарифа: что будет с остатком текущей подписки.
  *
- * ЗАЧЕМ. Смена тарифа (CHANGE) у нашего бэкенда — срок С НУЛЯ: новый срок = момент
- * оплаты + длительность, остаток текущей подписки не переносится. У бессрочной
- * подписки CHANGE стоит на всех тарифах, и «навсегда» превращается в выбранный
- * срок. Бот об этом предупреждает, кабинет молчал — а блок «Нужно больше
- * устройств?» сам ведёт людей к смене тарифа. Поэтому страница оплаты честно
- * пишет, сколько дней пропадёт, и просит подтвердить.
+ * ЗАЧЕМ. У нашего бэкенда смена тарифа (CHANGE) пересчитывает остаток в дни нового
+ * тарифа по цене дня (`plan_change_keeps_days: true`, числа — в `plan_change_carry`).
+ * Если перенос выключен, смена начинает срок С НУЛЯ, и остаток сгорает; у бессрочной
+ * подписки «навсегда» превращается в выбранный срок. Страница оплаты честно пишет,
+ * что произойдёт, и просит подтвердить, только когда что-то пропадает.
  *
  * Условия смены сообщает бэкенд в /subscription/offers. Поля нет (чужой бэкенд,
  * старая сборка) — предупреждать не о чем: кабинет не знает, как там устроена
- * смена, и не выдумывает потерю.
+ * смена, и не выдумывает ни потерю, ни перенос.
  */
 
 export type ChangeLoss = { kind: "days"; days: number } | { kind: "lifetime" } | null;
+
+/**
+ * Что будет с остатком при покупке этого тарифа на этот срок в этой валюте.
+ *  - carry — остаток перенесётся: `bonus` дн. к новому сроку, `lost` дн. перенести нельзя;
+ *  - lifetime — бессрочная подписка станет срочной;
+ *  - days — остаток сгорит (перенос выключен, был возврат, нет цены срока);
+ *  - null — терять нечего или бэкенд не сообщил условия.
+ */
+export type ChangeTerms =
+  | { kind: "carry"; left: number; bonus: number; lost: number; samePlan?: boolean }
+  | { kind: "lifetime" }
+  | { kind: "days"; days: number }
+  | null;
 
 /** Что сгорит, если купить этот тариф. null — ничего (или бэкенд не сообщил). */
 export function changeLoss(offers: SubscriptionOffersResponse, plan: PlanOfferResponse): ChangeLoss {
@@ -30,6 +42,59 @@ export function changeLoss(offers: SubscriptionOffersResponse, plan: PlanOfferRe
   const days = offers.current_days_left;
   if (typeof days !== "number" || !Number.isFinite(days) || days < 1) return null;
   return { kind: "days", days: Math.floor(days) };
+}
+
+/**
+ * Условия смены для карточки тарифа. Сервер всё равно пересчитает в момент оплаты —
+ * это только показ, поэтому при любой неясности выбираем честную сторону («сгорит»).
+ */
+export function changeTerms(
+  offers: SubscriptionOffersResponse,
+  plan: PlanOfferResponse,
+  days: number | null,
+  currency: string | null,
+): ChangeTerms {
+  if (typeof offers.plan_change_keeps_days !== "boolean") return null;
+  if (plan.recommended_purchase_type !== "CHANGE") return null;
+  // Перенос выключен — прежнее правило: остаток сгорает.
+  if (!offers.plan_change_keeps_days) return changeLoss(offers, plan);
+  if (offers.current_is_unlimited === true) return { kind: "lifetime" };
+  if (offers.current_is_trial === true) return null;
+  // Резерв и «нечего переносить» (истекла, удалена) — молчим.
+  if (offers.carry_mode === "reserve" || offers.carry_mode === "none") return null;
+  const raw = offers.current_days_left;
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 1) return null;
+  const left = Math.floor(raw);
+  // Переключатель сроков — объединение по всем тарифам: у этой карточки такого срока
+  // может не быть (кнопка там и так выключена) — не пугаем «сгорит».
+  if (days == null || !plan.durations.some((d) => d.days === days)) return null;
+  // Был возврат — перенос отключён сервером.
+  if (offers.carry_mode === "refund") return { kind: "days", days: left };
+  const entry = (offers.plan_change_carry ?? []).find(
+    (e) => e.plan_code === plan.public_code && e.duration_days === days && e.currency === currency,
+  );
+  if (!entry || entry.mode === "unpriced") return { kind: "days", days: left };
+  if (entry.mode === "none") return null;
+  const bonus = Math.max(0, Math.floor(entry.bonus_days));
+  const lost = Math.max(0, Math.floor(entry.lost_days));
+  if (entry.mode === "same_plan") return { kind: "carry", left, bonus, lost, samePlan: true };
+  return { kind: "carry", left, bonus, lost };
+}
+
+/** Спрашивать ли подтверждение перед оплатой: только когда что-то пропадает. */
+export function needsConfirm(terms: ChangeTerms): boolean {
+  if (terms === null) return false;
+  if (terms.kind === "carry") return terms.lost > 0;
+  return true;
+}
+
+/** Валюта выбранного шлюза — по ней выбирается строка переноса. */
+export function currencyOf(
+  offers: SubscriptionOffersResponse,
+  gateway: PaymentGatewayType | null,
+): string | null {
+  if (gateway == null) return null;
+  return offers.gateways.find((g) => g.gateway_type === gateway)?.currency ?? null;
 }
 
 /** Ссылка на страницу оплаты с раскрытым тарифом и выбранным сроком. Сама не платит. */

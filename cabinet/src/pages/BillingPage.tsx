@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { clsx } from "clsx";
-import { AlertTriangle, Check, ChevronDown, Sparkles, Wallet } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, Info, Sparkles, Wallet } from "lucide-react";
 import { subscriptionApi } from "@/api/subscription";
 import { balanceApi } from "@/api/balance";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -9,7 +9,14 @@ import { PromocodeCard } from "@/components/PromocodeCard";
 import { TrialDiscountBanner } from "@/components/TrialDiscountBanner";
 import { RenewalDiscountBanner } from "@/components/RenewalBanner";
 import { formatTrafficLimit } from "@/lib/format";
-import { changeLoss, paymentsBlocked, readBillingPreselect, type ChangeLoss } from "@/lib/planChange";
+import {
+  changeTerms,
+  currencyOf,
+  needsConfirm,
+  paymentsBlocked,
+  readBillingPreselect,
+  type ChangeTerms,
+} from "@/lib/planChange";
 import type {
   PaymentGatewayType,
   PlanOfferResponse,
@@ -46,8 +53,9 @@ type ConfirmAction = "gateway" | "balance";
  * по клику раскрывается со списком фич и кнопкой «Выбрать». Открыта может
  * быть только одна карточка одновременно (управляется родителем).
  *
- * Если покупка сожжёт остаток текущей подписки (`loss`), над кнопками висит
- * предупреждение, а первый клик по оплате только спрашивает подтверждение
+ * Над кнопками — что будет с остатком текущей подписки (`terms`): перенос по цене
+ * дня спокойной строкой, потеря — предупреждением. Если что-то пропадает
+ * (`needsConfirm`), первый клик по оплате только спрашивает подтверждение
  * (`confirmAction`) — платит второй.
  */
 function PlanCard({
@@ -57,7 +65,7 @@ function PlanCard({
   busy,
   balance,
   expanded,
-  loss,
+  terms,
   confirmAction,
   onToggle,
   onBuy,
@@ -70,7 +78,7 @@ function PlanCard({
   busy: boolean;
   balance: number;
   expanded: boolean;
-  loss: ChangeLoss;
+  terms: ChangeTerms;
   confirmAction: ConfirmAction | null;
   onToggle: () => void;
   onBuy: () => void;
@@ -168,16 +176,32 @@ function PlanCard({
             ))}
           </ul>
 
-          {/* Предупреждение до клика: сколько сгорит, видно раньше, чем кнопка оплаты. */}
-          {loss && !confirmAction && (canBuy || canPayBalance) && (
-            <p className="mt-4 flex gap-2 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs text-fg">
-              <AlertTriangle className="mt-px h-4 w-4 shrink-0 text-warning" />
-              <span>
-                {loss.kind === "days"
-                  ? t("billing.changeWarn", { days: loss.days })
-                  : t("billing.changeWarnLifetime")}
-              </span>
-            </p>
+          {/* До клика: что будет с остатком, видно раньше, чем кнопка оплаты. Перенос без
+              потерь — нейтрально (это не беда), потеря — предупреждением. */}
+          {terms && !confirmAction && (canBuy || canPayBalance) && (
+            needsConfirm(terms) ? (
+              <p className="mt-4 flex gap-2 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs text-fg">
+                <AlertTriangle className="mt-px h-4 w-4 shrink-0 text-warning" />
+                <span>
+                  {terms.kind === "days"
+                    ? t("billing.changeWarn", { days: terms.days })
+                    : terms.kind === "carry"
+                      ? t("billing.changeCarryLost", { bonus: terms.bonus, lost: terms.lost })
+                      : t("billing.changeWarnLifetime")}
+                </span>
+              </p>
+            ) : terms.kind === "carry" ? (
+              <p className="mt-4 flex gap-2 rounded-xl border border-[var(--border-subtle)] bg-bg-subtle px-3 py-2.5 text-xs text-fg-muted">
+                <Info className="mt-px h-4 w-4 shrink-0 text-accent" />
+                <span>
+                  {terms.samePlan
+                    ? t("billing.changeCarrySamePlan", { left: terms.left })
+                    : terms.bonus > 0
+                      ? t("billing.changeCarry", { left: terms.left, bonus: terms.bonus })
+                      : t("billing.changeCarrySmall", { left: terms.left })}
+                </span>
+              </p>
+            ) : null
           )}
 
           {/* Подтверждение прямо в карточке, а не window.confirm: оплата идёт и из
@@ -188,9 +212,11 @@ function PlanCard({
               <p className="flex gap-2 text-sm text-fg">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
                 <span>
-                  {loss?.kind === "days"
-                    ? t("billing.changeConfirm", { days: loss.days })
-                    : t("billing.changeWarnLifetime")}
+                  {terms?.kind === "days"
+                    ? t("billing.changeConfirm", { days: terms.days })
+                    : terms?.kind === "carry"
+                      ? t("billing.changeCarryConfirm", { lost: terms.lost, bonus: terms.bonus })
+                      : t("billing.changeWarnLifetime")}
                 </span>
               </p>
               <div className="mt-3 flex flex-col gap-2 sm:flex-row">
@@ -308,13 +334,17 @@ export default function BillingPage() {
     setConfirm(null);
   }, [selectedDays, selectedGateway, expandedCode]);
 
+  /** Что будет с остатком при покупке тарифа на выбранный срок выбранным шлюзом. */
+  const termsFor = (plan: PlanOfferResponse): ChangeTerms =>
+    offers ? changeTerms(offers, plan, selectedDays, currencyOf(offers, selectedGateway)) : null;
+
   /**
-   * Первый клик по оплате тарифа, который сожжёт остаток, только спрашивает.
+   * Первый клик по оплате тарифа, при смене на который что-то пропадёт, только
+   * спрашивает. Перенос без потерь платится с первого клика.
    * true — можно платить; false — показали подтверждение и ждём второго клика.
    */
   const confirmed = (plan: PlanOfferResponse, action: ConfirmAction): boolean => {
-    const loss = offers ? changeLoss(offers, plan) : null;
-    if (loss && !(confirm?.code === plan.public_code && confirm.action === action)) {
+    if (needsConfirm(termsFor(plan)) && !(confirm?.code === plan.public_code && confirm.action === action)) {
       setConfirm({ code: plan.public_code, action });
       return false;
     }
@@ -513,7 +543,7 @@ export default function BillingPage() {
             busy={purchasingCode === plan.public_code}
             balance={balance}
             expanded={expandedCode === plan.public_code}
-            loss={changeLoss(offers, plan)}
+            terms={termsFor(plan)}
             confirmAction={confirm?.code === plan.public_code ? confirm.action : null}
             onToggle={() =>
               setExpandedCode((c) => (c === plan.public_code ? null : plan.public_code))
