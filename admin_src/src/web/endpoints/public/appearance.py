@@ -24,6 +24,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import FileResponse
 
 from src.application.common.dao import SettingsDao
+from src.web.cabinet_capabilities import public_capabilities
 
 router = APIRouter(prefix="/appearance", tags=["Public - Appearance"])
 
@@ -203,6 +204,11 @@ async def get_appearance(settings_dao: FromDishka[SettingsDao]) -> dict[str, Any
     from src.infrastructure.services.auth_settings import telegram_oidc_enabled
 
     data["telegram_oidc_enabled"] = telegram_oidc_enabled()
+    # Что из нужного кабинету умеет этот бот: кабинет бывает новее бота (обновили
+    # только кабинет или он на отдельном сервере) и прячет то, чего здесь ещё нет.
+    # Поле `features` наш бот НЕ шлёт: в кабинете оно означает «чужой бэкенд решает
+    # сам», и проверка возможностей бота выключилась бы целиком.
+    data["bot_capabilities"] = public_capabilities()
     return data
 
 
