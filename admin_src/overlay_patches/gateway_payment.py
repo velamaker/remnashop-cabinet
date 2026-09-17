@@ -21,6 +21,14 @@ payment.py (608 строк). Меняются в нём ровно два мес
 нетронутая логика. Копировать в денежном пути нечего — ровно то, чему научил
 `NameError` в подтверждении подарка.
 
+ЧЕТВЁРТАЯ — ОТЧЁТ О ПЕРЕНОСЕ ОСТАТКА. Смену тарифа с переносом выполняет правка
+покупки (plan_change_carryover.py), а владельцу о ней говорит этот обработчик: после
+успешной выдачи CHANGE — уведомление с числами, сбой расчёта — «остаток не пересчитан,
+добавьте вручную», правка покупки не встала в ЭТОМ процессе (непересобранный воркер) —
+алерт ровно в момент вреда. Возврат (REFUNDED) по платежу, из которого дни ушли в
+перенос, — алерт с подпиской и днями: база подписку при возврате не отзывает.
+Всё это best-effort в `try`: уведомление не имеет права сорвать оплаченную выдачу.
+
 ЭТО ДЕНЕЖНЫЙ ПУТЬ, поэтому сверка исходника обязательна: апстрим правит что-то
 внутри `_handle_success` — правка не применяется и кричит, а не подменяет молча
 изменившуюся логику зачисления.
@@ -38,6 +46,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # не требуется — overlay_topup не тянет application-слой на верхнем уровне.
 from src.infrastructure.services.overlay_gift import try_issue_gift
 from src.infrastructure.services.overlay_topup import try_credit_topup
+# Сервис переноса остатка: только stdlib/sqlalchemy/loguru, как и два выше.
+from src.infrastructure.services import overlay_plan_change as carry
 
 from src.application.common import (
     EventPublisher,
@@ -106,6 +116,7 @@ from src.core.utils.i18n_helpers import (
 )
 
 from . import PatchTargetChanged, expect_source
+from .plan_change_carryover import outcome_for
 
 # sha256 методов базы v0.8.2.
 BASE_METHODS = {
@@ -116,6 +127,102 @@ BASE_METHODS = {
     # Апстрим поменяет набор — поднимать счёт в PENDING станет бессмысленно.
     "ProcessPayment._execute": "a7edbdbbbff93e2c58eee96289a296b5940d1994450004fa8cc3ca4164f1c1e0",
 }
+
+
+async def _notify_admins_raw(self, content: str) -> None:
+    await self.notifier.notify_admins(
+        MessagePayloadDto(
+            i18n_key="raw-message",
+            i18n_kwargs={"content": content},
+            # Без этого сообщение самоуничтожится через 5 секунд (дефолт payload).
+            delete_after=None,
+        )
+    )
+
+
+def _days_left(subscription) -> "int | None":
+    expire = getattr(subscription, "expire_at", None)
+    if expire is None or getattr(subscription, "is_unlimited", False):
+        return None
+    from src.core.utils.time import datetime_now
+
+    return max(0, int((expire - datetime_now()).total_seconds()) // carry.DAY)
+
+
+async def _after_change(self, user: UserDto, transaction: TransactionDto, before) -> None:
+    """Сказать владельцу, чем кончилась смена тарифа. Только после выдачи, только в try."""
+    config = carry.load_config()
+    if not config.get("enabled") or before is None or getattr(before, "is_trial", False):
+        return
+
+    outcome = outcome_for(self.purchase_subscription, transaction.payment_id)
+    if outcome is None:
+        # Выключатель включён, CHANGE не-триала, а наша ветка не работала: правка покупки
+        # в этом процессе не встала (или ей не дали сессию) — база сожгла остаток.
+        logger.error(
+            f"carry: перенос не применился в процессе {carry.process_name()} "
+            f"(счёт '{transaction.payment_id}', user {user.log})"
+        )
+        await _notify_admins_raw(self, carry.admin_not_applied_text(user.log, _days_left(before)))
+        return
+    if outcome.get("skipped") or not outcome.get("applied"):
+        return
+
+    result = outcome["result"]
+    if outcome.get("load_error"):
+        await _notify_admins_raw(
+            self, carry.admin_failed_text(user.log, outcome["load_error"], result.remaining_days)
+        )
+        return
+    if outcome.get("record_error"):
+        await _notify_admins_raw(
+            self,
+            carry.admin_unrecorded_text(user.log, result, outcome["record_error"], transaction.payment_id),
+        )
+        return
+    if result.mode != "refund" and not config.get("notify_admins"):
+        return
+    old_plan = getattr(before, "plan_snapshot", None)
+    await _notify_admins_raw(
+        self,
+        carry.admin_carry_text(
+            user.log,
+            outcome.get("old_plan_name") or getattr(old_plan, "name", "—"),
+            transaction.plan_snapshot.name,
+            transaction.plan_snapshot.duration,
+            result,
+            transaction.payment_id,
+        ),
+    )
+
+
+async def _status_before_refund(self, payment_id) -> "str | None":
+    session = getattr(self, "session", None)
+    if session is None:
+        return None
+    try:
+        return await carry.transaction_status(session, payment_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"carry: статус счёта '{payment_id}' до возврата не прочитан: {exc}")
+        return None
+
+
+async def _alert_refunded_carry(self, data, before: "str | None") -> None:
+    """Возврат по платежу, чьи дни ушли в перенос: база подписку не отзывает — владелец решает.
+
+    Алертим, только если переход РЕАЛЬНО случился (был COMPLETED, стал REFUNDED): база
+    при несовпавшем переходе молча выходит, и повтор вебхука не должен слать второй алерт.
+    """
+    if before != TransactionStatus.COMPLETED.value:
+        return
+    session = self.session
+    after = await carry.transaction_status(session, data.payment_id)
+    if after != TransactionStatus.REFUNDED.value:
+        return
+    carries = await carry.carries_by_source_payment(session, data.payment_id)
+    if not carries:
+        return
+    await _notify_admins_raw(self, carry.admin_refund_text(data.payment_id, carries))
 
 
 def apply() -> str:
@@ -297,6 +404,15 @@ def apply() -> str:
                 await self.redirect.to_failed_payment(user.telegram_id)
             raise PurchaseError(e)
 
+        # OVERLAY: отчёт о переносе остатка при смене тарифа (best-effort, после выдачи).
+        if transaction.purchase_type == PurchaseType.CHANGE:
+            try:
+                await _after_change(self, user, transaction, subscription)
+            except Exception:  # noqa: BLE001 — уведомление не срывает выдачу
+                logger.exception(
+                    f"carry: отчёт о смене тарифа не отправлен (счёт '{transaction.payment_id}')"
+                )
+
         await self.event_publisher.publish(event)
 
         if not transaction.pricing.is_free:
@@ -350,7 +466,14 @@ def apply() -> str:
                 logger.exception(
                     f"Опоздавший платёж: не смог поднять счёт '{data.payment_id}'"
                 )
+        refund = data.new_transaction_status == TransactionStatus.REFUNDED
+        status_before = await _status_before_refund(self, data.payment_id) if refund else None
         await base_execute(self, actor, data)
+        if refund:
+            try:
+                await _alert_refunded_carry(self, data, status_before)
+            except Exception:  # noqa: BLE001 — алерт не ломает обработку возврата
+                logger.exception(f"carry: алерт возврата по '{data.payment_id}' не отправлен")
 
     async def _revive_canceled(self, data) -> None:
         async with self.uow:
@@ -399,4 +522,7 @@ def apply() -> str:
     target.ProcessPayment.__init__ = ProcessPayment_init
     target.ProcessPayment._handle_success = ProcessPayment_handle_success
     target.ProcessPayment._execute = ProcessPayment_execute
-    return "пополнение баланса, подарок через шлюз и спасение опоздавших платежей"
+    return (
+        "пополнение баланса, подарок через шлюз, спасение опоздавших платежей "
+        "и отчёт о переносе остатка"
+    )

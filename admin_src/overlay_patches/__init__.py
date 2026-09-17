@@ -338,6 +338,11 @@ def install() -> None:
             "gateway_payment",
         ),
         (
+            "перенос остатка при смене тарифа",
+            "src.application.use_cases.subscription.commands.purchase",
+            "plan_change_carryover",
+        ),
+        (
             "письма в оформлении кабинета",
             "src.infrastructure.services",
             "email_sender",

@@ -385,6 +385,19 @@ CASES: list[Case] = [
             "current_is_trial": F("bool", req=False, null=True),
             "current_is_unlimited": F("bool", req=False, null=True),
             "current_frozen": F("bool", req=False, null=True),
+            # Перенос остатка по цене дня — тоже только наш бэкенд. Адаптер поверх
+            # «Бедолаги» этих полей не шлёт (заперто adapter/tests/test_offers_no_carry_claim.py).
+            "carry_mode": F("str", req=False, null=True),
+            "plan_change_carry": F("list", req=False, null=True, items={
+                "plan_code": F("str"),
+                "duration_days": F("int"),
+                "currency": F("str"),
+                "mode": F("str"),
+                "bonus_days": F("int"),
+                "lost_days": F("int"),
+                "capped": F("bool", req=False),
+                "extras_lost": F("int", req=False),
+            }),
         },
     ),
     Case(

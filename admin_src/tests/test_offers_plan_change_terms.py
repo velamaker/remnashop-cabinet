@@ -1,23 +1,23 @@
-"""Витрина сообщает кабинету, что сгорит при смене тарифа.
+"""Витрина сообщает кабинету, что будет с остатком при смене тарифа.
 
-ЧТО СЛУЧАЛОСЬ. Смена тарифа (CHANGE) у нас — срок с нуля: ветка «CHANGE или
-триал» в базе зовёт `update_user(plan=…)`, а `_build_update_request` по тарифу
-ставит `expire_at = сейчас + длительность`. Бот об этом предупреждает («без
-пересчета оставшегося срока»), кабинет молчал. С блоком «Нужно больше
-устройств?» кабинет сам начал вести людей к смене тарифа — и промолчать про
-сгорающий месяц значило бы продать ему потерю денег. У бессрочной подписки
-CHANGE стоит на всех тарифах: «навсегда» превращалось бы в 30 дней.
+ИСТОРИЯ. У базы смена тарифа (CHANGE) — срок с нуля: ветка «CHANGE или триал» зовёт
+`update_user(plan=…)`, а `_build_update_request` по тарифу ставит
+`expire_at = сейчас + длительность`. Сначала кабинет честно предупреждал о сгорании.
+Теперь остаток переносится по цене дня (overlay_patches/plan_change_carryover.py), и
+витрина отдаёт, сколько дней добавится, — таблицей по (тариф, срок, валюта).
 
 ЧТО ЗАПИРАЕМ.
   * `plan_change_terms` считает остаток теми же полными сутками, что кабинет,
     а на паузе берёт сохранённый остаток — `expire_at` там стоит на месте;
   * `/offers` отдаёт поля именно через оверлей-схему: FastAPI режет ответ по
-    `response_model`, и с базовой схемой предупреждения молча пропали бы;
-  * сбой чтения паузы витрину не роняет (это единственный путь к покупке),
-    а «не знаем» не выдаётся за «паузы нет»;
-  * СИГНАЛИЗАЦИЯ: база до сих пор сжигает остаток. Начнёт переносить — тест
-    упадёт, и флаг `plan_change_keeps_days` надо перевернуть, иначе кабинет
-    будет пугать людей потерей, которой нет.
+    `response_model`, и с базовой схемой условия молча пропали бы;
+  * `plan_change_keeps_days` = перенос РЕАЛЬНО случится (`overlay_active`): правка
+    встала и выключатель включён; выключено — false, кабинет предупреждает по-старому;
+  * сбой чтения паузы или состояния переноса витрину не роняет (это единственный
+    путь к покупке), а «не знаем» не выдаётся за «перенесём»;
+  * резерв не переносится: `current_days_left` = 0;
+  * СИГНАЛИЗАЦИЯ: база до сих пор сжигает остаток — поэтому наша правка нужна. Начнёт
+    переносить сама — наша перенесёт второй раз; тест обязан упасть.
 
 Запуск — внутри образа бота, как остальные тесты рядом (см. ci.yml).
 """
@@ -36,7 +36,14 @@ import pytest
 importlib.import_module("src.web.endpoints.public")
 offers_mod = importlib.import_module("overlay_patches.public_subscription")
 
-from src.core.enums import SubscriptionStatus  # noqa: E402
+carry = importlib.import_module("src.infrastructure.services.overlay_plan_change")
+
+from decimal import Decimal  # noqa: E402
+from fractions import Fraction  # noqa: E402
+
+from src.application.dto import PlanDto, PlanDurationDto, PlanPriceDto  # noqa: E402
+from src.application.services import PricingService  # noqa: E402
+from src.core.enums import Currency, PaymentGatewayType, SubscriptionStatus  # noqa: E402
 
 NOW = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
 DAY = 86400
@@ -151,34 +158,73 @@ class NoPlans:
         return []
 
 
+class NoMatch:
+    async def system(self, *args: Any) -> None:
+        return None
+
+
 def subscription(days: float = 29.5, trial: bool = False) -> Any:
     expire = datetime.now(timezone.utc) + timedelta(days=days)
     return SimpleNamespace(
+        id=5,
         expire_at=expire,
         is_unlimited=False,
         is_trial=trial,
+        status=SubscriptionStatus.ACTIVE,
         current_status=SubscriptionStatus.ACTIVE,
-        plan_snapshot=None,
+        plan_snapshot=SimpleNamespace(id=10),
+        created_at=None,
     )
 
 
-async def call_offers(session: FakeSession, sub: Any) -> Any:
+def fake_loader(calls: Optional[list] = None, *, fail: bool = False, reserve_days: Optional[float] = None,
+                layers: tuple = ()):
+    """Подмена загрузки состояния переноса: FakeSession не знает его SQL.
+
+    Пауза читается из того же FakeSession, что и витрина, — как в жизни.
+    """
+
+    async def load(session, *, user_id, subscription, now, exclude_payment_id=None, extra_plan_ids=(), extras=()):
+        if calls is not None:
+            calls.append({"subscription": subscription, "ids": tuple(extra_plan_ids)})
+        if fail:
+            raise RuntimeError("relation plan_change_carryovers does not exist")
+        row = session.row
+        return carry.CarryState(
+            status=subscription.status, is_unlimited=subscription.is_unlimited,
+            expire_at=subscription.expire_at,
+            frozen_seconds=int(row[0]) if row else None,
+            reserve_expire_at=(subscription.expire_at if reserve_days is not None else None),
+            refund_recent=False, old_plan_id=subscription.plan_id, layers=layers, prices={},
+        )
+
+    return load
+
+
+async def call_offers(session: FakeSession, sub: Any, *, loader=None, plans=None, gateways=None) -> Any:
     raw = offers_mod.get_subscription_offers.__dishka_orig_func__
-    return await raw(
-        user=SimpleNamespace(id=7),
-        session=session,
-        subscription_dao=FakeSubscriptionDao(sub),
-        payment_gateway_dao=NoGateways(),
-        pricing_service=None,
-        get_available_plans=NoPlans(),
-        match_plan=NoPlans(),
-    )
+    original = carry.load_carry_state
+    carry.load_carry_state = loader or fake_loader()
+    try:
+        return await raw(
+            user=SimpleNamespace(id=7, purchase_discount=0, personal_discount=0, remna_name="rs_7", log="[USER:7]"),
+            session=session,
+            subscription_dao=FakeSubscriptionDao(sub),
+            payment_gateway_dao=gateways or NoGateways(),
+            pricing_service=PricingService(),
+            get_available_plans=plans or NoPlans(),
+            match_plan=NoMatch(),
+        )
+    finally:
+        carry.load_carry_state = original
 
 
 async def test_offers_report_days_left_for_active_subscription():
     session = FakeSession(row=None)
     resp = await call_offers(session, subscription(days=29.5))
-    assert resp.plan_change_keeps_days is False
+    assert resp.plan_change_keeps_days is carry.overlay_active()
+    assert resp.plan_change_keeps_days is True, "в образе правка встала, выключатель по умолчанию включён"
+    assert resp.carry_mode == "carry"
     assert resp.current_days_left == 29
     assert resp.current_frozen is False
     assert resp.current_is_trial is False
@@ -213,10 +259,135 @@ async def test_offers_without_subscription_leave_terms_empty():
     assert session.sql == []
 
 
+# ── перенос остатка в витрине ───────────────────────────────────────────────
+
+
+class OneGateway:
+    async def get_active(self) -> list:
+        return [
+            SimpleNamespace(
+                type=PaymentGatewayType.YOOMONEY, currency=Currency.RUB,
+                settings=SimpleNamespace(is_configured=True),
+            )
+        ]
+
+
+class Showcase:
+    """DUO2: 30 дн. — 240 ₽ (8/день); у 90 дн. цены в рублях нет."""
+
+    async def system(self, *args: Any) -> list:
+        return [
+            PlanDto(
+                id=20, public_code="DUO2", name="DUO2",
+                durations=[
+                    PlanDurationDto(days=30, prices=[PlanPriceDto(currency=Currency.RUB, price=Decimal("240"))]),
+                    PlanDurationDto(days=90, prices=[PlanPriceDto(currency=Currency.USD, price=Decimal("9"))]),
+                ],
+            )
+        ]
+
+
+class ShowcaseSafe(Showcase):
+    """Та же витрина, но с рублёвой ценой у обоих сроков (базовый цикл цен её требует)."""
+
+    async def system(self, *args: Any) -> list:
+        plans = await super().system()
+        plans[0].durations[1].prices.append(PlanPriceDto(currency=Currency.RUB, price=Decimal("600")))
+        return plans
+
+
+async def test_offers_carry_table_per_plan_term_currency():
+    """29,5 дн. по 4/день = 118 → /8 = 14 дн. (30 дн.); 90 дн. за 600 → /(20/3) = 17."""
+    paid = (carry.Layer("create", "p", 30 * DAY, "RUB", Fraction(120), Fraction(120), 10, 30),)
+    calls: list = []
+    resp = await call_offers(
+        FakeSession(row=None), subscription(days=29.5), loader=fake_loader(calls, layers=paid),
+        plans=ShowcaseSafe(), gateways=OneGateway(),
+    )
+    assert resp.plan_change_keeps_days is True
+    assert calls[0]["ids"] == (20,), "цены целевых тарифов грузятся одним запросом"
+    entries = [e.model_dump() for e in resp.plan_change_carry]
+    assert entries == [
+        {"plan_code": "DUO2", "duration_days": 30, "currency": "RUB", "mode": "carry",
+         "bonus_days": 14, "lost_days": 0, "capped": False, "extras_lost": 0},
+        {"plan_code": "DUO2", "duration_days": 90, "currency": "RUB", "mode": "carry",
+         "bonus_days": 17, "lost_days": 0, "capped": False, "extras_lost": 0},
+    ]
+    dumped = resp.model_dump()
+    assert dumped["carry_mode"] == "carry" and dumped["plan_change_carry"][0]["bonus_days"] == 14
+
+
+def test_carry_entry_skips_state_modes():
+    """В таблицу попадают только режимы цели; режим состояния — в `carry_mode`."""
+    reserve = carry.CarryResult("reserve", 0, 0, Fraction(0), None, 0, 0, 0, False)
+    assert offers_mod.carry_entry("DUO2", 30, "RUB", reserve) is None
+    same = carry.CarryResult("same_plan", 10 * DAY, 10, Fraction(0), None, 0, 10 * DAY, 0, False)
+    assert offers_mod.carry_entry("DUO2", 30, "RUB", same).bonus_days == 10
+
+
+async def test_offers_reserve_is_not_carried():
+    resp = await call_offers(FakeSession(row=None), subscription(days=3), loader=fake_loader(reserve_days=3))
+    assert resp.plan_change_keeps_days is True
+    assert resp.carry_mode == "reserve"
+    assert resp.current_days_left == 0
+    assert resp.plan_change_carry == []
+
+
+async def test_offers_state_failure_rolls_back_and_says_no_carry():
+    session = FakeSession(row=None)
+    resp = await call_offers(session, subscription(days=20.5), loader=fake_loader(fail=True),
+                             plans=ShowcaseSafe(), gateways=OneGateway())
+    assert resp.plan_change_keeps_days is False
+    assert session.rollbacks == 1
+    assert resp.carry_mode is None and resp.plan_change_carry is None
+    assert resp.current_days_left == 20, "витрина жива, прежние условия на месте"
+    assert len(resp.plans) == 1
+
+
+async def test_offers_switch_off_means_no_promise(monkeypatch):
+    monkeypatch.setattr(carry, "load_config", lambda: {"enabled": False, "notify_admins": True})
+    calls: list = []
+    resp = await call_offers(FakeSession(row=None), subscription(days=20.5), loader=fake_loader(calls))
+    assert resp.plan_change_keeps_days is False
+    assert calls == [], "выключено — состояние даже не читаем"
+    assert resp.carry_mode is None
+
+
+async def test_offers_patch_not_applied_means_no_promise(monkeypatch):
+    monkeypatch.setattr(carry, "patch_applied", lambda: False)
+    resp = await call_offers(FakeSession(row=None), subscription(days=20.5))
+    assert resp.plan_change_keeps_days is False
+
+
+async def test_offers_trial_is_not_carried():
+    calls: list = []
+    resp = await call_offers(FakeSession(row=None), subscription(days=3, trial=True), loader=fake_loader(calls))
+    assert resp.carry_mode == "none"
+    assert calls == []
+
+
 # ── сигнализация: база всё ещё сжигает остаток ─────────────────────────────
 
+def test_base_update_request_is_the_one_we_rely_on():
+    """Правка пишет срок веткой subscription у `_build_update_request` — её форма часть контракта."""
+    import src.infrastructure.services.remnawave as remnawave_module
+    from overlay_patches import expect_source
+
+    expect_source(
+        remnawave_module,
+        "RemnawaveImpl._build_update_request",
+        "b7ea09b0f54bf1c2cb6fc51da95201382cc20da0838da4ab941d86f2e6e54300",
+        "RemnawaveImpl._build_update_request",
+    )
+
+
 def test_base_still_restarts_term_on_plan_change():
-    from src.application.use_cases.subscription.commands.purchase import PurchaseSubscription
+    """База ВСЁ ЕЩЁ сжигает остаток — значит наша правка нужна. Перестанет — упадём тут.
+
+    Если база начнёт переносить сама, наша правка перенесёт остаток второй раз.
+    Смотрим ИСХОДНИК модуля: сам метод обёрнут нашей правкой.
+    """
+    import src.application.use_cases.subscription.commands.purchase as purchase_module
     from src.infrastructure.services.remnawave import RemnawaveImpl
 
     build = inspect.getsource(RemnawaveImpl._build_update_request)
@@ -225,7 +396,7 @@ def test_base_still_restarts_term_on_plan_change():
         "и переверните plan_change_keeps_days в public_subscription.py"
     )
 
-    source = inspect.getsource(PurchaseSubscription._execute)
+    source = inspect.getsource(purchase_module)
     marker = "elif purchase_type == PurchaseType.CHANGE"
     assert marker in source, "ветка CHANGE в PurchaseSubscription перестроена — сверить перенос остатка"
     change_branch = source.split(marker, 1)[1].split("\n            else:", 1)[0]

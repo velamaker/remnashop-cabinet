@@ -117,31 +117,57 @@ class DevicesActivityResponse(BaseModel):
     max_count: int
 
 
-class SubscriptionOffersOverlayResponse(SubscriptionOffersResponse):
-    """Витрина плюс условия смены тарифа — ради честного предупреждения в кабинете.
+class PlanChangeCarryEntry(BaseModel):
+    """Сколько дней добавит перенос остатка при смене на (тариф, срок, валюта).
 
-    Смена тарифа (CHANGE) у нас — срок С НУЛЯ: ветка «CHANGE или триал» в базе зовёт
-    `update_user(plan=…)`, а `RemnawaveImpl._build_update_request` по тарифу ставит
-    `expire_at = days_to_datetime(plan.duration)`, то есть сейчас + длительность.
-    Остаток текущей подписки сгорает, у бессрочной — сгорает «навсегда». Бот об этом
-    предупреждает, кабинет молчал. А блок «Нужно больше устройств?» сам ведёт
-    упёршегося в лимит человека к смене тарифа — промолчать там значило бы продать
-    ему потерю оплаченных дней.
+    `mode` — про конкретную цель: `carry` (по цене дня), `same_plan` (тот же тариф,
+    1:1), `unpriced` (у срока нет цены — перенести нельзя), `none` (новый тариф
+    бессрочный — переносить нечего). `lost_days` уже включает упор в технический
+    предел (`capped`). `extras_lost` — докупки, чья стоимость не перенесётся.
+    """
+
+    plan_code: str
+    duration_days: int
+    currency: str
+    mode: str
+    bonus_days: int
+    lost_days: int
+    capped: bool = False
+    extras_lost: int = 0
+
+
+class SubscriptionOffersOverlayResponse(SubscriptionOffersResponse):
+    """Витрина плюс условия смены тарифа — ради честного текста в кабинете.
+
+    Смена тарифа (CHANGE) у нас пересчитывает остаток текущей подписки в дни нового
+    тарифа по цене дня (overlay_patches/plan_change_carryover.py). Сколько дней
+    добавится, зависит от тарифа, срока и валюты, поэтому витрина отдаёт таблицу
+    `plan_change_carry`, посчитанную той же чистой функцией, что и зачисление.
+    Сервер всё равно пересчитает в момент оплаты — таблица только для показа.
+
+    `plan_change_keeps_days` — перенос ДЕЙСТВИТЕЛЬНО случится: правка покупки встала в
+    этом процессе и выключатель `assets/plan_change.json` включён. Иначе false, и
+    кабинет по-старому предупреждает, что остаток сгорит (честная сторона).
 
     Поля необязательные: старые клиенты их не замечают, а кабинет без флага
     `plan_change_keeps_days` (чужой бэкенд, старая сборка) не предупреждает и не
-    предлагает смену вовсе. Переносить остаток начнёт база — это поймает тест
-    test_offers_plan_change_terms.py, и флаг надо будет перевернуть.
+    предлагает смену вовсе.
     """
 
     plan_change_keeps_days: bool = False
     # Полные оставшиеся сутки текущей подписки (как считает кабинет); на паузе —
-    # из сохранённого остатка. None у бессрочной и без подписки.
+    # из сохранённого остатка. None у бессрочной и без подписки. С переносом — после
+    # правил резерва (резерв — 0: бесплатная страховка не переносится).
     current_days_left: Optional[int] = None
     current_is_trial: Optional[bool] = None
     current_is_unlimited: Optional[bool] = None
     # None — «не удалось узнать», а не «паузы нет».
     current_frozen: Optional[bool] = None
+    # Режим ТЕКУЩЕЙ подписки: carry | lifetime | reserve | refund | none; None — перенос
+    # выключен или состояние не загрузилось.
+    carry_mode: Optional[str] = None
+    # Записи только при carry_mode = carry и только для тарифов со сменой (CHANGE).
+    plan_change_carry: Optional[list[PlanChangeCarryEntry]] = None
 
 
 def plan_change_terms(
@@ -755,6 +781,7 @@ async def get_subscription_offers(
         )
 
     plan_offers: list[PlanOfferResponse] = []
+    change_plans: list[PlanDto] = []
     for plan in available_plans:
         if not plan.public_code:
             continue
@@ -793,6 +820,8 @@ async def get_subscription_offers(
             if is_renew_candidate
             else (PurchaseType.CHANGE.value if current_subscription else PurchaseType.NEW.value)
         )
+        if recommended_purchase_type == PurchaseType.CHANGE.value:
+            change_plans.append(plan)
 
         plan_offers.append(
             PlanOfferResponse(
@@ -850,6 +879,17 @@ async def get_subscription_offers(
         if not frozen_known:
             terms["current_frozen"] = None
 
+    keeps_days = False
+    if current_subscription:
+        keeps_days, carry_terms = await _carry_terms(
+            session=session,
+            user=user,
+            current_subscription=current_subscription,
+            change_plans=change_plans,
+            currencies=_unique_currencies(web_gateways),
+        )
+        terms.update(carry_terms)
+
     return SubscriptionOffersOverlayResponse(
         gateways=gateway_offers,
         plans=plan_offers,
@@ -857,9 +897,102 @@ async def get_subscription_offers(
         current_subscription_status=(
             current_subscription.current_status.value if current_subscription else None
         ),
-        plan_change_keeps_days=False,
+        plan_change_keeps_days=keeps_days,
         **terms,
     )
+
+
+def _unique_currencies(gateways: list) -> list[Currency]:
+    seen: list[Currency] = []
+    for gateway in gateways:
+        if gateway.currency not in seen:
+            seen.append(gateway.currency)
+    return seen
+
+
+def carry_entry(plan_code: str, duration_days: int, currency: str, result) -> Optional[PlanChangeCarryEntry]:
+    """Результат расчёта → запись витрины. Режим цели — carry | same_plan | unpriced | none."""
+    if result.mode not in ("carry", "same_plan", "unpriced", "none"):
+        return None
+    return PlanChangeCarryEntry(
+        plan_code=plan_code,
+        duration_days=duration_days,
+        currency=currency,
+        mode=result.mode,
+        bonus_days=int(result.added_days),
+        lost_days=int(result.lost_days),
+        capped=bool(result.capped),
+        extras_lost=int(result.extras_lost),
+    )
+
+
+async def _carry_terms(
+    *,
+    session: AsyncSession,
+    user,
+    current_subscription,
+    change_plans: list[PlanDto],
+    currencies: list[Currency],
+) -> tuple[bool, dict]:
+    """Условия переноса остатка для витрины: (plan_change_keeps_days, поля ответа).
+
+    Обещать перенос можно, только если он случится (`overlay_active`). Сбой загрузки
+    состояния — rollback и `false`: кабинет по-старому предупредит о сгорании, а это
+    безопасная сторона.
+    """
+    from src.infrastructure.services import overlay_plan_change as carry
+
+    if not carry.overlay_active():
+        return False, {}
+    if current_subscription.is_trial:
+        # Пробник заменяется по правилам базы и не переносится.
+        return True, {"carry_mode": "none"}
+
+    now = datetime_now()
+    try:
+        state = await carry.load_carry_state(
+            session,
+            user_id=user.id,
+            subscription=carry.sub_row_from_dto(current_subscription),
+            now=now,
+            exclude_payment_id=None,
+            extra_plan_ids=[plan.id for plan in change_plans],
+        )
+    except Exception as e:  # noqa: BLE001
+        try:
+            await session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        logger.warning(f"offers: состояние переноса user_id={user.id} не загрузилось ({e})")
+        return False, {}
+
+    mode, left = carry.state_mode(state, now)
+    fields: dict = {
+        "carry_mode": mode,
+        "current_days_left": None if left is None else int(left) // carry.DAY,
+    }
+    entries: list[PlanChangeCarryEntry] = []
+    if mode == "carry":
+        for plan in change_plans:
+            for duration in plan.durations:
+                for currency in currencies:
+                    try:
+                        price = duration.get_price(currency)
+                    except Exception:  # noqa: BLE001 — нет цены в этой валюте: записи нет
+                        continue
+                    result = carry.compute_carryover(
+                        state,
+                        new_plan_id=plan.id,
+                        new_duration=duration.days,
+                        new_list_amount=price,
+                        currency=currency.value,
+                        now=now,
+                    )
+                    entry = carry_entry(plan.public_code, duration.days, currency.value, result)
+                    if entry is not None:
+                        entries.append(entry)
+    fields["plan_change_carry"] = entries
+    return True, fields
 
 
 def apply() -> str:

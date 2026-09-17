@@ -73,6 +73,11 @@ run_alembic >/dev/null
 [ "$(q "SELECT to_regclass('bulk_jobs')::text")" = "bulk_jobs" ] || fail "bulk_jobs не создана"
 [ "$(q "SELECT to_regclass('bulk_job_items')::text")" = "bulk_job_items" ] || fail "bulk_job_items не создана"
 [ "$(q "SELECT count(*) FROM pg_indexes WHERE tablename='bulk_jobs' AND indexname='ux_bulk_jobs_one_active' AND indexdef LIKE 'CREATE UNIQUE%'")" = "1" ] || fail "у bulk_jobs нет индекса одной активной задачи"
+# 0010: журнал переноса остатка при смене тарифа. UNIQUE по счёту держит «перенос по
+# одному счёту — один раз», FK на users — перенос журнала при слиянии двойников.
+[ "$(q "SELECT to_regclass('plan_change_carryovers')::text")" = "plan_change_carryovers" ] || fail "plan_change_carryovers не создана"
+[ "$(q "SELECT count(*) FROM pg_constraint WHERE conrelid = to_regclass('plan_change_carryovers') AND contype = 'u'")" = "1" ] || fail "у plan_change_carryovers нет UNIQUE по payment_id"
+[ "$(q "SELECT count(*) FROM pg_constraint WHERE conrelid = to_regclass('plan_change_carryovers') AND contype = 'f' AND confrelid = to_regclass('users')")" = "1" ] || fail "у plan_change_carryovers нет FK на users"
 [ "$(q "SELECT version_num FROM alembic_version_overlay")" = "$HEAD" ] || fail "версия != $HEAD"
 [ "$(q "SELECT count(*) FROM information_schema.columns WHERE table_name='users' AND column_name='cabinet_balance'")" = "1" ] || fail "users.cabinet_balance нет"
 CREATED="$(q "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")"
