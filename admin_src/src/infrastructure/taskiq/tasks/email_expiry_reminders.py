@@ -21,7 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.application.common.email_sender import EmailSender
 from src.infrastructure.database.models import Subscription, User
 from src.infrastructure.services.overlay_renewal_discount import (
-    active_grants_by_user,
+    ActiveGrant,
+    active_grant_offers_by_user,
     email_discount_line,
 )
 from src.infrastructure.taskiq.broker import broker
@@ -54,7 +55,11 @@ def _brand() -> str:
         return "VPN"
 
 
-def _body(when: str, discount_percent: int | None = None) -> str:
+def _body(
+    when: str,
+    discount: ActiveGrant | None = None,
+    sub_expire_at: datetime | None = None,
+) -> str:
     # Подпись и ссылку на кабинет НЕ дублируем: их добавляет оформление письма
     # (шапка с логотипом, кнопка «Открыть кабинет», подвал с брендом).
     body = (
@@ -63,9 +68,14 @@ def _body(when: str, discount_percent: int | None = None) -> str:
         "Продлите её, чтобы не потерять доступ."
     )
     # Скидка на продление людям только с почтой сообщается ЭТИМ письмом: отдельного
-    # письма о ней нет (см. services/overlay_renewal_discount.py, channels).
-    if discount_percent:
-        body += "\n\n" + email_discount_line(discount_percent)
+    # письма о ней нет (см. services/overlay_renewal_discount.py, channels). Срок
+    # скидки передаём обязательно: она может сгореть раньше подписки.
+    if discount is not None and discount.percent:
+        body += "\n\n" + email_discount_line(
+            discount.percent,
+            grant_expires_at=discount.expires_at,
+            sub_expire_at=sub_expire_at,
+        )
     return body
 
 
@@ -78,8 +88,11 @@ async def send_email_expiry_reminders(
     if not _email_enabled():
         logger.debug("Email отключён — пропускаю напоминания об окончании")
         return
+    await send_reminders(session, email_sender, datetime.now(timezone.utc))
 
-    now = datetime.now(timezone.utc)
+
+async def send_reminders(session: AsyncSession, email_sender: EmailSender, now: datetime) -> int:
+    """Один проход по точкам напоминаний. Отдельно от задачи — чтобы тест звал его без DI."""
     sent = 0
 
     for hours, when in REMINDERS:
@@ -88,7 +101,7 @@ async def send_email_expiry_reminders(
         # Текущая подписка юзера (current_subscription_id), email-only, почта
         # подтверждена, expire_at попадает в часовое окно этой точки.
         stmt = (
-            select(User.id, User.email)
+            select(User.id, User.email, Subscription.expire_at)
             .join(Subscription, Subscription.id == User.current_subscription_id)
             .where(
                 Subscription.expire_at >= lo,
@@ -109,20 +122,26 @@ async def send_email_expiry_reminders(
             )
         )
         # Почта уникальна на человека; словарь сохраняет прежний дедуп по адресу.
-        recipients = {r[1]: r[0] for r in (await session.execute(stmt)).all() if r[1]}
+        recipients = {
+            r[1]: (r[0], r[2]) for r in (await session.execute(stmt)).all() if r[1]
+        }
         # Строка про скидку — только в письме за 3 дня: в день окончания скидки уже
         # нет (она живёт не дольше подписки). Отдельный try: без строки письмо
         # всё равно обязано уйти.
-        discounts: dict[int, int] = {}
+        discounts: dict[int, ActiveGrant] = {}
         if hours >= 24 and recipients:
             try:
-                discounts = await active_grants_by_user(session, recipients.values())
+                discounts = await active_grant_offers_by_user(
+                    session, [uid for uid, _ in recipients.values()], now
+                )
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"Скидка на продление для писем не прочитана: {e}")
-        for email, user_id in recipients.items():
+        for email, (user_id, expire_at) in recipients.items():
             try:
                 await email_sender.send(
-                    to=email, subject=_subject(hours), body=_body(when, discounts.get(user_id))
+                    to=email,
+                    subject=_subject(hours),
+                    body=_body(when, discounts.get(user_id), expire_at),
                 )
                 sent += 1
             except Exception as e:  # noqa: BLE001
@@ -130,3 +149,4 @@ async def send_email_expiry_reminders(
 
     if sent:
         logger.info(f"Отправлено напоминаний об окончании подписки (email): {sent}")
+    return sent

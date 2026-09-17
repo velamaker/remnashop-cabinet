@@ -1,7 +1,7 @@
 """Скидка на продление до окончания подписки: правила выдачи и тексты.
 
 ЧТО ЗАПИРАЕМ. Скидка, выданная не тому, — это деньги, отданные тем, кто и так
-заплатил бы (13 из 30 повторных покупок на бою сделаны до конца срока), или
+заплатил бы (значимая доля повторных покупок делается до конца срока), или
 второе предложение поверх открытого, которое сгорание другой кампании снимет
 вместе с нашим. Поэтому каждая причина отказа проверяется отдельно, а общие
 вещи — одним тестом на каждую:
@@ -9,7 +9,8 @@
     push-напоминанием даже при нестандартном PUSH_EXPIRING_DAYS;
   * платящий клиент в окне с Telegram — получает;
   * конец оплаченного периода считается цепочкой, а не «дата оплаты + срок»;
-  * людям только с почтой — лишь если скидка доживёт до письма за 72 ч;
+  * людям только с почтой — лишь если скидка доживёт до письма за 72 ч, а
+    письмо не обещает её «до конца подписки», если она сгорит раньше;
   * скидка никогда не живёт дольше подписки;
   * в текстах нет неподставленных «{», склонения верные;
   * предпросмотр судит кандидата на момент будущей выдачи.
@@ -227,6 +228,52 @@ def test_email_only_unreachable_without_email_or_verification():
     assert decide(email_only(is_email_verified=False)) == "unreachable"
 
 
+def email_line_at_letter(conf: dict, expire_at: datetime) -> tuple[Any, str]:
+    """Решение на момент выдачи и строка письма за 72 ч с настоящим сроком скидки."""
+    c = email_only(expire_at=expire_at)
+    reason = decide(c, conf=conf)
+    line = rd.email_discount_line(
+        conf["percent"],
+        grant_expires_at=rd.grant_expires_at(NOW, conf, expire_at),
+        sub_expire_at=expire_at,
+    )
+    return reason, line
+
+
+def test_email_line_names_deadline_when_discount_burns_before_subscription_end():
+    """За 7 дней при сроке 120 ч скидка сгорает за 47 ч до конца подписки.
+
+    Письмо за 72 ч эта выдача переживает, поэтому человеку только с почтой её дают.
+    Но «пока подписка не закончилась» отправило бы его платить в последний день —
+    уже по полной цене. Письмо обязано назвать настоящий срок.
+    """
+    expire_at = NOW + timedelta(days=7) - timedelta(hours=1)
+    reason, line = email_line_at_letter(cfg(days_before=7, lifetime_hours=120), expire_at)
+    assert reason is None
+    assert "пока подписка не закончилась" not in line
+    # NOW + 120 ч = 22 сентября 12:00 UTC = 15:00 по Москве.
+    assert "до 22 сентября, 15:00 по московскому времени" in line
+    assert "10%" in line
+
+
+def test_email_line_promises_until_end_only_when_discount_lives_that_long():
+    expire_at = NOW + timedelta(days=5) - timedelta(hours=1)
+    reason, line = email_line_at_letter(cfg(days_before=5, lifetime_hours=120), expire_at)
+    assert reason is None
+    assert line.endswith("пока подписка не закончилась.")
+
+
+def test_email_line_without_known_deadline_promises_nothing():
+    line = rd.email_discount_line(12, grant_expires_at=None, sub_expire_at=NOW)
+    assert "12%" in line
+    assert "пока подписка" not in line and " до " not in line
+
+
+def test_email_deadline_rounds_minutes_down_and_is_moscow_time():
+    moment = datetime(2026, 12, 31, 21, 59, 59, tzinfo=timezone.utc)
+    assert rd._email_deadline_ru(moment) == "1 января, 00:59 по московскому времени"
+
+
 def test_blocked_bot_with_email_is_unreachable():
     """Письмо за 72 ч уходит только тем, у кого нет Telegram вовсе."""
     c = cand(is_bot_blocked=True, email="client@example.test", is_email_verified=True)
@@ -326,7 +373,7 @@ def test_offer_validity_wording():
 
 
 def test_reminder_lines():
-    assert "12%" in rd.email_discount_line(12)
+    assert "12%" in rd.email_discount_line(12, grant_expires_at=NOW, sub_expire_at=NOW)
     assert rd.push_discount_tail("en", 12) == " Your 12% renewal discount is active."
     assert rd.push_discount_tail("kk", 12).startswith(" Для вас действует скидка 12%")
 

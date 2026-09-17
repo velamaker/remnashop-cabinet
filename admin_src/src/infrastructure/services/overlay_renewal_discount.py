@@ -10,8 +10,8 @@ push; людям только с почтой — строкой в письме
 SQL, погашение, предпросмотр и итоги: их зовут и крон, и админка.
 
 ПОЧЕМУ СТОЛЬКО ПРАВИЛ ОТКАЗА (`decide`). Скидка до окончания срока бьёт прежде
-всего по тем, кто и так заплатил бы: на боевых данных 13 из 30 повторных покупок
-сделаны до конца срока. Поэтому по умолчанию выключено, и даже включённая скидка
+всего по тем, кто и так заплатил бы: значимая доля повторных покупок делается до
+конца срока. Поэтому по умолчанию выключено, и даже включённая скидка
 не выдаётся тем, кто платит сам (autopay, ранние продления без скидки), тем, кто
 не платил вовсе (подарок, промокод, импорт из панели), и тем, у кого уже открыто
 другое предложение — два предложения на одном поле затёрли бы друг друга.
@@ -325,7 +325,9 @@ def channels(
 
     Почта — только тем, у кого нет Telegram: письмо за 72 ч уходит лишь таким
     (email_expiry_reminders), а заблокировавшему бота письмо не придёт вовсе.
-    И только если скидка доживёт до этого письма — иначе она сгорит молча.
+    И только если скидка доживёт до этого письма — иначе она сгорит молча. Если
+    она сгорит между письмом и концом подписки, письмо называет её срок датой
+    (`email_discount_line`), а не «пока подписка не закончилась».
     """
     email = (
         env.email_enabled
@@ -508,12 +510,43 @@ def build_messages(
     return {"telegram_html": telegram, "push_title": title, "push_body": push_body}
 
 
-def email_discount_line(percent: int) -> str:
-    """Строка в письмо за 72 ч тем, у кого только почта."""
-    return (
-        f"Для вас действует скидка {percent}% на продление — она применится "
-        "автоматически при оплате, пока подписка не закончилась."
-    )
+# Письмо читают не в момент отправки, поэтому срок в нём — дата, а не «ещё N часов».
+# Часовой пояс контейнера UTC, а письма русские: даём московское время. Смещение
+# фиксированное — перехода на летнее время в Москве нет, и tzdata в образе не нужна.
+EMAIL_TZ = timezone(timedelta(hours=3))
+EMAIL_TZ_LABEL = "по московскому времени"
+_MONTHS_GEN_RU = (
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+)
+
+
+def _email_deadline_ru(moment: datetime) -> str:
+    """«19 сентября, 14:00 по московскому времени». Минуты — вниз: не обещаем позже."""
+    local = moment.astimezone(EMAIL_TZ)
+    return f"{local.day} {_MONTHS_GEN_RU[local.month - 1]}, {local:%H:%M} {EMAIL_TZ_LABEL}"
+
+
+def email_discount_line(
+    percent: int,
+    *,
+    grant_expires_at: Optional[datetime],
+    sub_expire_at: Optional[datetime],
+) -> str:
+    """Строка в письмо за 72 ч тем, у кого только почта.
+
+    «Пока подписка не закончилась» — только если скидка правда живёт до конца
+    подписки. При `lifetime_hours` короче `days_before` она сгорает раньше
+    (`grant_expires_at`), и письмо, обещавшее её до конца, отправило бы человека
+    платить полную цену в последний день. Тогда называем срок датой. Срок не
+    известен — не обещаем никакого.
+    """
+    head = f"Для вас действует скидка {percent}% на продление — она применится автоматически при оплате"
+    if grant_expires_at is None:
+        return f"{head}."
+    if sub_expire_at is not None and grant_expires_at >= sub_expire_at:
+        return f"{head}, пока подписка не закончилась."
+    return f"{head} до {_email_deadline_ru(grant_expires_at)}."
 
 
 def push_discount_tail(lang: Optional[str], percent: int) -> str:
@@ -671,8 +704,10 @@ CLEAR_DISCOUNT_SQL = """
 UPDATE users SET purchase_discount = 0 WHERE id = :u AND purchase_discount = :p
 """
 
+# Открытая выдача у человека одна (ux_renewal_discount_open), агрегаты — на всякий
+# случай: процент наибольший, срок САМЫЙ РАННИЙ — письмо не обещает дольше, чем есть.
 ACTIVE_BY_USER_SQL = """
-SELECT g.user_id, max(g.percent) AS percent
+SELECT g.user_id, max(g.percent) AS percent, min(g.expires_at) AS expires_at
 FROM renewal_discount_grants g
 JOIN users u ON u.id = g.user_id
 WHERE g.user_id = ANY(:ids) AND g.status = 'active' AND g.expires_at > :now
@@ -786,10 +821,18 @@ async def revoke_active(session: Any, now: Optional[datetime] = None) -> int:
     return revoked
 
 
-async def active_grants_by_user(
+@dataclass(frozen=True)
+class ActiveGrant:
+    """Действующая скидка человека: процент и когда она сгорит."""
+
+    percent: int
+    expires_at: Optional[datetime]
+
+
+async def active_grant_offers_by_user(
     session: Any, user_ids: Iterable[int], now: Optional[datetime] = None
-) -> dict[int, int]:
-    """{user_id: percent} действующих скидок. Best-effort: письма и push важнее строки.
+) -> dict[int, ActiveGrant]:
+    """{user_id: ActiveGrant} действующих скидок. Best-effort: письма и push важнее строки.
 
     Воркер может стартовать раньше миграции — таблицы ещё нет. Тогда откатываем
     транзакцию: иначе упавший запрос оставил бы сессию в aborted, и напоминание,
@@ -807,7 +850,18 @@ async def active_grants_by_user(
         except Exception:  # noqa: BLE001
             pass
         return {}
-    return {int(r["user_id"]): int(r["percent"]) for r in rows}
+    return {
+        int(r["user_id"]): ActiveGrant(percent=int(r["percent"]), expires_at=r.get("expires_at"))
+        for r in rows
+    }
+
+
+async def active_grants_by_user(
+    session: Any, user_ids: Iterable[int], now: Optional[datetime] = None
+) -> dict[int, int]:
+    """{user_id: percent} — для push, где срок не называется (см. push_discount_tail)."""
+    offers = await active_grant_offers_by_user(session, user_ids, now)
+    return {uid: g.percent for uid, g in offers.items()}
 
 
 # ── Предпросмотр ─────────────────────────────────────────────────────────────
