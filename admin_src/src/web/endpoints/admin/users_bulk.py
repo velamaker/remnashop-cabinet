@@ -602,16 +602,16 @@ async def cancel_bulk_job(
             raise _conflict("Задача уже завершена")
         if current == "CANCELING":
             return {"job_id": job_id, "status": current}
-        if current == "QUEUED":
-            if await store.cancel_now(job_id, current, by):
-                await session.commit()
-                return {"job_id": job_id, "status": "CANCELED"}
-        elif current == "PROCESSING":
+        if current == "PROCESSING":
             # Воркер остановится на границе человека: начатое у человека он досверит.
             if await store.mark_canceling(job_id, current, by):
                 await session.commit()
                 return {"job_id": job_id, "status": "CANCELING"}
-        else:  # PAUSED | ERROR
+        else:  # QUEUED | PAUSED | ERROR
+            # QUEUED бывает и после «Продолжить» у паузы: строки на полпути к панели там
+            # уже есть. Отменить такую задачу сразу — бросить их без сверки: крон CANCELED
+            # не подбирает, в «Кто не получил» их нет, а «уже получали дни» считает только
+            # DONE — повторный запуск выдал бы дни второй раз без предупреждения.
             inflight = await store.inflight(job_id, ("RUNNING", "RETRY", "SENDING"))
             if not inflight:
                 if await store.cancel_now(job_id, current, by):

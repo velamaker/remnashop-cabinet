@@ -13,8 +13,9 @@ import type { BulkDaysPreview, BulkJob, BulkMessagePreview } from "@/api/admin";
 //  • сообщение без каналов или длиннее 4000 символов не отправить, выключенная
 //    почта видна заранее;
 //  • кнопки управления задачами — только у полного доступа, опрос — только пока
-//    что-то идёт;
-//  • без полного доступа пунктов в списке действий нет вовсе.
+//    что-то идёт; задача на паузе, выпавшая из десяти последних, всё равно видна;
+//  • без полного доступа пунктов в списке действий нет вовсе, а бэкенд, который
+//    выключил эти возможности («Бедолага»), не получает ни одного запроса.
 
 const daysPreview = vi.fn();
 const startDays = vi.fn();
@@ -22,6 +23,7 @@ const messagePreview = vi.fn();
 const startMessage = vi.fn();
 const testMessage = vi.fn();
 const jobs = vi.fn();
+const jobById = vi.fn();
 const usersList = vi.fn();
 
 vi.mock("@/api/admin", () => ({
@@ -32,6 +34,7 @@ vi.mock("@/api/admin", () => ({
     startMessage: (...a: unknown[]) => startMessage(...a),
     testMessage: (...a: unknown[]) => testMessage(...a),
     jobs: (...a: unknown[]) => jobs(...a),
+    job: (...a: unknown[]) => jobById(...a),
     items: () => Promise.resolve({ total: 0, items: [] }),
     cancel: () => Promise.resolve({}),
     resume: () => Promise.resolve({}),
@@ -44,7 +47,8 @@ vi.mock("@/api/admin", () => ({
 
 let auth = { isReadonlyAdmin: false, fullAccess: true, isOwner: true, canSection: () => true };
 vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => auth }));
-vi.mock("@/contexts/BrandingContext", () => ({ useBranding: () => ({ can: () => true }) }));
+let features = { can: (_key: string) => true };
+vi.mock("@/contexts/BrandingContext", () => ({ useBranding: () => features }));
 
 const { BulkDaysDialog, BulkJobsPanel, BulkMessageDialog } = await import("./AdminUsersBulk");
 const { default: AdminUsersPage } = await import("./AdminUsersPage");
@@ -100,8 +104,9 @@ const job = (over: Partial<BulkJob> = {}): BulkJob => ({
 const noop = () => {};
 
 beforeEach(() => {
-  for (const fn of [daysPreview, startDays, messagePreview, startMessage, testMessage, jobs, usersList]) fn.mockReset();
+  for (const fn of [daysPreview, startDays, messagePreview, startMessage, testMessage, jobs, jobById, usersList]) fn.mockReset();
   auth = { isReadonlyAdmin: false, fullAccess: true, isOwner: true, canSection: () => true };
+  features = { can: () => true };
 });
 afterEach(() => {
   cleanup();
@@ -271,6 +276,25 @@ describe("«Фоновые задачи»", () => {
     expect(jobs).toHaveBeenCalledTimes(2);
   });
 
+  it("задача на паузе, выпавшая из десяти последних, догружается и управляется", async () => {
+    const recent = Array.from({ length: 10 }, (_, n) => job({ id: 20 + n, kind: "message", status: "COMPLETED" }));
+    jobs.mockResolvedValue({ items: recent, active: { days: 3, message: null } });
+    jobById.mockResolvedValue(job({ id: 3, status: "PAUSED", pause_reason: "Панель VPN не отвечает" }));
+    render(<BulkJobsPanel fullAccess readonly={false} refreshKey={0} onWriteRecipients={noop} onUnsupported={noop} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Продолжить" })).toBeInTheDocument());
+    expect(jobById).toHaveBeenCalledWith(3);
+    expect(screen.getByText(/^№3 · /)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Остановить" })).toBeInTheDocument();
+    cleanup();
+
+    // Активная уже в списке — лишнего запроса нет.
+    jobById.mockReset();
+    jobs.mockResolvedValue({ items: [job({ id: 7, status: "PAUSED" })], active: { days: 7, message: null } });
+    render(<BulkJobsPanel fullAccess readonly={false} refreshKey={0} onWriteRecipients={noop} onUnsupported={noop} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Продолжить" })).toBeInTheDocument());
+    expect(jobById).not.toHaveBeenCalled();
+  });
+
   it("501 на списке задач — панели нет", async () => {
     jobs.mockRejectedValue(new ApiError(501, "Не реализовано"));
     const onUnsupported = vi.fn();
@@ -297,5 +321,17 @@ describe("«Пользователи»: пункты массовых задач
     render(<AdminUsersPage />);
     await waitFor(() => expect(options()).toContain("Добавить дни подписки…"));
     expect(options()).toContain("Написать сообщение…");
+  });
+
+  it("бэкенд выключил массовые задачи — ни пунктов, ни журнала, ни запросов", async () => {
+    usersList.mockResolvedValue({ items: [], total: 0, limit: 25, offset: 0 });
+    jobs.mockResolvedValue({ items: [job({ status: "PAUSED" })], active: { days: 7, message: null } });
+    features = { can: (key: string) => key !== "bulk_days" && key !== "bulk_message" };
+    render(<AdminUsersPage />);
+    await waitFor(() => expect(usersList).toHaveBeenCalled());
+    expect(options()).not.toContain("Добавить дни подписки…");
+    expect(options()).not.toContain("Написать сообщение…");
+    expect(screen.queryByText("Фоновые задачи")).toBeNull();
+    expect(jobs).not.toHaveBeenCalled();
   });
 });

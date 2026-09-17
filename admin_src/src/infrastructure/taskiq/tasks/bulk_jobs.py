@@ -53,6 +53,7 @@ from src.infrastructure.services.overlay_bulk import (
     TG_PAUSE_SEC,
     VERIFY_FREEZE,
     VERIFY_NOTE,
+    VERIFY_PAYMENT,
     VERIFY_UNAVAILABLE,
     ActiveJobExists,
     BulkStore,
@@ -183,6 +184,11 @@ class _DaysRun:
         self.streak = 0
         self.last_error: Optional[str] = None
         self.touched = 0
+        # Сколько раз панель ответила в этом прогоне — по видам вызова, и сколько было
+        # ответов, когда вызов впервые упал на человеке. По ним отличаем ошибку самого
+        # человека от лежащей панели (`_call_failed`).
+        self.answered = {"get": 0, "patch": 0}
+        self.failed_at: dict[tuple[str, int], int] = {}
 
     # служебное
 
@@ -208,6 +214,51 @@ class _DaysRun:
     @property
     def _panel_down(self) -> bool:
         return self.streak >= PANEL_FAIL_STREAK
+
+    def _answered(self, op: str) -> None:
+        self.streak = 0
+        self.answered[op] += 1
+
+    async def _call_failed(self, op: str, uid: int, exc: BaseException) -> bool:
+        """Вызов панели упал на человеке. True — ошибка в нём самом, панель жива.
+
+        Первый сбой ничего не доказывает: панель могла моргнуть, человек уходит на
+        повтор. Второй сбой того же вызова на том же человеке за прогон проверяем:
+        если между сбоями панель отвечала другим — или прямо сейчас отдаёт соседа, уже
+        получившего дни, — дело в этом человеке (скажем, панель не разбирает его
+        данные). Держать его в очереди нельзя: пауза «Панель не отвечает» повторялась бы
+        после каждого «Продолжить», и итог с «Сообщить им об этом» не ушёл бы никому.
+
+        Запись (PATCH) соседом не проверить, поэтому для неё доказательство одно —
+        чужой успешный PATCH между сбоями. Иначе лежащая запись при живом чтении
+        превратила бы паузу в ручной разбор для всех.
+        """
+        key = (op, uid)
+        if key in self.failed_at and (
+            self.answered[op] > self.failed_at[key] or (op == "get" and await self._panel_answers_others(uid))
+        ):
+            self.streak = 0
+            logger.warning(
+                f"bulk: задача №{self.job_id}: панель повторно падает на user_id={uid}, а другим отвечает: {exc}"
+            )
+            return True
+        self._panel_failed(exc)
+        self.failed_at[key] = self.answered[op]
+        return False
+
+    async def _panel_answers_others(self, uid: int) -> bool:
+        """GET соседа, уже получившего дни в этой задаче: ответила — панель жива."""
+        others = [other for other in await self.store.done_user_ids(self.job_id) if other != uid]
+        for other in others[:3]:
+            sub = await self.subscription_dao.get_current(other)
+            if sub is None:
+                continue
+            try:
+                await self.remnawave.get_user_by_uuid(sub.user_remna_id)
+            except Exception:  # noqa: BLE001 — не отвечает и соседу: лежит панель
+                return False
+            return True
+        return False
 
     async def _finish(self, uid: int, status: str, **fields: Any) -> None:
         await self.store.set_item(self.job_id, uid, status=status, **fields)
@@ -330,10 +381,12 @@ class _DaysRun:
         try:
             panel = await self.remnawave.get_user_by_uuid(sub.user_remna_id)
         except Exception as exc:  # noqa: BLE001 — до записи ничего не тронуто
-            self._panel_failed(exc)
-            await self._finish(uid, "PENDING", error=error_text(exc))
+            if await self._call_failed("get", uid, exc):
+                await self._finish(uid, "FAILED", category=Category.PANEL_ERROR.value, error=error_text(exc))
+            else:
+                await self._finish(uid, "PENDING", error=error_text(exc))
             return
-        self.streak = 0
+        self._answered("get")
         if panel is None:
             await self._finish(uid, "FAILED", category=Category.NOT_IN_PANEL.value)
             return
@@ -389,12 +442,18 @@ class _DaysRun:
                 raise RuntimeError("подписка не обновилась в нашей базе")
         except Exception as exc:  # noqa: BLE001 — сверка при повторе решит по панели
             await _safe_rollback(self.store)
-            self._panel_failed(exc)
-            await self._finish(uid, "RETRY", error=error_text(exc))
+            await self._patch_failed(uid, exc)
             return
-        self.streak = 0
+        self._answered("patch")
         await self._finish(uid, "DONE", error=None)
         await self.sleep(PANEL_PAUSE_SEC)
+
+    async def _patch_failed(self, uid: int, exc: BaseException) -> None:
+        if await self._call_failed("patch", uid, exc):
+            # Запись могла и дойти — строка с target остаётся для ручной сверки.
+            await self._finish(uid, "FAILED", category=Category.PANEL_ERROR.value, error=error_text(exc))
+        else:
+            await self._finish(uid, "RETRY", error=error_text(exc))
 
     async def _recover_all(self) -> None:
         for item in await self.store.items(self.job_id, ("RUNNING", "RETRY")):
@@ -422,10 +481,12 @@ class _DaysRun:
         try:
             panel = await self.remnawave.get_user_by_uuid(sub.user_remna_id)
         except Exception as exc:  # noqa: BLE001
-            self._panel_failed(exc)
-            await self._finish(uid, "RETRY", error=error_text(exc))
+            if await self._call_failed("get", uid, exc):
+                await self._finish(uid, "FAILED", category=Category.PANEL_ERROR.value, error=error_text(exc))
+            else:
+                await self._finish(uid, "RETRY", error=error_text(exc))
             return
-        self.streak = 0
+        self._answered("get")
         if panel is None:
             await self._finish(uid, "FAILED", category=Category.NOT_IN_PANEL.value)
             return
@@ -475,18 +536,22 @@ class _DaysRun:
                     raise RuntimeError("подписка не обновилась в нашей базе")
             except Exception as exc:  # noqa: BLE001
                 await _safe_rollback(self.store)
-                self._panel_failed(exc)
-                await self._finish(uid, "RETRY", error=error_text(exc))
+                await self._patch_failed(uid, exc)
                 return
-            self.streak = 0
+            self._answered("patch")
             await self._finish(uid, "DONE", error=None)
             await self.sleep(PANEL_PAUSE_SEC)
             return
         await self._finish(uid, "FAILED", category=Category.MANUAL.value)
 
     async def _verify(self) -> None:
-        """Финальная сверка: окно в сотни миллисекунд между перечитыванием и PATCH не
-        закрыть, но его последствия видно — такие люди попадут в «проверить вручную»."""
+        """Финальная сверка — «проверить вручную» для тех, у кого что-то пошло не так.
+
+        Окно между перечитыванием срока и PATCH не закрыть: оплата, записавшая панель в
+        эти доли секунды, затирается нашим PATCH, и дальше панель и база сходятся на
+        нашем сроке — по срокам такое не видно. Поэтому, кроме сроков, смотрим оплаты
+        рядом с записью (`payment_near_item`): была — человек в «проверить вручную».
+        """
         for item in await self.store.items(self.job_id, ("DONE",)):
             if item.get("verify_note"):
                 continue
@@ -495,6 +560,8 @@ class _DaysRun:
             try:
                 if item.get("added_seconds") is not None:
                     note = await self._verify_frozen(uid)
+                elif await self.store.payment_near_item(self.job_id, uid):
+                    note = VERIFY_PAYMENT
                 else:
                     note = await self._verify_expire(uid, item.get("target_expire_at"))
             except Exception as exc:  # noqa: BLE001
@@ -759,7 +826,7 @@ class _MessageRun:
                     return await self.store.push(uid, {**feed, "tag": "bulk-message"})
 
                 async def send_email(r: Mapping[str, Any], title: str = title) -> Any:
-                    return await self.email_sender.send(to=str(r["email"]), subject=title, body=body)
+                    return await self._send_email(str(r["email"]), title, body, brand)
 
                 delivery = await deliver_message(
                     row,
@@ -799,6 +866,19 @@ class _MessageRun:
     async def _finish(self, uid: int, status: str, **fields: Any) -> None:
         await self.store.set_item(self.job_id, uid, status=status, **fields)
         await self.store.commit()
+
+    async def _send_email(self, to: str, subject: str, body: str, brand: str) -> Any:
+        """Письмо-рассылка через `send_branded`, а не через `send` письма с кодом.
+
+        `send` пишет адрес получателя в лог — при сбое, а у Brevo и при каждой удачной
+        отправке: лог воркера стал бы списком почт клиентов. `send_branded` адрес не
+        пишет. Адрес отправителя пока основной: отдельный адрес для рассылок (чтобы
+        «Отписаться» в Brevo не отрезало коды входа) — решение владельца.
+        """
+        branded = getattr(self.email_sender, "send_branded", None)
+        if callable(branded):
+            return await branded(to=to, subject=subject, body=body, brand=brand)
+        return await self.email_sender.send(to=to, subject=subject, body=body)
 
     async def _release(self, status: str, reason: Optional[str] = None) -> str:
         await self.store.recount(self.job_id)

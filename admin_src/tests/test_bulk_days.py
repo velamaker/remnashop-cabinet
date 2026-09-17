@@ -8,7 +8,10 @@
     только в панели, полный PATCH не стирает.
   * Дни выдаются ровно один раз: повторный прогон, падение между записью target и
     итогом, сбой панели и остановка не дают ни второго PATCH, ни пересчёта срока.
-  * Итог и финальная сверка доходят до админов.
+  * Итог и финальная сверка доходят до админов; оплата, прошедшая рядом с записью
+    срока, попадает в «проверить вручную», даже когда сроки сошлись.
+  * Один человек, на котором панель падает раз за разом, не держит задачу на паузе
+    вечно, а настоящая неполадка панели по-прежнему ставит паузу, а не ручной разбор.
 
 Подделки — tests/bulk_fakes.py: мир в памяти с семантикой транзакции. SQL-гарантии
 (захват строки, аренда, одна активная задача) проверяет migration-e2e на Postgres.
@@ -585,6 +588,173 @@ async def test_final_verify_flags_panel_that_did_not_keep_target():
     summary = env.rec.admin_messages[-1]
     assert "Массовое продление №" in summary and "проверить вручную 1" in summary
     assert "Запустил: @owner" in summary
+
+
+async def test_payment_racing_the_patch_is_flagged_even_when_terms_agree():
+    """Оплата записала панель и базу сразу после перечитывания срока: наш PATCH затёр
+    оплаченные дни, панель и база сошлись на нашем сроке — по срокам не видно ничего.
+    Видно по оплате рядом с записью."""
+    env = Env()
+    env.person(1)
+    env.person(2)
+    sub = env.world.subs[1]
+    paid = sub.expire_at + 30 * DAY
+
+    def payment_lands(sub_id, state):
+        if sub_id == sub.id and not env.world.payments:
+            env.world.payments.append((1, NOW))
+            env.panel.users[sub.user_remna_id].expire_at = paid
+            env.world.subs[1].expire_at = paid
+            env.world.people[1]["expire_at"] = paid
+        return state
+
+    env.store.sub_state_hook = payment_lands
+    job = env.job([1, 2], days=3)
+    assert await env.run(job) == "COMPLETED"
+    # Сама гонка никуда не делась — её не закрыть без блокировки панели.
+    assert env.panel.users[sub.user_remna_id].expire_at < paid
+    assert env.world.item(job, 1)["verify_note"] == bulk.VERIFY_PAYMENT
+    assert env.world.item(job, 2)["verify_note"] is None
+    assert "проверить вручную 1" in env.rec.admin_messages[-1]
+    assert bulk.item_to_dict(env.world.item(job, 1), readonly=False)["reason"] == bulk.VERIFY_PAYMENT
+
+
+@pytest.mark.parametrize("paid_at", [NOW - timedelta(minutes=bulk.RECENT_TX_MIN + 1), NOW + timedelta(hours=1)])
+async def test_payments_far_from_the_write_are_not_flagged(paid_at):
+    env = Env()
+    env.person(1)
+    env.world.payments.append((1, paid_at))
+    job = env.job([1])
+    assert await env.run(job) == "COMPLETED"
+    assert env.world.item(job, 1)["verify_note"] is None
+
+
+def test_payment_window_is_in_sql():
+    sql = bulk.PAYMENT_NEAR_ITEM_SQL
+    assert "t.status::text = 'COMPLETED'" in sql
+    assert f"i.updated_at - interval '{bulk.RECENT_TX_MIN} minutes'" in sql
+    assert f"i.updated_at + interval '{bulk.PAYMENT_AFTER_MIN} minutes'" in sql
+
+
+# ── 14a. Панель падает на одном человеке ─────────────────────────────────────
+
+
+def _poison_get(env, uid, exc=None):
+    bad = env.world.subs[uid].user_remna_id
+    original = env.panel.get_user_by_uuid
+
+    async def get(uuid):
+        if str(uuid) == str(bad):
+            env.panel.gets += 1
+            raise exc or ValueError("validation error for GetUserByUuidResponseDto")
+        return await original(uuid)
+
+    env.panel.get_user_by_uuid = get
+
+
+async def test_person_whose_panel_get_always_fails_does_not_stall_the_job():
+    env = Env()
+    for uid in (1, 2, 3):
+        env.person(uid)
+    _poison_get(env, 2)
+    job = env.job([1, 2, 3], notify={"text": "Компенсация", "channels": ["telegram"]})
+    assert await env.run(job) == "COMPLETED"
+    assert env.world.statuses(job) == {1: "DONE", 2: "FAILED", 3: "DONE"}
+    item = env.world.item(job, 2)
+    assert item["category"] == "PANEL_ERROR" and "ValueError" in item["error"]
+    assert "добавьте вручную" in bulk.item_to_dict(item, readonly=False)["reason"]
+    # Итог и сообщение получившим уходят, а не ждут «Продолжить», которое не поможет.
+    children = [j for j in env.world.jobs.values() if j.get("parent_job_id") == job]
+    assert len(children) == 1 and env.world.statuses(children[0]["id"]) == {1: "PENDING", 3: "PENDING"}
+    assert "ошибок 1" in env.rec.admin_messages[-1]
+
+
+async def test_last_person_failing_is_told_apart_by_asking_the_panel_about_a_neighbour():
+    """Между двумя сбоями последнего человека панель никому не отвечала: живость
+    проверяется GET соседа, уже получившего дни."""
+    env = Env()
+    for uid in (1, 2, 3):
+        env.person(uid)
+    _poison_get(env, 3)
+    job = env.job([1, 2, 3])
+    assert await env.run(job) == "COMPLETED"
+    assert env.world.statuses(job) == {1: "DONE", 2: "DONE", 3: "FAILED"}
+    assert env.world.item(job, 3)["category"] == "PANEL_ERROR"
+
+
+async def test_panel_going_down_mid_job_still_pauses_and_resumes():
+    env = Env()
+    for uid in (1, 2, 3, 4):
+        env.person(uid)
+
+    def down_after_second(_panel_user):
+        if len(env.panel.updates) == 2:
+            env.panel.get_error = RuntimeError("connect timeout")
+
+    env.panel.after_update = down_after_second
+    job = env.job([1, 2, 3, 4])
+    assert await env.run(job) == "PAUSED"
+    assert env.world.statuses(job) == {1: "DONE", 2: "DONE", 3: "PENDING", 4: "PENDING"}
+    assert env.world.jobs[job]["pause_reason"].startswith("Панель VPN не отвечает")
+
+    env.panel.get_error = None
+    env.panel.after_update = None
+    env.world.jobs[job].update(status="QUEUED", pause_reason=None)
+    assert await env.run(job, token="w2") == "COMPLETED"
+    assert env.world.statuses(job) == {1: "DONE", 2: "DONE", 3: "DONE", 4: "DONE"}
+    assert len(env.panel.updates) == 4
+
+
+async def test_small_job_with_panel_down_pauses_instead_of_failing_people():
+    env = Env()
+    for uid in (1, 2, 3):
+        env.person(uid)
+    env.panel.get_error = RuntimeError("connect timeout")
+    job = env.job([1, 2, 3])
+    assert await env.run(job) == "PAUSED"
+    assert set(env.world.statuses(job).values()) == {"PENDING"}
+
+
+def _poison_patch(env, uid):
+    bad = env.world.subs[uid].user_remna_id
+    original = env.panel.update_user
+
+    async def update_user(user, uuid, plan=None, subscription=None, reset_traffic=False):
+        if str(uuid) == str(bad):
+            raise ValueError("400: email is invalid")
+        return await original(user, uuid, plan=plan, subscription=subscription, reset_traffic=reset_traffic)
+
+    env.panel.update_user = update_user
+
+
+async def test_person_whose_patch_always_fails_while_others_succeed_goes_to_manual_check():
+    env = Env()
+    for uid in (1, 2, 3):
+        env.person(uid)
+    _poison_patch(env, 2)
+    job = env.job([1, 2, 3])
+    assert await env.run(job) == "COMPLETED"
+    assert env.world.statuses(job) == {1: "DONE", 2: "FAILED", 3: "DONE"}
+    item = env.world.item(job, 2)
+    # Запись могла и дойти — target остаётся в журнале для сверки.
+    assert item["category"] == "PANEL_ERROR" and item["target_expire_at"] is not None
+
+
+async def test_patch_going_down_mid_job_pauses_even_though_reads_work():
+    """Чтение живо, запись лежит: GET соседа тут ничего не доказывает — пауза, а не
+    ручной разбор для всех, кому запись не дошла."""
+    env = Env()
+    for uid in (1, 2, 3, 4):
+        env.person(uid)
+
+    def down_after_second(_panel_user):
+        if len(env.panel.updates) == 2:
+            env.panel.update_error = RuntimeError("502 from panel")
+
+    env.panel.after_update = down_after_second
+    job = env.job([1, 2, 3, 4])
+    assert await env.run(job) == "PAUSED"
+    assert env.world.statuses(job) == {1: "DONE", 2: "DONE", 3: "RETRY", 4: "RETRY"}
 
 
 # ── 15. Исключение внутри процессора ─────────────────────────────────────────

@@ -177,6 +177,20 @@ async def main() -> None:
         await store.set_item(job1, uids[0], status="DONE")
         await store.recount(job1)
         await s.commit()
+        # «Проверить вручную» при оплате рядом с записью срока: окно считается от
+        # updated_at строки, и давняя оплата в него не попадает.
+        check(await store.payment_near_item(job1, uids[0]) is False, "без оплаты рядом с записью срока — не помечаем")
+        await s.execute(text("INSERT INTO transactions (user_id, status) VALUES (:u, 'COMPLETED')"), {"u": uids[0]})
+        check(await store.payment_near_item(job1, uids[0]) is True, "оплата рядом с записью срока — «проверить вручную»")
+        await s.execute(
+            text(
+                "UPDATE transactions SET created_at = now() - interval '1 hour', updated_at = now() - interval '1 hour' "
+                "WHERE user_id = :u AND status = 'COMPLETED'"
+            ),
+            {"u": uids[0]},
+        )
+        check(await store.payment_near_item(job1, uids[0]) is False, "давняя оплата не помечается")
+        await s.commit()
         job = await store.get_job(job1)
         check(job["applied_count"] == 1 and job["skipped_count"] == 1, "счётчики пересчитываются из строк")
         totals = await store.totals(job1)

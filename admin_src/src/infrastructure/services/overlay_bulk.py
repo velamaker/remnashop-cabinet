@@ -66,6 +66,9 @@ EXPIRE_TOL = timedelta(seconds=2)
 RESERVE_TOL = timedelta(hours=1)
 RECENT_TX_MIN = 10
 PENDING_TX_MIN = 30
+# Оплата, проведённая вплоть до стольких минут ПОСЛЕ записи срока, могла прочитать
+# подписку ещё до нашего коммита: запас на PATCH панели с его таймаутом.
+PAYMENT_AFTER_MIN = 5
 RECENT_SUB_MIN = 2
 CHANNELS = ("telegram", "cabinet", "email")
 SAMPLE_SIZE = 5
@@ -97,6 +100,7 @@ class Category(str, Enum):
     MISMATCH = "MISMATCH"
     MANUAL = "MANUAL"
     NOT_IN_PANEL = "NOT_IN_PANEL"
+    PANEL_ERROR = "PANEL_ERROR"
     UNKNOWN = "UNKNOWN"
     NO_CHANNEL = "NO_CHANNEL"
     CABINET_ONLY = "CABINET_ONLY"
@@ -135,6 +139,10 @@ REASON_RU: dict[Category, str] = {
     ),
     Category.NOT_IN_PANEL: "нет в панели VPN",
     Category.MANUAL: "срок изменился во время сбоя — проверьте вручную",
+    Category.PANEL_ERROR: (
+        "панель VPN отвечает ошибкой именно на этом человеке — проверьте срок в карточке "
+        "и добавьте вручную"
+    ),
     Category.CANCELED: "задача остановлена",
     Category.UNKNOWN: "сбой во время отправки — доставка неизвестна",
     Category.NO_CHANNEL: "нет доступного канала",
@@ -143,6 +151,7 @@ REASON_RU: dict[Category, str] = {
 VERIFY_NOTE = "после добавления срок в панели не совпал — проверьте вручную"
 VERIFY_UNAVAILABLE = "не удалось сверить с панелью VPN — проверьте вручную"
 VERIFY_FREEZE = "пауза снята во время добавления — проверьте срок"
+VERIFY_PAYMENT = "во время добавления прошла оплата — проверьте срок: оплаченные дни могли затереться"
 
 _FIELD_RU = {
     "status": "статус",
@@ -455,8 +464,8 @@ def identity_conflicts(user: Any, panel_user: Any) -> list[str]:
 def protected_user(user: Any, panel_user: Any) -> Any:
     """Кем представить человека панели, чтобы PATCH не стёр её данные. None — конфликт.
 
-    На живых данных у одного из 54 подписчиков почта была только в панели: полный
-    PATCH из нашей копии записал бы туда null. Где у нас пусто, а в панели задано —
+    Бывает, что почта или Telegram заданы только в панели: полный PATCH из нашей
+    копии записал бы туда null. Где у нас пусто, а в панели задано —
     берём панельное значение в НЕСОХРАНЯЕМУЮ копию (`dataclasses.replace` даёт новый
     объект со своим журналом изменений: исходный DTO и наша база не меняются).
     Задано и там, и там, но по-разному — это не нам решать: None.
@@ -885,6 +894,23 @@ WHERE j.kind = 'message' AND i.text_sha256 = :sha AND i.status IN ('DONE', 'UNKN
 
 DONE_USERS_SQL = "SELECT user_id FROM bulk_job_items WHERE job_id = :id AND status = 'DONE' ORDER BY user_id"
 
+# Оплата рядом с записью срока. `updated_at` строки DONE — начало транзакции, в которой
+# перечитан срок, ушёл PATCH и записан итог. Оплата, проведённая раньше чем за
+# RECENT_TX_MIN минут до этого, отложила бы человека ещё на классификации; позже чем
+# через PAYMENT_AFTER_MIN — прочитала бы уже наш срок. Всё между — возможная гонка:
+# покупка могла записать панель после нашего перечитывания, и наш PATCH затёр её дни.
+PAYMENT_NEAR_ITEM_SQL = f"""
+SELECT EXISTS (
+    SELECT 1
+    FROM bulk_job_items i
+    JOIN transactions t ON t.user_id = i.user_id
+    WHERE i.job_id = :job_id AND i.user_id = :user_id
+      AND t.status::text = 'COMPLETED'
+      AND GREATEST(t.created_at, t.updated_at) > i.updated_at - interval '{RECENT_TX_MIN} minutes'
+      AND GREATEST(t.created_at, t.updated_at) < i.updated_at + interval '{PAYMENT_AFTER_MIN} minutes'
+)
+"""
+
 INFLIGHT_SQL = "SELECT count(*) FROM bulk_job_items WHERE job_id = :id AND status = ANY(CAST(:statuses AS VARCHAR[]))"
 
 CANCEL_NOW_SQL = """
@@ -1181,6 +1207,12 @@ class BulkStore:
 
     async def done_user_ids(self, job_id: int) -> list[int]:
         return [int(r[0]) for r in (await self.session.execute(text(DONE_USERS_SQL), {"id": job_id})).all()]
+
+    async def payment_near_item(self, job_id: int, user_id: int) -> bool:
+        row = (
+            await self.session.execute(text(PAYMENT_NEAR_ITEM_SQL), {"job_id": job_id, "user_id": user_id})
+        ).first()
+        return bool(row and row[0])
 
     # данные людей
 

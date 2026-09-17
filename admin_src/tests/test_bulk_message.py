@@ -10,6 +10,9 @@
   * Флуд-лимит Telegram выжидается; три отказа Telegram подряд останавливают задачу,
     а ответ `None` (заблокировал бота) серией не считается.
   * Сбой записи ленты не срывает итог по человеку и не отравляет транзакцию.
+  * Персонал, попавший в задачу, сообщения не получает — проверка ещё и в воркере.
+  * Письма уходят через `send_branded` (адрес получателя не пишется в лог), а не
+    через `send` письма с кодом.
   * «Проверить на себе» уходит от лица обычного клиента.
 
 Запуск — внутри образа бота, как остальные тесты рядом (см. ci.yml).
@@ -54,16 +57,30 @@ class FakeNotifier:
         return answer
 
 
-class FakeEmail:
+class PlainEmail:
+    """Отправитель без overlay-патча: только `send`, как у базы."""
+
     def __init__(self, enabled=True):
         self._enabled = enabled
         self.sent = []
+        self.plain = []
 
     @property
     def is_enabled(self):
         return self._enabled
 
     async def send(self, *, to, subject, body):
+        self.plain.append((to, subject, body))
+        self.sent.append((to, subject, body))
+
+
+class FakeEmail(PlainEmail):
+    def __init__(self, enabled=True):
+        super().__init__(enabled)
+        self.branded = []
+
+    async def send_branded(self, *, to, subject, body, brand="", **opts):
+        self.branded.append({"to": to, "subject": subject, "brand": brand, **opts})
         self.sent.append((to, subject, body))
 
 
@@ -124,6 +141,39 @@ async def test_bot_blocked_goes_straight_to_email():
     assert env.notifier.calls == []
     assert env.email.sent == [("a@test", "Сообщение от VPN", "Привет & спасибо")]
     assert env.world.item(job, 1)["channels"] == "email,cabinet"
+
+
+async def test_email_goes_through_send_branded_not_the_login_code_path():
+    env = Env()
+    env.world.add_person(1, telegram_id=None, email="a@test", is_email_verified=True)
+    job = env.job([1])
+    await env.run(job)
+    assert env.email.plain == []
+    assert env.email.branded == [{"to": "a@test", "subject": "Сообщение от VPN", "brand": "VPN"}]
+    assert env.world.item(job, 1)["channels"] == "email,cabinet"
+
+
+async def test_sender_without_overlay_patch_still_sends_through_send():
+    env = Env()
+    env.email = PlainEmail()
+    env.world.add_person(1, telegram_id=None, email="a@test", is_email_verified=True)
+    job = env.job([1])
+    await env.run(job)
+    assert env.email.plain == [("a@test", "Сообщение от VPN", "Привет & спасибо")]
+
+
+async def test_staff_in_the_job_gets_nothing():
+    """Выборка уже без персонала, но роль могли выдать, пока задача ждала очереди."""
+    env = Env()
+    env.world.add_person(1, role="ADMIN", email="a@test", is_email_verified=True, has_push=True)
+    env.world.add_person(2)
+    job = env.job([1, 2])
+    assert await env.run(job) == "COMPLETED"
+    item = env.world.item(job, 1)
+    assert (item["status"], item["category"]) == ("SKIPPED", "STAFF")
+    assert [u.id for u, _ in env.notifier.calls] == [2]
+    assert env.email.sent == [] and env.world.pushed == []
+    assert [uid for uid, _ in env.world.feed] == [2]
 
 
 async def test_email_switched_off_in_admin_wins_over_env(monkeypatch):

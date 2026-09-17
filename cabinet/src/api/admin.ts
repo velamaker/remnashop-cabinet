@@ -541,6 +541,7 @@ export const bulkJobsAdminApi = {
     adminApi.get<{ items: BulkJob[]; active: { days: number | null; message: number | null } }>(
       `/users/bulk/jobs?limit=${limit}`,
     ),
+  job: (jobId: number) => adminApi.get<BulkJob>(`/users/bulk/jobs/${jobId}`),
   items: (jobId: number, statuses: string[], limit = 100, offset = 0) => {
     const qs = new URLSearchParams({ limit: String(limit), offset: String(offset) });
     if (statuses.length) qs.set("status", statuses.join(","));

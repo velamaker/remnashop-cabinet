@@ -57,6 +57,8 @@ class FakeWorld:
         self.items: dict[tuple[int, int], dict] = {}
         self.feed: list[tuple[int, dict]] = []
         self.pushed: list[tuple[int, dict]] = []
+        # Проведённые оплаты (transactions COMPLETED): (user_id, момент проведения).
+        self.payments: list[tuple[int, datetime]] = []
         self.next_job = 1
         self.snapshot: Optional[tuple] = None
         self.commits = 0
@@ -198,6 +200,8 @@ class FakeWorld:
                 "verify_note": None,
                 "error": None,
                 "attempts": 0,
+                # Как у базы: now() транзакции, в которой строку меняли в последний раз.
+                "updated_at": None,
             }
         return job_id
 
@@ -312,13 +316,14 @@ class FakeStore:
         self.w.touch()
         it["status"] = to
         it["attempts"] += 1
+        it["updated_at"] = self.w.now
         return True
 
     async def set_item(self, job_id: int, user_id: int, **fields: Any) -> None:
         unknown = set(fields) - bulk._ITEM_FIELDS
         assert not unknown, unknown
         self.w.touch()
-        self.w.items[(job_id, user_id)].update(fields)
+        self.w.items[(job_id, user_id)].update(fields, updated_at=self.w.now)
 
     async def skip_pending(self, job_id: int, category: str) -> int:
         self.w.touch()
@@ -337,6 +342,39 @@ class FakeStore:
 
     async def done_user_ids(self, job_id: int) -> list[int]:
         return [uid for (j, uid), it in sorted(self.w.items.items()) if j == job_id and it["status"] == "DONE"]
+
+    async def payment_near_item(self, job_id: int, user_id: int) -> bool:
+        """PAYMENT_NEAR_ITEM_SQL: оплата от RECENT_TX_MIN минут до записи до PAYMENT_AFTER_MIN после."""
+        at = self.w.items[(job_id, user_id)]["updated_at"]
+        if at is None:
+            return False
+        low = at - timedelta(minutes=bulk.RECENT_TX_MIN)
+        high = at + timedelta(minutes=bulk.PAYMENT_AFTER_MIN)
+        return any(uid == user_id and low < paid < high for uid, paid in self.w.payments)
+
+    async def inflight(self, job_id: int, statuses) -> int:
+        return sum(1 for (j, _), it in self.w.items.items() if j == job_id and it["status"] in statuses)
+
+    async def cancel_now(self, job_id: int, expected: str, by: str) -> bool:
+        job = self.w.jobs.get(job_id)
+        if job is None or job["status"] != expected:
+            return False
+        self.w.touch()
+        job.update(status="CANCELED", finished=True, lease_owner=None, lease_alive=False, canceled_by_label=by)
+        await self.skip_pending(job_id, bulk.Category.CANCELED.value)
+        await self.recount(job_id)
+        return True
+
+    async def mark_canceling(self, job_id: int, expected: str, by: str) -> bool:
+        job = self.w.jobs.get(job_id)
+        if job is None or job["status"] != expected:
+            return False
+        self.w.touch()
+        job.update(status="CANCELING", canceled_by_label=by, finished=False)
+        return True
+
+    async def active_jobs(self) -> dict[str, int]:
+        return {j["kind"]: j["id"] for j in self.w.jobs.values() if j["status"] in bulk.ACTIVE_STATUSES}
 
     # данные людей
 

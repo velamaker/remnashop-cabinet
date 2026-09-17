@@ -4,6 +4,10 @@
   * Дни, текст и каналы проверяются с русскими причинами отказа.
   * Запускать может только полный доступ с правом записи: ни модератор с грантом на
     «Пользователей», ни read-only (legacy PREVIEW: full_access=true, can_write=false).
+    Проверяется на каждой изменяющей ручке, до первого обращения к базе.
+  * Запуск сверяет отпечаток выборки с подтверждённым в предпросмотре: разошлось —
+    409, задача не создаётся.
+  * «Остановить» у задачи в очереди с начатыми строками досверяет их, а не бросает.
   * Повтор того же request_id с теми же параметрами — тот же запуск, с другими — отказ.
   * `/users/bulk/...` не перехватывается карточкой `/users/{user_id}` и наоборот.
   * Список, «Массово по фильтру» и новые ручки строят выборку одной функцией, и
@@ -77,6 +81,201 @@ def test_endpoint_writer_guard_reads_request_state():
         users_bulk._require_writer(req)
     assert exc.value.status_code == 403
     users_bulk._require_writer(SimpleNamespace(state=SimpleNamespace(admin_access=compute_access(Role.OWNER, None))))
+
+
+class _Touched(BaseException):
+    """Ручка тронула аргумент до проверки прав. BaseException — чтобы `except Exception`
+    в ручке его не проглотил."""
+
+
+class _Poison:
+    def __getattr__(self, name):
+        raise _Touched(f"обращение к .{name} до проверки прав")
+
+
+_POST_HANDLERS = sorted(
+    (route.endpoint.__name__, route.endpoint) for route in users_bulk.router.routes if "POST" in route.methods
+)
+
+
+def test_every_post_handler_is_listed():
+    # Новая изменяющая ручка сама попадёт в проверку ниже; этот список — чтобы её
+    # появление было замечено, а не прошло молча.
+    assert [name for name, _ in _POST_HANDLERS] == [
+        "cancel_bulk_job",
+        "resume_bulk_job",
+        "start_bulk_days",
+        "start_bulk_message",
+        "test_bulk_message",
+    ]
+
+
+@pytest.mark.parametrize(
+    "access",
+    [
+        compute_access(Role.ADMIN, {"full_access": False, "sections": ["users"], "can_write": True}),
+        compute_access(Role.PREVIEW, None),
+    ],
+    ids=["moderator-with-users-write", "readonly"],
+)
+@pytest.mark.parametrize("name, endpoint", _POST_HANDLERS, ids=[n for n, _ in _POST_HANDLERS])
+async def test_post_handlers_refuse_without_full_write_access_before_touching_anything(access, name, endpoint):
+    from fastapi import HTTPException
+
+    func = _inner(endpoint)
+    request = SimpleNamespace(state=SimpleNamespace(admin_access=access, audit_actor="@mod"))
+    kwargs = {p: (request if p == "request" else _Poison()) for p in inspect.signature(func).parameters}
+    with pytest.raises(HTTPException) as exc:
+        await func(**kwargs)
+    assert exc.value.status_code == 403
+    assert exc.value.detail == bulk.READONLY_DENIED
+
+
+# ── 2a. Отпечаток выборки при запуске ────────────────────────────────────────
+
+
+class _StartStore:
+    def __init__(self):
+        self.created = []
+
+    async def job_by_request(self, request_id):
+        return None
+
+    async def recent_days(self, ids):
+        return {"count": 0, "job_id": None, "days": None}
+
+    async def recent_text(self, ids, sha):
+        return 0
+
+    async def active_jobs(self):
+        return {}
+
+    async def create_job(self, **kwargs):
+        self.created.append(kwargs)
+        return 41
+
+
+def _owner_request():
+    return SimpleNamespace(state=SimpleNamespace(admin_access=compute_access(Role.OWNER, None), audit_actor="@owner"))
+
+
+@pytest.fixture
+def start_env(monkeypatch):
+    store = _StartStore()
+    kicked = []
+
+    async def segment_ids(session, filters):
+        return [1, 2]
+
+    async def evaluate_days(store_, ids, **kwargs):
+        return bulk.DaysEvaluation(matched=2, categories={1: bulk.Category.APPLY, 2: bulk.Category.APPLY}, sample=[])
+
+    async def evaluate_message(store_, ids, **kwargs):
+        return bulk.MessageEvaluation(matched=2, recipients=[1, 2], skipped={}, by_channel={})
+
+    async def kick(job_id):
+        kicked.append(job_id)
+
+    monkeypatch.setattr(users_bulk, "BulkStore", lambda session: store)
+    monkeypatch.setattr(users_bulk, "_segment_ids", segment_ids)
+    monkeypatch.setattr(users_bulk, "evaluate_days", evaluate_days)
+    monkeypatch.setattr(users_bulk, "evaluate_message", evaluate_message)
+    monkeypatch.setattr(users_bulk, "_kick", kick)
+    return SimpleNamespace(store=store, kicked=kicked)
+
+
+async def _start_days(segment):
+    body = users_bulk.BulkDaysBody(days=3, segment_hash=segment, expected_apply=2, request_id=str(uuid4()))
+    return await _inner(users_bulk.start_bulk_days)(
+        body=body,
+        request=_owner_request(),
+        response=SimpleNamespace(status_code=202),
+        admin=SimpleNamespace(id=1),
+        session=_Session(),
+    )
+
+
+async def _start_message(segment):
+    body = users_bulk.BulkMessageBody(
+        text="Привет", channels=["telegram"], segment_hash=segment, expected_recipients=2, request_id=str(uuid4())
+    )
+    return await _inner(users_bulk.start_bulk_message)(
+        body=body,
+        request=_owner_request(),
+        response=SimpleNamespace(status_code=202),
+        admin=SimpleNamespace(id=1),
+        session=_Session(),
+        email_sender=SimpleNamespace(is_enabled=True),
+    )
+
+
+@pytest.mark.parametrize("start", [_start_days, _start_message], ids=["days", "message"])
+async def test_start_refuses_when_selection_changed_since_preview(start_env, start):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await start("отпечаток-из-предпросмотра")
+    assert exc.value.status_code == 409 and "Выборка изменилась" in exc.value.detail
+    assert start_env.store.created == [] and start_env.kicked == []
+
+    # Контроль: с тем же отпечатком, что у выборки сейчас, задача создаётся.
+    result = await start(bulk.segment_hash([1, 2]))
+    assert result["job_id"] == 41 and len(start_env.store.created) == 1 and start_env.kicked == [41]
+
+
+# ── 2b. «Остановить» у задачи в очереди ──────────────────────────────────────
+
+
+class _WorldSession:
+    def __init__(self, world):
+        self.world = world
+
+    async def commit(self):
+        self.world.commit()
+
+    async def rollback(self):
+        self.world.rollback()
+
+
+@pytest.fixture
+def cancel_env(monkeypatch):
+    from bulk_fakes import FakeStore, FakeWorld
+
+    world = FakeWorld()
+    kicked = []
+
+    async def kick(job_id):
+        kicked.append(job_id)
+
+    monkeypatch.setattr(users_bulk, "BulkStore", lambda session: FakeStore(world))
+    monkeypatch.setattr(users_bulk, "_kick", kick)
+
+    async def cancel(job_id):
+        return await _inner(users_bulk.cancel_bulk_job)(
+            job_id=job_id, request=_owner_request(), _admin=None, session=_WorldSession(world)
+        )
+
+    return SimpleNamespace(world=world, kicked=kicked, cancel=cancel)
+
+
+async def test_cancel_queued_job_with_started_rows_reconciles_them(cancel_env):
+    """Пауза → «Продолжить» (QUEUED) → «Остановить» до того, как воркер взял задачу."""
+    world = cancel_env.world
+    job = world.add_job("days", {"days": 3}, [(1, "RETRY", "APPLY", False), (2, "PENDING", None, False)])
+    world.items[(job, 1)]["target_expire_at"] = world.now
+    assert await cancel_env.cancel(job) == {"job_id": job, "status": "CANCELING"}
+    assert world.jobs[job]["status"] == "CANCELING"
+    assert cancel_env.kicked == [job]
+    # Строку на полпути не бросили — её досверит воркер в режиме остановки.
+    assert world.statuses(job) == {1: "RETRY", 2: "PENDING"}
+
+
+async def test_cancel_queued_job_without_started_rows_is_immediate(cancel_env):
+    world = cancel_env.world
+    job = world.add_job("days", {"days": 3}, [(1, "PENDING", None, False), (2, "DONE", "APPLY", False)])
+    assert await cancel_env.cancel(job) == {"job_id": job, "status": "CANCELED"}
+    assert world.statuses(job) == {1: "SKIPPED", 2: "DONE"}
+    assert cancel_env.kicked == []
 
 
 # ── 3. Повтор запуска ────────────────────────────────────────────────────────

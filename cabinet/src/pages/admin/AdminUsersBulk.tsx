@@ -681,8 +681,17 @@ export function BulkJobsPanel({
   const load = useCallback(() => {
     bulkJobsAdminApi
       .jobs(10)
-      .then((r) => {
-        setJobs(r.items);
+      .then(async (r) => {
+        // Список — десять последних задач, а идущая или приостановленная могла из них
+        // выпасть (пока панель лежала, отправили десяток сообщений). Без неё нет ни
+        // «Остановить», ни «Продолжить», а новый запуск упирается в «Уже идёт задача
+        // №N». Такую задачу догружаем отдельно и показываем первой.
+        const shown = new Set(r.items.map((j) => j.id));
+        const missing = [r.active?.days, r.active?.message].filter(
+          (id): id is number => typeof id === "number" && !shown.has(id),
+        );
+        const extra = await Promise.all(missing.map((id) => bulkJobsAdminApi.job(id).catch(() => null)));
+        setJobs([...extra.filter((j): j is BulkJob => j != null), ...r.items]);
         setError(null);
       })
       .catch((e) => {
