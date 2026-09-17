@@ -76,6 +76,51 @@ async def _detect_panel_version(client: AsyncClient) -> Optional[Version]:
     return None
 
 
+# Ссылки на фоновые проверки: без них задачу может собрать сборщик мусора на полпути.
+_background: set[asyncio.Task] = set()
+
+
+async def _check_expiration_notifications(client: AsyncClient) -> None:
+    """Сказать в лог, если панель 3.x не шлёт напоминания об окончании подписки.
+
+    В 2.x они включались сами вместе с вебхуком, в 3.x — отдельной переменной, и её
+    отсутствие не даёт ни одной строки ни в логе панели, ни в логе бота: напоминания
+    просто перестают приходить. Так было месяц после апгрейда. Эта же проверка ловит
+    потерю `.env` при переустановке панели.
+
+    Проверка вспомогательная: любая ошибка — DEBUG, старт бота она не держит.
+    """
+    # Импорт здесь, а не в шапке: сломанный модуль напоминаний не должен утянуть за
+    # собой выбор SDK — без него бот на 3.x не работает вообще.
+    from .webhook_expiration import LEGACY_EVENT_BY_OFFSET, PANEL_ENV_HINT
+
+    try:
+        response = await client.get("/system/configuration", timeout=_PROBE_TIMEOUT)
+        response.raise_for_status()
+        notifications = ((response.json() or {}).get("response") or {}).get("notifications")
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"Remnawave expiration notifications check skipped: '{e}'")
+        return
+    if not isinstance(notifications, dict) or "expirationNotifications" not in notifications:
+        logger.debug("Remnawave /system/configuration has no expirationNotifications — skipped")
+        return
+
+    hours = notifications.get("expirationNotifications")
+    if hours is None:
+        logger.error(
+            "Панель 3.x: напоминания об окончании подписки ВЫКЛЮЧЕНЫ в панели — "
+            "Telegram-напоминания за 3/2/1 день и через сутки после окончания не приходят. "
+            f"В .env панели: {PANEL_ENV_HINT}, затем пересоздать контейнер remnawave"
+        )
+        return
+    unknown = [h for h in hours or [] if h not in LEGACY_EVENT_BY_OFFSET]
+    if unknown:
+        logger.warning(
+            f"Панель 3.x шлёт напоминания за часы {unknown}, для которых у бота нет текста — "
+            f"они не дойдут до людей. Бот понимает {sorted(LEGACY_EVENT_BY_OFFSET)}"
+        )
+
+
 class RemnawaveProvider(Provider):
     scope = Scope.APP
 
@@ -132,6 +177,11 @@ class RemnawaveProvider(Provider):
                 from . import set_identity_map
 
                 set_identity_map(sdk.identity)
+                # Фоном: ответ панели на старте не нужен никому, а ждать его — лишние
+                # секунды до готовности бота, если панель как раз занята.
+                check = asyncio.create_task(_check_expiration_notifications(client))
+                _background.add(check)
+                check.add_done_callback(_background.discard)
                 yield sdk
         finally:
             await client.aclose()

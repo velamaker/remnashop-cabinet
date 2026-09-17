@@ -420,6 +420,24 @@ def install() -> None:
             ),
         )
 
+    # Напоминания об окончании подписки на панели 3.x: перевод события в разборе,
+    # фильтр получателей в обработчике и сверка эндпоинта между ними — три модуля,
+    # поэтому своим списком. Идёт ПОСЛЕ `webhook`: фильтр оборачивает обработчик
+    # поверх восстановления uuid (но и в обратном порядке uuid он дописывает сам).
+    expiration = (
+        ("напоминания: user.expiration панели 3.x", "remnapy.controllers.webhooks", "apply_parse"),
+        ("напоминания: кому не слать", "src.application.services.remnawave", "apply_guard"),
+        ("напоминания: эндпоинт вебхука не менялся", "src.web.endpoints.remnawave", "check_endpoint"),
+    )
+
+    for name, target, func in expiration:
+        on_import(
+            target,
+            lambda n=name, f=func, t=target: _run(
+                n, lambda: getattr(import_module(".webhook_expiration", __package__), f)(), t
+            ),
+        )
+
     for name, target, func in replica:
         on_import(
             target,

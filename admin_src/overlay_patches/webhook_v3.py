@@ -87,6 +87,12 @@ def apply_handlers() -> str:
     """Дописать `uuid` в разобранном событии — по числовому id через карту."""
     from src.application.services.remnawave import RemnaWebhookService
 
+    # Флаг и на классе, а не только на функции: поверх нас может встать другая
+    # обёртка (фильтр напоминаний, webhook_expiration.py), и по флагу на функции
+    # повторный вызов нас уже не узнал бы — обернул бы обработчик второй раз.
+    if RemnaWebhookService.__dict__.get("_overlay_uuid_restored", False):
+        return "uuid восстанавливается в событиях: уже было"
+
     patched = []
     for name in _HANDLERS:
         original = getattr(RemnaWebhookService, name, None)
@@ -110,6 +116,7 @@ def apply_handlers() -> str:
         setattr(RemnaWebhookService, name, make(original, name))
         patched.append(name)
 
+    RemnaWebhookService._overlay_uuid_restored = True
     return f"uuid восстанавливается в событиях: {', '.join(patched) or 'уже было'}"
 
 
