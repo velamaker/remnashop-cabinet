@@ -24,7 +24,7 @@
 
 | Метод | Путь | Зачем | Ключевые поля |
 |---|---|---|---|
-| GET | `/api/appearance` | Оформление кабинета — грузится в BrandingContext при старте приложения, до любого экрана: бренд, акцент, фон, логотип, тумблеры (sub-ссылка, тех-работы, языки, «Нужно больше устройств?») | brand_name, accent, background, background_dark, background_light, support_username, logo_url, telegram_oidc_enabled, sub_link_enabled, maintenance, maintenance_message, maintenance_block_login/registration/payments, enabled_languages, device_upsell_enabled? (нет поля = вкл), features? (только чужой бэкенд; `device_upsell:false` гасит блок апселла устройств без запросов к витрине) |
+| GET | `/api/appearance` | Оформление кабинета — грузится в BrandingContext при старте приложения, до любого экрана: бренд, акцент, фон, логотип, тумблеры (sub-ссылка, тех-работы, языки, «Нужно больше устройств?») | brand_name, accent, background, background_dark, background_light, support_username, logo_url, telegram_oidc_enabled, sub_link_enabled, maintenance, maintenance_message, maintenance_block_login/registration/payments, enabled_languages, device_upsell_enabled? (нет поля = вкл), features? (только чужой бэкенд; `device_upsell:false` гасит блок апселла устройств без запросов к витрине), bot_capabilities? (только НАШ бот: токены функций, которым нужен его код; нет поля = бот старше 1.3.9 — см. «Кабинет новее бота») |
 | GET, PUT, POST (multipart), DELETE | `/api/admin/appearance, /appearance/logo` | Редактирование оформления кабинета и загрузка/удаление логотипа (логотип шлётся FormData отдельным fetch) | AdminAppearance{brand_name(null=авто), brand_name_resolved, accent, background_dark/light, logo_url, sub_link_enabled, crypto_links_enabled, maintenance_*, enabled_languages, device_upsell_enabled} |
 
 ## Авторизация
@@ -162,6 +162,37 @@
 | GET, POST (xui — multipart) | `/api/admin/import/status, /import/squads, /import/sync-panel, /import/sync-bot, /import/xui` | Импорт/синхронизация пользователей из панели, бота и файла 3x-ui | {panel,bot,xui}; squads[]; {success,synced}; xui → {success,found,started} |
 | GET | `/api/admin/remnawave/system | /nodes | /hosts | /inbounds` | Живые данные панели Remnawave в админке (страница RemnaWave) | system{metadata.version, stats{cpu,memory,uptime,users,online_stats,nodes}}; nodes[{uuid,name,address,port,is_connected,is_disabled,users_online,traffic_used_bytes,xray_uptime,country_code,cpu_model,total_ram,last_status |
 | POST | `/api/admin/remnawave/nodes/{uuid}/{restart|enable|disable}, /remnawave/nodes/restart-all` | Управление нодами из админки | тело ответа не используется — после вызова перезапрашиваются ноды |
+
+## Кабинет новее бота
+
+Кабинет и наш бот обновляются по отдельности: `./update.sh --cabinet-only` (или ответ «н»
+на вопрос скрипта) пересобирает только кабинет, а кабинет в режиме site и так живёт на
+своём сервере. Тогда кабинет знает ручки, которых у работающего бота ещё нет. Решение —
+не номер версии, а список возможностей в коде бота:
+
+- бот отдаёт `bot_capabilities` в `GET /api/appearance` (`admin_src/src/web/cabinet_capabilities.py`);
+- кабинет держит манифест `cabinet/src/lib/botCapabilities.ts`: без токена прячутся
+  возможности из `FEATURE_NEEDS_BOT` (canFeature) и страницы из `PAGE_NEEDS_BOT` (меню,
+  плитки, прямой адрес); всё остальное — как раньше, «нет ключа = умеет»;
+- поля нет — бот 1.3.8 или старше, ни одного токена;
+- есть `features` — это чужой бэкенд, токены нашего бота не проверяются вовсе.
+
+**Когда новой функции нужен токен.** Обязателен, если со старым ботом кабинет (1) показывает
+вход в функцию до ответа бота — пункт меню, плитку, опцию, кнопку, тумблер; (2) пишет поле,
+которое старый бот молча выбросит (pydantic лишние поля игнорирует — «Сохранено» без
+сохранения); (3) обещает деньги, дни или необратимое, зависящее от нового поведения бота.
+Не нужен для скрытия, если блок рисуется только по данным ответа, а 404 превращается в
+«блока нет» без ошибки, — тогда путь идёт в `PATH_GRACEFUL` с причиной, а токен заводится
+справочным (по нему `update.sh` и экран «Обновления» называют, чего не будет).
+
+Токен добавляется в том же коммите, что и код бота, — в оба файла сразу. Сторожа:
+`cabinet/src/lib/botCapabilities.guard.test.ts` требует решения по каждому пути API, которого
+кабинет не звал в v1.3.8, сверяет токены кабинета и бота и проверяет, что адаптер объявил
+зависящие от бота возможности; формат строк заперт тестами — его читает `update.sh`. Новое
+ПОЛЕ в существующей ручке автоматически не ловится: для него правило выше.
+
+Совместимость по данным: `assets/apps.json` бот читает вживую, а при «только кабинет» файл
+обновляется без бота — схему менять только совместимо.
 
 ## Как проверить бэкенд на соответствие этому документу
 
