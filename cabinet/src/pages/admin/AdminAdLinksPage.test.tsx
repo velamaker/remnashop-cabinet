@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { ApiError } from "@/types/api";
+import type { Appearance } from "@/api/appearance";
 
 // Окно создания рекламной ссылки. Держим ровно то, на чём спотыкались люди:
 // серые образцы принимали за введённый текст, код с пробелом или кириллицей
@@ -15,6 +16,13 @@ vi.mock("@/api/admin", () => ({
     update: vi.fn(),
     delete: vi.fn(),
   },
+}));
+
+// Какой бот под кабинетом — задаёт тест: готовую ссылку отдаёт только бот с токеном
+// ad_link_url, и от этого зависит пояснение под кодом.
+let appearance: Appearance | null = { brand_name: "X", bot_capabilities: ["ad_link_url"] } as Appearance;
+vi.mock("@/contexts/BrandingContext", () => ({
+  useBranding: () => ({ appearance }),
 }));
 
 const { default: AdminAdLinksPage } = await import("./AdminAdLinksPage");
@@ -33,6 +41,7 @@ const submit = (modal: HTMLElement) => within(modal).getByRole("button", { name:
 describe("окно создания рекламной ссылки", () => {
   beforeEach(() => {
     create.mockReset();
+    appearance = { brand_name: "X", bot_capabilities: ["ad_link_url"] } as Appearance;
     Object.assign(navigator, { clipboard: { writeText: vi.fn() } });
   });
   afterEach(() => cleanup());
@@ -91,6 +100,19 @@ describe("окно создания рекламной ссылки", () => {
 
     await screen.findByText("Ссылка создана");
     expect(screen.getByText(/Адрес бота сейчас не получить/)).toBeTruthy();
+  });
+
+  it("бот старше готовых ссылок: не обещает «когда Telegram ответит», а говорит про обновление", async () => {
+    // Кабинет обновили отдельно от бота 1.3.8: `url` не придёт никогда.
+    appearance = { brand_name: "X" } as Appearance;
+    create.mockResolvedValue({ id: 9, name: "Пост", code: "post", is_active: true, created_at: null });
+    const modal = await openModal();
+    fireEvent.change(nameInput(), { target: { value: "Пост" } });
+    fireEvent.click(submit(modal));
+
+    await screen.findByText("Ссылка создана");
+    expect(screen.queryByText(/когда Telegram ответит/)).toBeNull();
+    expect(screen.getByText(/появится после обновления бота/).textContent).toContain("start=ad_post");
   });
 
   it("отказ бэкенда виден в окне, окно не закрывается", async () => {

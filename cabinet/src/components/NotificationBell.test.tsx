@@ -3,12 +3,21 @@ import { render, screen, cleanup, waitFor, fireEvent } from "@testing-library/re
 import { MemoryRouter } from "react-router-dom";
 import { I18nProvider } from "@/i18n/I18nContext";
 import { ApiError } from "@/types/api";
+import type { Appearance } from "@/api/appearance";
+import type { FeatureKey } from "@/lib/features";
 
 // Что умеет бэкенд — задаёт тест: именно от этого зависит, рисовать ли «Очистить».
+// `can` — настоящий canFeature поверх оформления с этим списком: копия его правила
+// разошлась бы с кодом при первой же правке (так уже было при проверке версии бота).
 let features: Record<string, boolean> = {};
-vi.mock("@/contexts/BrandingContext", () => ({
-  useBranding: () => ({ can: (key: string) => features[key] !== false }),
-}));
+vi.mock("@/contexts/BrandingContext", async () => {
+  const { canFeature } = await import("@/lib/features");
+  return {
+    useBranding: () => ({
+      can: (key: FeatureKey) => canFeature({ brand_name: "X", features } as Appearance, key),
+    }),
+  };
+});
 
 const clear = vi.fn();
 vi.mock("@/api/notifications", () => ({

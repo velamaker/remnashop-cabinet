@@ -32,6 +32,12 @@ interface BrandingValue {
   appearance: Appearance | null;
   /** Бэкенд бота не отвечает: показываем заглушку, бренд берём из кэша. */
   offline: boolean;
+  /**
+   * Оформление в этой вкладке уже пришло с сервера, а не только из кэша. До этого
+   * неизвестно, что умеет бот (список возможностей в кэше не хранится), и экраны,
+   * зависящие от него, ждут, а не мигают «раздела нет».
+   */
+  loaded: boolean;
   /** Логотип: из кэша, если сервер лежит. */
   logoSrc: string | null;
   /** Перечитать оформление с сервера и применить (после сохранения в админке). */
@@ -97,14 +103,20 @@ export function applyBackground(background: string | null) {
 const CACHE_KEY = "cabinet-appearance";
 const LOGO_KEY = "cabinet-appearance-logo";
 
-function readCache(): Appearance | null {
+export function readCache(): Appearance | null {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
     // Список возможностей из кэша НЕ берём: браузер мог сохранить его от другого
     // бэкенда (превью, переезд, вторая установка на том же адресе), и кабинет
     // спрятал бы рабочие разделы. Без него действует дефолт «умеет всё».
-    const { features: _ignored, ...rest } = JSON.parse(raw) as Appearance;
+    // Список возможностей бота — тоже: кэш мог остаться от бота до отката, и
+    // кабинет показал бы функции, которых у работающего бота уже нет.
+    const {
+      features: _ignored,
+      bot_capabilities: _ignoredCaps,
+      ...rest
+    } = JSON.parse(raw) as Appearance;
     return rest as Appearance;
   } catch {
     return null;
@@ -146,6 +158,7 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
   const [appearance, setAppearance] = useState<Appearance | null>(() => readCache());
   // Счётчик неудач подряд: 0 — бэкенд отвечает.
   const [failures, setFailures] = useState(0);
+  const [loaded, setLoaded] = useState(false);
   // Когда показывать заглушку. Порог зависит от того, есть ли чем рисовать кабинет:
   // без кэша оформления показывать нечего (бренд, логотип, языки — всё пусто), и
   // честнее сразу сказать «идут технические работы», чем рисовать пустой каркас.
@@ -160,6 +173,7 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
       const a = await appearanceApi.get();
       setFailures(0);
       setAppearance(a);
+      setLoaded(true);
       applyAccent(a.accent);
       if (a.brand_name) document.title = `${a.brand_name} — ${translate("common.personalCabinet")}`;
       try {
@@ -228,11 +242,12 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
       appearance,
       refresh,
       offline,
+      loaded,
       // Когда сервер недоступен, ссылка на логотип не загрузится — отдаём копию.
       logoSrc: (offline ? readLogo() : null) ?? appearance?.logo_url ?? null,
       can: (key: FeatureKey) => canFeature(appearance, key),
     }),
-    [appearance, refresh, offline],
+    [appearance, refresh, offline, loaded],
   );
 
   return <BrandingContext.Provider value={value}>{children}</BrandingContext.Provider>;

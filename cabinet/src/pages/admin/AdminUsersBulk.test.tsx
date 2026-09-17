@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, waitFor, fireEvent, act } from "@testing-library/react";
 import { ApiError } from "@/types/api";
 import type { BulkDaysPreview, BulkJob, BulkMessagePreview } from "@/api/admin";
+import type { Appearance } from "@/api/appearance";
+import { canFeature } from "@/lib/features";
 
 // «Массово по фильтру»: добавить дни и написать сообщение. Заперто то, что
 // защищает людей от случайной массовой раздачи:
@@ -333,5 +335,31 @@ describe("«Пользователи»: пункты массовых задач
     expect(options()).not.toContain("Написать сообщение…");
     expect(screen.queryByText("Фоновые задачи")).toBeNull();
     expect(jobs).not.toHaveBeenCalled();
+  });
+
+  // Кабинет обновили отдельно от бота 1.3.8: у бота нет ни ручек, ни поля
+  // bot_capabilities. Раньше пункты были видны, а предпросмотр падал с «Не удалось
+  // посчитать». Здесь `can` — настоящий canFeature поверх такого оформления.
+  it("бот без токена bulk_jobs — ни пунктов, ни журнала, ни запросов; с токеном — есть", async () => {
+    usersList.mockResolvedValue({ items: [], total: 0, limit: 25, offset: 0 });
+    jobs.mockResolvedValue({ items: [job({ status: "PAUSED" })], active: { days: 7, message: null } });
+    const oldBot = { brand_name: "X" } as Appearance;
+    features = { can: (key: string) => canFeature(oldBot, key as Parameters<typeof canFeature>[1]) };
+    render(<AdminUsersPage />);
+    await waitFor(() => expect(usersList).toHaveBeenCalled());
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(options()).not.toContain("Добавить дни подписки…");
+    expect(options()).not.toContain("Написать сообщение…");
+    expect(screen.queryByText("Фоновые задачи")).toBeNull();
+    expect(jobs).not.toHaveBeenCalled();
+    expect(daysPreview).not.toHaveBeenCalled();
+    expect(messagePreview).not.toHaveBeenCalled();
+    cleanup();
+
+    const newBot = { brand_name: "X", bot_capabilities: ["bulk_jobs"] } as Appearance;
+    features = { can: (key: string) => canFeature(newBot, key as Parameters<typeof canFeature>[1]) };
+    render(<AdminUsersPage />);
+    await waitFor(() => expect(options()).toContain("Добавить дни подписки…"));
+    expect(options()).toContain("Написать сообщение…");
   });
 });

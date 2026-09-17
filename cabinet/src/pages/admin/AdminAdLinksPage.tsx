@@ -4,6 +4,8 @@ import { adLinksAdminApi, type AdminAdLink } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { formatDate } from "@/lib/format";
 import { adCodeProblem, suggestAdCode } from "@/lib/adLinkCode";
+import { useBranding } from "@/contexts/BrandingContext";
+import { botHas } from "@/lib/botCapabilities";
 
 function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [name, setName] = useState("");
@@ -15,6 +17,10 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<AdminAdLink | null>(null);
   const [copied, setCopied] = useState(false);
+  // Готовую ссылку отдаёт только бот новее 1.3.8. Со старым ботом «появится, когда
+  // Telegram ответит» было бы обещанием, которое не сбудется никогда.
+  const { appearance } = useBranding();
+  const botGivesUrl = botHas(appearance, "ad_link_url");
 
   const codeError = adCodeProblem(code);
   const canSubmit = name.trim() !== "" && code.trim() !== "" && !codeError && !saving;
@@ -69,7 +75,9 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
             </div>
             {!created.url && (
               <p className="text-xs text-fg-muted">
-                Адрес бота сейчас не получить, поэтому показан только код. Готовая ссылка появится в списке, когда Telegram ответит.
+                {botGivesUrl
+                  ? "Адрес бота сейчас не получить, поэтому показан только код. Готовая ссылка появится в списке, когда Telegram ответит."
+                  : `Готовую ссылку этот бот ещё не отдаёт — она появится после обновления бота. Пока соберите её сами: t.me/имя_бота?start=ad_${created.code}`}
               </p>
             )}
             <button type="button" onClick={onClose} className="w-full rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-accent-fg hover:bg-accent/90 transition-colors">

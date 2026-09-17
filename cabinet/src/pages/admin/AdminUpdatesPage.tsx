@@ -4,6 +4,8 @@ import { updatesAdminApi, type UpdatesInfo, type UpdateItem, type UpdateChannel 
 import { ApiError } from "@/types/api";
 import { formatDate } from "@/lib/format";
 import { safeExternalUrl } from "@/lib/nav";
+import { useBranding } from "@/contexts/BrandingContext";
+import { BOT_CAPABILITIES, missingBotCaps } from "@/lib/botCapabilities";
 
 /** Карточка одного релиза. Разметка та же, что была на этом экране всегда, —
  *  просто вынесена, чтобы её могли показать и старый вид, и блоки. */
@@ -147,6 +149,13 @@ export default function AdminUpdatesPage() {
 
   useEffect(() => { load(); }, []);
 
+  // Кабинет новее бота (обновили только кабинет или кабинет на отдельном сервере):
+  // часть функций спрятана, и именно здесь владелец ищет, почему. Считаем только по
+  // свежему оформлению — в кэше списка возможностей нет, и карточка мигала бы у
+  // всех. Поверх чужого бэкенда список пуст: там решает адаптер.
+  const { appearance, loaded } = useBranding();
+  const missing = loaded ? missingBotCaps(appearance) : [];
+
   // Два блока рисуем, только если бэкенд их прислал. Наш бэкенд не присылает:
   // у него кабинет и бот — один продукт, одна версия и одна команда обновления,
   // и экран остаётся ровно таким, каким был.
@@ -177,6 +186,31 @@ export default function AdminUpdatesPage() {
       </div>
 
       {error && <p className="rounded-lg bg-danger/8 px-4 py-3 text-sm text-danger">{error}</p>}
+
+      {missing.length > 0 && (
+        <section
+          data-testid="bot-behind-cabinet"
+          className="rounded-2xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-fg"
+        >
+          <p className="font-semibold text-warning">Кабинет новее бота</p>
+          <p className="mt-1 text-fg-muted">
+            Кабинет обновлён отдельно от бота. Пока бот не обновлён, в кабинете скрыто:
+          </p>
+          <ul className="mt-2 list-disc space-y-0.5 pl-5">
+            {missing.map((cap) => (
+              <li key={cap}>{BOT_CAPABILITIES[cap].label}</li>
+            ))}
+          </ul>
+          <p className="mt-2 text-fg-muted">
+            Обновите бота на его сервере — скрытое появится само при следующем открытии кабинета,
+            пересобирать кабинет не нужно:
+          </p>
+          <p className="mt-1 flex items-start gap-2 overflow-x-auto rounded-lg bg-bg-raised px-3 py-2 font-mono text-xs text-fg-muted">
+            <Terminal className="mt-px h-3.5 w-3.5 shrink-0" />
+            <span className="whitespace-pre">./update.sh --with-bot</span>
+          </p>
+        </section>
+      )}
 
       {/* Расхождение словами: что из двух отстало. Считает бэкенд — он один знает
           обе версии; экран его текст только показывает. */}

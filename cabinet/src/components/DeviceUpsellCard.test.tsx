@@ -5,20 +5,27 @@ import { I18nProvider } from "@/i18n/I18nContext";
 import { detectInitialLang } from "@/i18n/config";
 import { translate } from "@/i18n/translate";
 import type { Appearance } from "@/api/appearance";
+import type { FeatureKey } from "@/lib/features";
 import type { DevicesResponse, SubscriptionInfoResponse } from "@/types/api";
 import { ApiError } from "@/types/api";
 import { device, devicesOf, iphoneTwice, offers, plan, sub } from "@/test/offersFixtures";
 
 // Оформление и возможности бэкенда задаёт тест: именно от них зависит, пойдёт ли
-// блок в сеть. `can` — как в настоящем контексте (canFeature: «нет ключа = умеет»).
-const look = (over: Partial<Appearance> = {}) => ({ brand_name: "X", ...over }) as Appearance;
+// блок в сеть. `can` — НАСТОЯЩИЙ canFeature, а не его копия: копия прежней семантики
+// («нет ключа = умеет») молча разошлась бы с кодом, когда блок стал зависеть от бота.
+// По умолчанию под кабинетом бот, который блок умеет (токен device_upsell).
+const look = (over: Partial<Appearance> = {}) =>
+  ({ brand_name: "X", bot_capabilities: ["device_upsell"], ...over }) as Appearance;
 let appearance: Appearance | null = look();
-vi.mock("@/contexts/BrandingContext", () => ({
-  useBranding: () => ({
-    appearance,
-    can: (key: string) => appearance?.features?.[key] !== false,
-  }),
-}));
+vi.mock("@/contexts/BrandingContext", async () => {
+  const { canFeature } = await import("@/lib/features");
+  return {
+    useBranding: () => ({
+      appearance,
+      can: (key: FeatureKey) => canFeature(appearance, key),
+    }),
+  };
+});
 
 const offersMock = vi.fn();
 vi.mock("@/api/subscription", () => ({
@@ -81,6 +88,20 @@ describe("DeviceUpsellCard: замки «Бедолаги» и тумблеро�
     await settle();
     expect(offersMock).not.toHaveBeenCalled();
     expect(container.textContent).toBe("");
+  });
+
+  it("бот без токена device_upsell (1.3.8, обновили только кабинет) — не спрашиваем, блока нет", async () => {
+    appearance = look({ bot_capabilities: undefined });
+    const { container } = view("devices", soloSub(), soloFull());
+    await settle();
+    expect(offersMock).not.toHaveBeenCalled();
+    expect(container.textContent).toBe("");
+
+    appearance = look({ bot_capabilities: ["bulk_jobs"] });
+    cleanup();
+    view("devices", soloSub(), soloFull());
+    await settle();
+    expect(offersMock).not.toHaveBeenCalled();
   });
 
   it("оформление ещё не загрузилось — не спрашиваем (первый заход без кэша)", async () => {

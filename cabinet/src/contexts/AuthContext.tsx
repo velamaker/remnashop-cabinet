@@ -10,6 +10,8 @@ import {
 import { authApi } from "@/api/auth";
 import { referralApi } from "@/api/referral";
 import { captureReferralCode, clearReferralCode, readReferralCode } from "@/lib/referralRef";
+import { BOT_PAGE_NOTE, pageBotReady } from "@/lib/botCapabilities";
+import { useBranding } from "@/contexts/BrandingContext";
 import { ApiError } from "@/types/api";
 import type {
   LoginRequest,
@@ -67,6 +69,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [pageNotes, setPageNotes] = useState<Record<string, string>>({});
   const [hasPassword, setHasPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  // AuthProvider живёт внутри BrandingProvider (App.tsx): оформление нужно, чтобы
+  // знать, какие страницы админки умеет работающий бот.
+  const { appearance } = useBranding();
 
   const refreshMe = useCallback(async () => {
     try {
@@ -185,10 +190,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [fullAccess, sections],
   );
   // Права проверяет canSection, а это — про УМЕНИЕ бэкенда: страницы, которых он
-  // не поддерживает, прятать даже у владельца с полным доступом.
+  // не поддерживает, прятать даже у владельца с полным доступом. Два источника:
+  // список страниц чужого бэкенда (whoami.pages) и возможности нашего бота — кабинет
+  // бывает новее бота, и тогда раздел, которому нужен новый бот, открывался бы с
+  // «Не удалось загрузить». Одна проверка закрывает меню, плитки и прямой адрес.
   const canPage = useCallback(
-    (path: string) => pages === null || pages.includes(path),
-    [pages],
+    (path: string) => (pages === null || pages.includes(path)) && pageBotReady(appearance, path),
+    [pages, appearance],
   );
 
   // Отдельно от canSection: там про ПРАВА админа, здесь — про умение бэкенда.
@@ -201,7 +209,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Причина, по которой страницы здесь нет. Показывается только тому, кто всё
   // же пришёл по адресу руками: в меню такой страницы нет вовсе.
-  const pageNote = useCallback((path: string) => pageNotes[path], [pageNotes]);
+  // Причина от чужого бэкенда главнее; своя — только когда не хватает бота.
+  const pageNote = useCallback(
+    (path: string) => pageNotes[path] ?? (pageBotReady(appearance, path) ? undefined : BOT_PAGE_NOTE),
+    [pageNotes, appearance],
+  );
 
   const value = useMemo(
     () => ({

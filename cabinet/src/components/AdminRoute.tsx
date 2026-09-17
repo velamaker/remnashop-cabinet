@@ -1,6 +1,8 @@
 import { type ReactNode } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { useBranding } from "@/contexts/BrandingContext";
+import { pageBotCap, pageBotReady } from "@/lib/botCapabilities";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { AdminPageUnavailable } from "@/components/admin/AdminPageUnavailable";
 
@@ -14,6 +16,7 @@ function FullScreenLoader() {
 
 export function AdminRoute({ children }: { children: ReactNode }) {
   const { user, isAdmin, isLoading, pages, canPage, pageNote } = useAuth();
+  const { appearance, loaded, offline } = useBranding();
   const { pathname } = useLocation();
 
   if (isLoading) return <FullScreenLoader />;
@@ -29,9 +32,17 @@ export function AdminRoute({ children }: { children: ReactNode }) {
   // Вложенные адреса (`/admin/users/42`) считаем частью своей страницы: в pages
   // перечислены только корни экранов, и сравнение «в лоб» закрыло бы карточку
   // внутри открытого раздела. Когда списка нет вовсе (наш собственный бэкенд его
-  // не шлёт), canPage отвечает «доступна» и сюда мы не заходим вообще.
+  // не шлёт), canPage отвечает «доступна» для всего, кроме страниц, которым нужен
+  // бот новее работающего (lib/botCapabilities).
+  //
+  // Страницы, которым нужен новый бот, ждут ответа с оформлением: до него кабинет
+  // знает только кэш, а списка возможностей в кэше нет — прямой заход по адресу
+  // мигнул бы экраном «Раздела здесь нет» у владельца с обновлённым ботом.
+  if (pageBotCap(pathname) && !loaded && !offline) return <FullScreenLoader />;
   const nested = (pages ?? []).some((p) => p !== "/admin" && pathname.startsWith(p + "/"));
-  if (!canPage(pathname) && !nested) {
+  // Вложенный адрес внутри раздела чужого бэкенда пускаем по `nested`, но не мимо
+  // проверки бота: её canPage тоже содержит, а `nested` — нет.
+  if (!pageBotReady(appearance, pathname) || (!canPage(pathname) && !nested)) {
     return (
       <AdminLayout>
         <AdminPageUnavailable path={pathname} note={pageNote(pathname)} />
