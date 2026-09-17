@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { TelegramLinkPrompt } from "@/components/TelegramLinkPrompt";
 import { RenewalBanner } from "@/components/RenewalBanner";
+import { useRenewalDiscount } from "@/hooks/useRenewalDiscount";
 import { TrialDiscountBanner } from "@/components/TrialDiscountBanner";
 import { PromoBanner } from "@/components/PromoBanner";
 import { OnboardingWizard } from "@/components/OnboardingWizard";
@@ -42,6 +43,8 @@ export default function HomePage() {
   const { user } = useAuth();
   const t = useT();
   const { subscription, isLoading, reload } = useSubscription();
+  // Скидка на продление живёт внутри плашки продления; пробному периоду её не выдают.
+  const renewalOffer = useRenewalDiscount(!!subscription && !subscription.is_trial);
   const [devices, setDevices] = useState<{ current: number; max: number } | null>(null);
   // Полный ответ /devices — блоку «Нужно больше устройств?» нужны сами устройства
   // (подсказка про дубли), а не только счётчики. Второй запрос не делаем.
@@ -153,7 +156,7 @@ export default function HomePage() {
       {/* Напоминание продлить подписку (скоро кончится / истекла) */}
       <PromoBanner />
       {subscription?.url && <OnboardingWizard subUrl={subscription.url} />}
-      <RenewalBanner subscription={subscription} />
+      <RenewalBanner subscription={subscription} offer={renewalOffer} />
       <TrialDiscountBanner />
 
       {/* Ненавязчивое предложение привязать Telegram (только email-пользователям) */}

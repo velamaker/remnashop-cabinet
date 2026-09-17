@@ -382,6 +382,11 @@ def install() -> None:
             "src.infrastructure.database.dao.transaction",
             "stats_exclude_test",
         ),
+        (
+            "рассылка «истекают скоро»",
+            "src.application.use_cases.broadcast.queries.audience",
+            "broadcast_expiring",
+        ),
     )
 
     # Правки запасной копии бэкенда: у них по три разные цели, поэтому идут

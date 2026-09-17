@@ -28,6 +28,7 @@ import { ProgressBar } from "@/components/ui/ProgressBar";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { RenewalBanner } from "@/components/RenewalBanner";
+import { useRenewalDiscount } from "@/hooks/useRenewalDiscount";
 import { TrialDiscountBanner } from "@/components/TrialDiscountBanner";
 import { PromoBanner } from "@/components/PromoBanner";
 import { SubscriptionFreeze } from "@/components/SubscriptionFreeze";
@@ -111,6 +112,8 @@ export default function DashboardPage() {
   // Что умеет бэкенд: пауза подписки есть не у каждого бота (см. features).
   const { can } = useBranding();
   const { subscription, isLoading, reload } = useSubscription();
+  // Хук — до ранних return ниже: порядок хуков не должен зависеть от загрузки.
+  const renewalOffer = useRenewalDiscount(!!subscription && !subscription.is_trial);
   const [isReissuing, setIsReissuing] = useState(false);
   const [reissueError, setReissueError] = useState<string | null>(null);
   const [devices, setDevices] = useState<{ current: number; max: number } | null>(null);
@@ -185,7 +188,7 @@ export default function DashboardPage() {
 
       {/* Заметные предупреждения: истечение подписки / окончание трафика */}
       <PromoBanner />
-      <RenewalBanner subscription={subscription} />
+      <RenewalBanner subscription={subscription} offer={renewalOffer} />
       <TrialDiscountBanner />
       {/* Пауза подписки — фича кабинета, но держится на бэкенде: он должен уметь
           и снять доступ, и вернуть остаток дней. Не умеет — кнопку не показываем,

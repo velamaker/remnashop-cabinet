@@ -474,7 +474,8 @@ ADMIN_PAGE_SECTION: dict[str, str] = {
     "/admin/referral": "settings", "/admin/topup": "settings",
     "/admin/reserve": "settings", "/admin/freeze": "settings",
     "/admin/promo-banner": "settings", "/admin/trial-discount": "settings",
-    "/admin/winback": "settings", "/admin/digest": "settings",
+    "/admin/winback": "settings", "/admin/renewal-discount": "settings",
+    "/admin/digest": "settings",
     "/admin/traffic-alert": "settings", "/admin/new-device": "settings",
     "/admin/subscription-app": "settings", "/admin/server-status": "settings",
     "/admin/email": "settings", "/admin/auth": "settings",
@@ -3626,6 +3627,12 @@ ADMIN_PAGE_REQUIREMENTS: dict[str, list[tuple[str, str]]] = {
     "/admin/promo-banner": [("GET", "/api/admin/promo-banner")],
     "/admin/trial-discount": [("GET", "/api/admin/trial-discount")],
     "/admin/winback": [("GET", "/api/admin/winback")],
+    # Скидку на продление ДО окончания подписки поверх «Бедолаги» не строим: у
+    # неё свои промо-предложения, а выдача через `purchase_discount` и итоги по
+    # нашим транзакциям на её базе не имеют смысла. Ручки нет — страницы нет ни в
+    # меню, ни в `pages`. В ADMIN_SECTION_REQUIREMENTS её не добавляем: раздел
+    # «Настройки» не должен закрываться из-за функции, которой здесь нет вовсе.
+    "/admin/renewal-discount": [("GET", "/api/admin/renewal-discount")],
     "/admin/digest": [("GET", "/api/admin/digest")],
     # «Трафик 80 %» намеренно НЕ делаем поверх «Бедолаги»: у неё есть своё такое
     # уведомление (вебхук панели bandwidth_usage_threshold_reached, тумблер

@@ -3,6 +3,7 @@ import { RefreshCw, AlertCircle, CheckCircle, XCircle, Clock, Send, Eye, EyeOff 
 import { broadcastsAdminApi, plansAdminApi, type AdminBroadcast, type AdminPlan, type BroadcastChannel } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { formatDate } from "@/lib/format";
+import { ruDays } from "@/lib/pluralRu";
 
 // Предпросмотр «как в Telegram»: экранируем всё, затем возвращаем только
 // разрешённый Telegram whitelist тегов (b/i/u/s/code/pre/a). Скрипты/атрибуты
@@ -36,6 +37,8 @@ const AUDIENCE_LABELS: Record<string, string> = {
   TRIAL: "Telegram · пробный период",
   EXPIRED: "Telegram · подписка истекла",
   PLAN: "Telegram · по тарифу",
+  // Бэкенд узнаёт «Истекают скоро» по payload и отдаёт отдельным ключом.
+  TG_EXPIRING: "Telegram · истекают скоро",
   // Email-история хранит сегмент (EMAIL_*).
   EMAIL_ALL: "Email · все",
   EMAIL_SUBSCRIBED: "Email · с подпиской",
@@ -62,6 +65,7 @@ const CHANNEL_GROUPS: { title: string; items: ChannelItem[] }[] = [
       { key: "TG_SUBSCRIBED", label: "С подпиской", hint: "активная (вкл. пробные)" },
       { key: "TG_UNSUBSCRIBED", label: "Без подписки", hint: "нет активной подписки" },
       { key: "TG_TRIAL", label: "Пробный период", hint: "сейчас на триале" },
+      { key: "TG_EXPIRING", label: "Истекают скоро", hint: "активная, без пробных, заканчивается в ближайшие N дней" },
       { key: "TG_EXPIRED", label: "Подписка истекла", hint: "закончилась" },
     ],
   },
@@ -80,6 +84,20 @@ const CHANNEL_GROUPS: { title: string; items: ChannelItem[] }[] = [
 const channelOf = (k: BroadcastChannel) => (k.startsWith("EMAIL") ? "EMAIL" : "TG");
 const isAll = (k: BroadcastChannel) => k === "TG_ALL" || k === "EMAIL_ALL";
 
+// «Истекают скоро» — подмножество «С подпиской» и может совпасть с любым тарифом:
+// вместе с ними часть людей получила бы сообщение дважды.
+const EXPIRING_OVERLAPS: BroadcastChannel[] = ["TG_ALL", "TG_SUBSCRIBED", "TG_PLAN"];
+const EXPIRING_DAY_OPTIONS = [3, 7, 14, 30];
+const EXPIRING_DEFAULT_DAYS = 7;
+
+/** Подпись рассылки в истории; у «Истекают скоро» — с числом дней. */
+function audienceLabel(b: AdminBroadcast): string {
+  if (b.audience === "TG_EXPIRING" && b.expiring_days) {
+    return `${AUDIENCE_LABELS.TG_EXPIRING} (${ruDays(b.expiring_days)})`;
+  }
+  return AUDIENCE_LABELS[b.audience] ?? b.audience;
+}
+
 function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
   const [text, setText] = useState("");
   const [selected, setSelected] = useState<Set<BroadcastChannel>>(new Set());
@@ -91,17 +109,19 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
   const [preview, setPreview] = useState(false);
   const [plans, setPlans] = useState<AdminPlan[]>([]);
   const [planId, setPlanId] = useState<number | "">("");
+  const [expiringDays, setExpiringDays] = useState(EXPIRING_DEFAULT_DAYS);
 
   const planSelected = selected.has("TG_PLAN");
+  const expiringSelected = selected.has("TG_EXPIRING");
 
-  // Счётчик «по тарифу» зависит от выбранного тарифа, поэтому перезапрашиваем
-  // при его смене. Остальные аудитории от него не зависят и не мигают.
+  // Счётчики «по тарифу» и «истекают скоро» зависят от выбора, поэтому
+  // перезапрашиваем при его смене. Остальные аудитории от него не зависят и не мигают.
   useEffect(() => {
     broadcastsAdminApi
-      .audienceCounts(typeof planId === "number" ? planId : undefined)
+      .audienceCounts(typeof planId === "number" ? planId : undefined, expiringDays)
       .then(setCounts)
       .catch(() => {});
-  }, [planId]);
+  }, [planId, expiringDays]);
 
   // Тарифы тянем только когда они понадобились — на обычную рассылку лишний запрос ни к чему.
   useEffect(() => {
@@ -116,11 +136,19 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
   // надмножество сегментов, иначе часть юзеров получит рассылку дважды.
   // Telegram и Email независимы друг от друга.
   const conflicts = (k: BroadcastChannel, s: Set<BroadcastChannel>): boolean => {
+    if (k === "TG_EXPIRING" && EXPIRING_OVERLAPS.some((x) => s.has(x))) return true;
+    if (EXPIRING_OVERLAPS.includes(k) && s.has("TG_EXPIRING")) return true;
     const ch = channelOf(k);
     const same = [...s].filter((x) => channelOf(x) === ch);
     if (isAll(k)) return same.some((x) => !isAll(x));
     return same.some((x) => isAll(x));
   };
+  // Почему пункт заблокирован — для подсказки при наведении.
+  const conflictReason = (k: BroadcastChannel): string =>
+    (k === "TG_EXPIRING" && EXPIRING_OVERLAPS.some((x) => selected.has(x))) ||
+    (EXPIRING_OVERLAPS.includes(k) && selected.has("TG_EXPIRING"))
+      ? "Пересекается с «Истекают скоро» (задвоение получателей)"
+      : "Нельзя вместе с «Все» этого канала (задвоение получателей)";
 
   const toggle = (k: BroadcastChannel) => {
     if (!selected.has(k) && conflicts(k, selected)) return; // заблокирован — игнор
@@ -139,8 +167,13 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
   // Кабинет может стоять на отдельном сервере и быть новее бота. Сегмент, о
   // котором бот не знает, не показываем: счётчики — единственный ответ, где
   // видно, какие каналы он умеет. Ждём загрузки счётчиков, чтобы пункт не мигал.
-  const supported = (c: ChannelItem) =>
-    c.key !== "TG_PLAN" || counts === null || "TG_PLAN" in counts;
+  // «Истекают скоро» — только когда ключ уже пришёл: этот сегмент бывает не у всех
+  // ботов (и не встаёт, если не применилась правка рассылок), а мелькнувший и
+  // пропавший пункт хуже, чем появившийся чуть позже.
+  const supported = (c: ChannelItem) => {
+    if (c.key === "TG_EXPIRING") return counts !== null && "TG_EXPIRING" in counts;
+    return c.key !== "TG_PLAN" || counts === null || "TG_PLAN" in counts;
+  };
 
   const submit = async () => {
     setErr(null);
@@ -155,11 +188,13 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
         text.trim(),
         [...selected],
         typeof planId === "number" ? planId : undefined,
+        expiringSelected ? expiringDays : undefined,
       );
       setMsg("Рассылка запущена — прогресс появится в истории ниже");
       setText("");
       setSelected(new Set());
       setPlanId("");
+      setExpiringDays(EXPIRING_DEFAULT_DAYS);
       setConfirm(false);
       onCreated();
     } catch (e) {
@@ -228,7 +263,7 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
                     type="button"
                     onClick={() => toggle(c.key)}
                     disabled={blocked}
-                    title={blocked ? "Нельзя вместе с «Все» этого канала (задвоение получателей)" : undefined}
+                    title={blocked ? conflictReason(c.key) : undefined}
                     className={`flex items-start gap-3 rounded-xl border p-3 text-left transition-colors ${
                       on
                         ? "border-accent bg-accent-subtle"
@@ -254,6 +289,34 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
 
             {/* Выбор тарифа появляется только под группой Telegram и только когда
                 выбран канал «По тарифу» — иначе он был бы мёртвым полем на экране. */}
+            {group.title === "Telegram" && expiringSelected && (
+              <div className="mt-2 rounded-xl border border-accent/40 bg-accent-subtle/40 p-3">
+                <label htmlFor="broadcast-expiring-days" className="mb-1.5 block text-xs font-medium text-fg-muted">
+                  Истекают в ближайшие
+                </label>
+                <select
+                  id="broadcast-expiring-days"
+                  value={expiringDays}
+                  onChange={(e) => {
+                    setExpiringDays(Number(e.target.value));
+                    setConfirm(false);
+                    setErr(null);
+                  }}
+                  className="w-full rounded-xl border border-[var(--border)] bg-bg-raised px-3 py-2 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent"
+                >
+                  {EXPIRING_DAY_OPTIONS.map((d) => (
+                    <option key={d} value={d}>
+                      {ruDays(d)}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1.5 text-xs text-fg-subtle">
+                  {`Получат те, у кого подписка заканчивается в ближайшие ${ruDays(expiringDays)}: ${counts?.TG_EXPIRING ?? "…"}. `}
+                  Это не то же, что фильтр «Истечение» в списке пользователей: здесь без пробных и резерва.
+                </p>
+              </div>
+            )}
+
             {group.title === "Telegram" && planSelected && (
               <div className="mt-2 rounded-xl border border-accent/40 bg-accent-subtle/40 p-3">
                 <label className="mb-1.5 block text-xs font-medium text-fg-muted">
@@ -322,7 +385,7 @@ function BroadcastCard({ b, onRefresh }: { b: AdminBroadcast; onRefresh: (id: st
             <span className={`text-sm font-medium ${cfg.cls}`}>{cfg.label}</span>
           </div>
           <p className="mt-1 text-xs text-fg-muted">
-            {AUDIENCE_LABELS[b.audience] ?? b.audience}
+            {audienceLabel(b)}
             {b.created_at && ` · ${formatDate(b.created_at)}`}
           </p>
         </div>

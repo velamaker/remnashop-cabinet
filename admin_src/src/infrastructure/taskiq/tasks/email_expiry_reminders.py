@@ -20,6 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common.email_sender import EmailSender
 from src.infrastructure.database.models import Subscription, User
+from src.infrastructure.services.overlay_renewal_discount import (
+    active_grants_by_user,
+    email_discount_line,
+)
 from src.infrastructure.taskiq.broker import broker
 
 # Точки напоминания: (часы до окончания, человеческая формулировка «когда»).
@@ -50,14 +54,19 @@ def _brand() -> str:
         return "VPN"
 
 
-def _body(when: str) -> str:
+def _body(when: str, discount_percent: int | None = None) -> str:
     # Подпись и ссылку на кабинет НЕ дублируем: их добавляет оформление письма
     # (шапка с логотипом, кнопка «Открыть кабинет», подвал с брендом).
-    return (
+    body = (
         "Здравствуйте!\n\n"
         f"Ваша подписка {_brand()} заканчивается {when}. "
         "Продлите её, чтобы не потерять доступ."
     )
+    # Скидка на продление людям только с почтой сообщается ЭТИМ письмом: отдельного
+    # письма о ней нет (см. services/overlay_renewal_discount.py, channels).
+    if discount_percent:
+        body += "\n\n" + email_discount_line(discount_percent)
+    return body
 
 
 @broker.task(schedule=[{"cron": "0 * * * *"}], retry_on_error=False)
@@ -79,7 +88,7 @@ async def send_email_expiry_reminders(
         # Текущая подписка юзера (current_subscription_id), email-only, почта
         # подтверждена, expire_at попадает в часовое окно этой точки.
         stmt = (
-            select(User.email)
+            select(User.id, User.email)
             .join(Subscription, Subscription.id == User.current_subscription_id)
             .where(
                 Subscription.expire_at >= lo,
@@ -99,11 +108,21 @@ async def send_email_expiry_reminders(
                 ),
             )
         )
-        emails = {r[0] for r in (await session.execute(stmt)).all() if r[0]}
-        for email in emails:
+        # Почта уникальна на человека; словарь сохраняет прежний дедуп по адресу.
+        recipients = {r[1]: r[0] for r in (await session.execute(stmt)).all() if r[1]}
+        # Строка про скидку — только в письме за 3 дня: в день окончания скидки уже
+        # нет (она живёт не дольше подписки). Отдельный try: без строки письмо
+        # всё равно обязано уйти.
+        discounts: dict[int, int] = {}
+        if hours >= 24 and recipients:
+            try:
+                discounts = await active_grants_by_user(session, recipients.values())
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Скидка на продление для писем не прочитана: {e}")
+        for email, user_id in recipients.items():
             try:
                 await email_sender.send(
-                    to=email, subject=_subject(hours), body=_body(when)
+                    to=email, subject=_subject(hours), body=_body(when, discounts.get(user_id))
                 )
                 sent += 1
             except Exception as e:  # noqa: BLE001

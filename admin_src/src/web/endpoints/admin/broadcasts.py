@@ -18,6 +18,16 @@ from ._common import AdminUser
 
 router = APIRouter(prefix="/broadcasts", tags=["Admin - Broadcasts"])
 
+from src.infrastructure.services.overlay_expiring_segment import (
+    CHANNEL as EXPIRING_CHANNEL,
+    DAYS_MAX as EXPIRING_DAYS_MAX,
+    DAYS_MIN as EXPIRING_DAYS_MIN,
+    DEFAULT_DAYS as EXPIRING_DEFAULT_DAYS,
+    count_expiring,
+    encode_expiring_plan_id,
+    expiring_patch_ready,
+    valid_days as valid_expiring_days,
+)
 from src.infrastructure.taskiq.tasks.broadcast_email import (
     EMAIL_SEGMENT_FROM,
     send_email_broadcast,
@@ -36,7 +46,10 @@ _TG_AUDIENCE: dict[str, BroadcastAudience] = {
     "TG_EXPIRED": BroadcastAudience.EXPIRED,
 }
 _EMAIL_CHANNELS = set(EMAIL_SEGMENT_FROM)  # EMAIL_ALL / _SUBSCRIBED / _TRIAL / _EXPIRING / _EXPIRED
-_KNOWN_CHANNELS = set(_TG_AUDIENCE) | _EMAIL_CHANNELS
+# «Истекают скоро» в _TG_AUDIENCE НЕ кладём: у базы такой аудитории нет, это PLAN
+# с условным plan_id (services/overlay_expiring_segment.py), и счёт, и запуск у
+# него свои — отдельной веткой ниже.
+_KNOWN_CHANNELS = set(_TG_AUDIENCE) | _EMAIL_CHANNELS | {EXPIRING_CHANNEL}
 
 
 def _brand() -> str:
@@ -79,7 +92,7 @@ async def _email_count(session: AsyncSession, segment: str) -> int:
 
 
 def _broadcast_to_dict(b: Any) -> dict[str, Any]:
-    return {
+    out: dict[str, Any] = {
         "task_id": str(b.task_id),
         "status": b.status.value if hasattr(b.status, "value") else str(b.status),
         "audience": b.audience.value if hasattr(b.audience, "value") else str(b.audience),
@@ -88,6 +101,14 @@ def _broadcast_to_dict(b: Any) -> dict[str, Any]:
         "failed_count": b.failed_count,
         "created_at": b.created_at.isoformat() if b.created_at else None,
     }
+    # «Истекают скоро» в истории базы — это PLAN: сам сегмент помнит только
+    # payload рассылки (plan_id в историю не пишется). Без метки кабинет показал
+    # бы «по тарифу» рассылку, у которой тарифа нет.
+    kwargs = getattr(getattr(b, "payload", None), "i18n_kwargs", None) or {}
+    if kwargs.get("overlay_segment") == EXPIRING_CHANNEL:
+        out["audience"] = EXPIRING_CHANNEL
+        out["expiring_days"] = kwargs.get("overlay_days")
+    return out
 
 
 def _email_row_to_dict(r: Any) -> dict[str, Any]:
@@ -107,6 +128,8 @@ class CreateBroadcastBody(BaseModel):
     channels: list[str] = Field(min_length=1)
     # Нужен только каналу TG_PLAN. Для остальных игнорируется.
     plan_id: Optional[int] = None
+    # Нужен только каналу TG_EXPIRING: «подписка кончается в ближайшие N дней».
+    expiring_days: Optional[int] = None
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -137,7 +160,56 @@ async def create_broadcast(
             detail="Для рассылки по тарифу нужно выбрать тариф",
         )
 
+    # «Истекают скоро»: обе проверки — ДО первого запуска. Отказать после того, как
+    # соседний канал уже разослан, значит оставить админа гадать, что ушло.
+    expiring_days = body.expiring_days
+    if EXPIRING_CHANNEL in channels:
+        if not valid_expiring_days(expiring_days):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Для рассылки «Истекают скоро» укажите число дней "
+                    f"({EXPIRING_DAYS_MIN}–{EXPIRING_DAYS_MAX})"
+                ),
+            )
+        # Правка аудитории не встала — задача базы нашла бы ноль получателей, а
+        # рассылка легла бы в историю «завершённой». Лучше честный отказ.
+        if not expiring_patch_ready():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Сегмент «Истекают скоро» сейчас недоступен: правка рассылок бота "
+                    "не применилась. Ничего не отправлено."
+                ),
+            )
+
     telegram_tasks: list[str] = []
+    if EXPIRING_CHANNEL in channels:
+        count = await count_expiring(session, expiring_days)
+        payload = MessagePayloadDto(
+            i18n_key="raw-message",
+            # overlay_segment/overlay_days — метка для истории (_broadcast_to_dict);
+            # текст сообщения их не использует.
+            i18n_kwargs={
+                "content": content,
+                "overlay_segment": EXPIRING_CHANNEL,
+                "overlay_days": expiring_days,
+            },
+            delete_after=None,  # не самоудалять (см. комментарий в цикле ниже)
+        )
+        broadcast = BroadcastDto(
+            task_id=uuid4(),
+            status=BroadcastStatus.PROCESSING,
+            total_count=count,
+            audience=BroadcastAudience.PLAN,
+            payload=payload,
+        )
+        async with uow:
+            await broadcast_dao.create(broadcast)
+            await uow.commit()
+        await dispatcher.start(broadcast, encode_expiring_plan_id(expiring_days))
+        telegram_tasks.append(str(broadcast.task_id))
+
     for ch in channels:
         audience = _TG_AUDIENCE.get(ch)
         if audience is None:
@@ -192,6 +264,7 @@ async def audience_counts(
     subscription_dao: FromDishka[SubscriptionDao],
     session: FromDishka[AsyncSession],
     plan_id: Optional[int] = None,
+    expiring_days: Optional[int] = None,
 ) -> dict[str, int]:
     counts: dict[str, int] = {
         "TG_ALL": await user_dao.count_active_non_blocked(),
@@ -207,6 +280,12 @@ async def audience_counts(
     counts["TG_PLAN"] = (
         await subscription_dao.count_active_by_plan(plan_id) if plan_id else 0
     )
+
+    # TG_EXPIRING — только если правка аудитории встала: ключ здесь и есть признак
+    # умения, по его отсутствию кабинет прячет сегмент.
+    if expiring_patch_ready():
+        days = expiring_days if valid_expiring_days(expiring_days) else EXPIRING_DEFAULT_DAYS
+        counts[EXPIRING_CHANNEL] = await count_expiring(session, days)
 
     for seg in EMAIL_SEGMENT_FROM:
         counts[seg] = await _email_count(session, seg)

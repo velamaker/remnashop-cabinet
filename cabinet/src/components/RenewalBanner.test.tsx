@@ -1,11 +1,12 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { render, cleanup } from "@testing-library/react";
+import { render, cleanup, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { RenewalBanner } from "./RenewalBanner";
 import { I18nProvider } from "@/i18n/I18nContext";
 import { detectInitialLang } from "@/i18n/config";
 import { translate } from "@/i18n/translate";
 import type { SubscriptionInfoResponse } from "@/types/api";
+import type { RenewalDiscountStatus } from "@/api/renewalDiscount";
 
 // Подписка «через N дней от сегодня» — даты в фикстурах должны быть живыми,
 // иначе тест начнёт врать через месяц.
@@ -32,19 +33,23 @@ function sub(over: Partial<SubscriptionInfoResponse> = {}): SubscriptionInfoResp
 // Язык провайдер выбирает сам (в jsdom это язык «браузера»), поэтому ждём
 // текст ровно на том языке, на котором компонент его и нарисует.
 const lang = detectInitialLang();
-const say = (key: string) => translate(key, undefined, lang);
+const say = (key: string, vars?: Record<string, string | number>) => translate(key, vars, lang);
 
-function renderBanner(s: SubscriptionInfoResponse | null) {
+function renderBanner(s: SubscriptionInfoResponse | null, offer?: RenewalDiscountStatus | null) {
   return render(
     <MemoryRouter>
       <I18nProvider>
-        <RenewalBanner subscription={s} />
+        <RenewalBanner subscription={s} offer={offer} />
       </I18nProvider>
     </MemoryRouter>,
   );
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  // Скрытие плашки живёт в sessionStorage — между тестами не должно протекать.
+  sessionStorage.clear();
+});
 
 describe("RenewalBanner и пауза подписки", () => {
   it("DISABLED без признака паузы — по-прежнему «истекла» (наш бэкенд поля не шлёт)", () => {
@@ -76,5 +81,56 @@ describe("RenewalBanner и пауза подписки", () => {
       sub({ status: "DISABLED", frozen: true, traffic_limit: 10, used_traffic_bytes: 10 * 1024 ** 3 }),
     );
     expect(container.textContent).toContain(say("renewal.trafficOut"));
+  });
+});
+
+describe("RenewalBanner и скидка на продление", () => {
+  const inDays = (d: number) => new Date(Date.now() + d * 86400_000 + 3600_000).toISOString();
+  const offer = (over: Partial<RenewalDiscountStatus> = {}): RenewalDiscountStatus => ({
+    active: true,
+    percent: 15,
+    expires_at: new Date(Date.now() + 3 * 86400_000).toISOString(),
+    ...over,
+  });
+  const offerTitle = say("renewalDiscount.title", { percent: 15 });
+
+  it("скидка при «скоро закончится» — одна плашка с процентом вместо двух", () => {
+    const { container } = renderBanner(sub({ expire_at: inDays(2) }), offer());
+    expect(container.textContent).toContain(offerTitle);
+    expect(container.textContent).not.toContain(say("renewal.inDays", { days: 2 }));
+    expect(container.textContent).not.toContain(say("renewal.soonText"));
+    expect(container.querySelectorAll('a[href="/billing"]')).toHaveLength(1);
+  });
+
+  it("скидку выдают за 5 дней — плашка есть, хотя «скоро закончится» ещё молчит", () => {
+    const { container } = renderBanner(sub({ expire_at: inDays(5) }), offer());
+    expect(container.textContent).toContain(offerTitle);
+    expect(container.querySelector('a[href="/billing"]')).not.toBeNull();
+  });
+
+  it("подписка истекла — только «Подписка истекла», скидки нет", () => {
+    const past = new Date(Date.now() - 86400_000).toISOString();
+    const { container } = renderBanner(sub({ expire_at: past, status: "EXPIRED" }), offer());
+    expect(container.textContent).toContain(say("renewal.expired"));
+    expect(container.textContent).not.toContain(offerTitle);
+  });
+
+  it("без скидки всё как раньше", () => {
+    const { container } = renderBanner(sub({ expire_at: inDays(2) }), null);
+    expect(container.textContent).toContain(say("renewal.inDays", { days: 2 }));
+    expect(container.textContent).not.toContain(offerTitle);
+  });
+
+  it("срок скидки вышел — её нет, возвращается обычное предупреждение", () => {
+    const burnt = offer({ expires_at: new Date(Date.now() - 60_000).toISOString() });
+    const { container } = renderBanner(sub({ expire_at: inDays(2) }), burnt);
+    expect(container.textContent).not.toContain(offerTitle);
+    expect(container.textContent).toContain(say("renewal.inDays", { days: 2 }));
+  });
+
+  it("скрытая скидка не возвращается мягким предупреждением в той же сессии", () => {
+    const { container } = renderBanner(sub({ expire_at: inDays(2) }), offer());
+    fireEvent.click(container.querySelector(`button[aria-label="${say("common.hide")}"]`)!);
+    expect(container.textContent).toBe("");
   });
 });

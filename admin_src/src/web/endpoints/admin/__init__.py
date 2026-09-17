@@ -41,6 +41,7 @@ from .email_gate import router as email_gate_router
 from .freeze import router as freeze_router
 from .promo_banner import router as promo_banner_router
 from .reserve import router as reserve_router
+from .renewal_discount import router as renewal_discount_router
 from .trial_discount import router as trial_discount_router
 from .winback import router as winback_router
 from .updates import router as updates_router
@@ -64,6 +65,7 @@ router.include_router(trial_discount_router)
 router.include_router(promo_banner_router)
 router.include_router(reserve_router)
 router.include_router(winback_router)
+router.include_router(renewal_discount_router)
 router.include_router(digest_router)
 router.include_router(traffic_alert_router)
 router.include_router(login_alert_router)

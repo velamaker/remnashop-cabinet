@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Save, AlertCircle, CheckCircle2, Bell, Lock, SlidersHorizontal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { settingsAdminApi, topupAdminApi, morningSummaryAdminApi, trialDiscountAdminApi, reserveAdminApi, plansAdminApi, promoBannerAdminApi, winbackAdminApi, digestAdminApi, digestEmailAdminApi, trafficAlertAdminApi, newDeviceAdminApi, loginAlertAdminApi, emailGateAdminApi, freezeAdminApi, type AdminSettings, type TopupAdminConfig, type TopupApplicability, type MorningSummaryConfig, type TrialDiscountConfig, type TrialDiscountDryRun, type ReserveConfig, type ReserveSquadCheck, type AdminSquad, type PromoBannerConfig, type WinbackConfig, type DigestConfig, type DigestEmailStatus, type DigestEmailPreview, type DigestEmailDryRun, type DigestEmailOutcome, type TrafficAlertConfig, type NewDeviceConfig, type LoginAlertConfig, type FreezeConfig } from "@/api/admin";
+import { settingsAdminApi, topupAdminApi, morningSummaryAdminApi, trialDiscountAdminApi, reserveAdminApi, plansAdminApi, promoBannerAdminApi, winbackAdminApi, renewalDiscountAdminApi, digestAdminApi, digestEmailAdminApi, trafficAlertAdminApi, newDeviceAdminApi, loginAlertAdminApi, emailGateAdminApi, freezeAdminApi, type AdminSettings, type TopupAdminConfig, type TopupApplicability, type MorningSummaryConfig, type TrialDiscountConfig, type TrialDiscountDryRun, type ReserveConfig, type ReserveSquadCheck, type AdminSquad, type PromoBannerConfig, type WinbackConfig, type RenewalDiscountConfig, type DigestConfig, type DigestEmailStatus, type DigestEmailPreview, type DigestEmailDryRun, type DigestEmailOutcome, type TrafficAlertConfig, type NewDeviceConfig, type LoginAlertConfig, type FreezeConfig } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -1419,6 +1419,117 @@ export function WinbackCard() {
           <input type="number" min={1} max={1440} value={String(cfg.lifetime_hours)} onChange={(e) => patch({ lifetime_hours: Number(e.target.value) })} className={inputCls} />
         </div>
       </div>
+      <div className="flex items-center justify-between gap-3 pt-1">
+        <span className="text-xs">
+          {error && <span className="text-danger">{error}</span>}
+          {saved && <span className="text-success">Сохранено</span>}
+        </span>
+        <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
+          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+        </button>
+      </div>
+    </Section>
+  );
+}
+
+/** Кому скидка до окончания подписки не выдаётся — те же правила, что в бэкенде
+ *  (services/overlay_renewal_discount.py, decide). Держим рядом с полями, чтобы
+ *  владелец видел цену решения до того, как включит. */
+const RENEWAL_DISCOUNT_EXCLUSIONS =
+  "Кому не выдаётся: пробный период; подписка без оплаты (подарок, промокод, импорт); текущий срок подарен; автопродление с баланса; уже есть другая скидка или открыто другое предложение (win-back, скидка триальщикам); личная скидка не меньше этой; персонал; заблокированные; резерв и заморозка; оплата в процессе; некуда написать.";
+
+export function RenewalDiscountCard() {
+  const [cfg, setCfg] = useState<RenewalDiscountConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    renewalDiscountAdminApi.get().then(setCfg).catch((e) => setError(loadError(e))).finally(() => setLoading(false));
+  }, []);
+
+  const patch = (p: Partial<RenewalDiscountConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
+
+  const save = async () => {
+    if (!cfg) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const minDays = cfg.min_days_before ?? 4;
+      // Пределы повторяют бэкенд; он всё равно зажмёт сам, но так поле не прыгает
+      // после сохранения на значение, которого админ не вводил.
+      const updated = await renewalDiscountAdminApi.update({
+        enabled: cfg.enabled,
+        percent: Math.min(90, Math.max(1, Number(cfg.percent) || 1)),
+        days_before: Math.min(Math.max(minDays, 30), Math.max(minDays, Number(cfg.days_before) || minDays)),
+        lifetime_hours: Math.min(720, Math.max(24, Number(cfg.lifetime_hours) || 24)),
+        cooldown_days: Math.min(365, Math.max(0, Number(cfg.cooldown_days) || 0)),
+        skip_early_renewers: cfg.skip_early_renewers,
+      });
+      setCfg(updated);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return null;
+  if (error === UNSUPPORTED) return null;
+  if (!cfg) return <Section title="Скидка до окончания подписки">{error ?? "Ошибка"}</Section>;
+
+  const minDays = cfg.min_days_before ?? 4;
+
+  return (
+    <Section
+      title="Скидка до окончания подписки"
+      desc="За N дней до конца ПЛАТНОЙ подписки человеку выдаётся разовая скидка на продление и приходит сообщение в Telegram и push (тем, у кого только почта, — строкой в письме за 3 дня). Скидка применяется сама при следующей оплате и сгорает после покупки, по сроку или в момент окончания подписки — дальше работает win-back."
+    >
+      {cfg.note && (
+        <p className="whitespace-pre-line rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-xs leading-relaxed text-fg">
+          {cfg.note}
+        </p>
+      )}
+      <Toggle
+        label="Включить"
+        sub="По умолчанию выключено. Пока выключено, никому ничего не выдаётся и не отправляется."
+        checked={cfg.enabled}
+        onChange={(v) => patch({ enabled: v })}
+      />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Скидка, %" type="number" value={String(cfg.percent)} onChange={(v) => patch({ percent: Number(v) })} />
+        <Field
+          label="За сколько дней до конца"
+          type="number"
+          value={String(cfg.days_before)}
+          onChange={(v) => patch({ days_before: Number(v) })}
+          hint={`Не меньше ${minDays} — в последние дни уже приходят обычные напоминания о продлении, так сообщения не совпадут по дням.`}
+        />
+        <Field
+          label="Срок действия скидки, часов"
+          type="number"
+          value={String(cfg.lifetime_hours)}
+          onChange={(v) => patch({ lifetime_hours: Number(v) })}
+          hint="Сгорает не позже окончания подписки. Если скидка сгорит раньше письма за 3 дня, людям только с почтой она не выдаётся — сообщить им будет нечем."
+        />
+        <Field
+          label="Не чаще, чем раз в N дней"
+          type="number"
+          value={String(cfg.cooldown_days)}
+          onChange={(v) => patch({ cooldown_days: Number(v) })}
+          hint="0 — на каждый срок подписки. Без ограничения помесячные клиенты получают скидку каждый месяц."
+        />
+      </div>
+      <Toggle
+        label="Не предлагать тем, кто и так продлевает заранее"
+        sub="Если человек хоть раз продлил без скидки до окончания срока, скидку ему не выдаём — он заплатил бы и так."
+        checked={cfg.skip_early_renewers}
+        onChange={(v) => patch({ skip_early_renewers: v })}
+      />
+      <p className="text-xs leading-relaxed text-fg-muted">{RENEWAL_DISCOUNT_EXCLUSIONS}</p>
       <div className="flex items-center justify-between gap-3 pt-1">
         <span className="text-xs">
           {error && <span className="text-danger">{error}</span>}

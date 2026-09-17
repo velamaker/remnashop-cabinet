@@ -64,6 +64,7 @@ from src.web.endpoints.public.push import router as push_router
 from src.web.endpoints.public.promocode import router as promocode_router
 from src.web.endpoints.public.referral_stats import router as referral_stats_router
 from src.web.endpoints.public.trial_discount import router as trial_discount_public_router
+from src.web.endpoints.public.renewal_discount import router as renewal_discount_public_router
 from src.web.endpoints.public.promo_banner import router as promo_banner_public_router
 from src.web.endpoints.public.freeze import router as freeze_public_router
 from src.web.endpoints.public.gift import router as gift_public_router
@@ -144,6 +145,7 @@ def _overlay_public_router() -> APIRouter:
     router.include_router(promocode_router)
     router.include_router(referral_stats_router)
     router.include_router(trial_discount_public_router)
+    router.include_router(renewal_discount_public_router)
     router.include_router(promo_banner_public_router)
     router.include_router(freeze_public_router)
     router.include_router(gift_public_router)

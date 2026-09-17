@@ -29,7 +29,7 @@ CONFIG_FILES = [
     "morning_summary.json", "info_content.json", "server_status.json",
     "digest.json", "email_gate.json", "freeze.json", "new_device.json",
     "promo_banner.json", "reserve.json", "traffic_alert.json",
-    "trial_discount.json", "winback.json",
+    "trial_discount.json", "winback.json", "renewal_discount.json",
     # Тумблеры админских уведомлений (пуш на телефон и новый вид в Telegram).
     # Без этой строки они не попадали в бандл: после восстановления настроек
     # владелец получал дефолты, и выключенный им новый вид включался обратно.

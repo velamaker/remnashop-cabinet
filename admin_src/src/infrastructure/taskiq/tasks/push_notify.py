@@ -20,6 +20,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.infrastructure.services.overlay_push import send_to_user, _fill
+from src.infrastructure.services.overlay_renewal_discount import (
+    active_grants_by_user,
+    push_discount_tail,
+)
 from src.infrastructure.taskiq.broker import broker
 
 ASSETS_DIR = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets"))
@@ -95,6 +99,14 @@ async def run_push_expiring(session: FromDishka[AsyncSession]) -> None:
     if not rows:
         return
 
+    # Действующая скидка на продление (выдана раньше этого напоминания) — дописываем
+    # строку, а не шлём второй push. Best-effort: без неё напоминание всё равно уйдёт.
+    try:
+        discounts = await active_grants_by_user(session, [r[0] for r in rows])
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"push_notify: скидки на продление не прочитаны: {e}")
+        discounts = {}
+
     state = _load_state()
     live_keys: set[str] = set()
     changed = False
@@ -117,9 +129,12 @@ async def run_push_expiring(session: FromDishka[AsyncSession]) -> None:
         # но ровно на этом месте в соседней задаче люди получили «{percent}» в
         # заголовке: там текст правили, а про подстановку никто не вспомнил.
         # `_fill` не роняет уведомление на лишней фигурной скобке.
+        body = _fill(body_tpl, {"days": days_left})
+        if discounts.get(uid):
+            body += push_discount_tail(lang, discounts[uid])
         payload = {
             "title": _fill(title_tpl, {"days": days_left}),
-            "body": _fill(body_tpl, {"days": days_left}),
+            "body": body,
             "url": "/billing",
             "tag": "expiring",
         }

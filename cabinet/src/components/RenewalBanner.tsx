@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { AlertTriangle, ArrowRight, X, Gauge } from "lucide-react";
+import { AlertTriangle, ArrowRight, X, Gauge, Gift } from "lucide-react";
 import type { SubscriptionInfoResponse } from "@/types/api";
-import { daysUntil, isExpired, formatBytes, formatTrafficLimit, trafficLimitBytes } from "@/lib/format";
+import type { RenewalDiscountStatus } from "@/api/renewalDiscount";
+import { useRenewalDiscount } from "@/hooks/useRenewalDiscount";
+import { daysUntil, isExpired, formatBytes, formatDate, formatTrafficLimit, trafficLimitBytes } from "@/lib/format";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { useT } from "@/i18n/I18nContext";
 
@@ -74,6 +76,80 @@ function ExpiryBanner({
   );
 }
 
+/** Скидка ещё действует: выдана, с процентом и срок не вышел. */
+function offerIsLive(offer: RenewalDiscountStatus | null | undefined): offer is RenewalDiscountStatus {
+  if (!offer?.active || !offer.percent || offer.percent <= 0) return false;
+  return !offer.expires_at || Date.parse(offer.expires_at) > Date.now();
+}
+
+/**
+ * Скидка на продление ДО окончания подписки. Та же плашка продления, только с
+ * предложением: на Главной она ЗАМЕНЯЕТ мягкое «заканчивается через N дней», а
+ * не встаёт второй плашкой рядом — два блока про одно и то же читаются как
+ * «что-то сломалось». Срок — датой, без тикающего таймера: скидка живёт днями, а
+ * бегущие секунды давят на человека, которому до конца подписки ещё неделя.
+ */
+export function RenewalOfferBanner({
+  offer,
+  onDismiss,
+  showCta = true,
+}: {
+  offer: RenewalDiscountStatus;
+  onDismiss?: () => void;
+  showCta?: boolean;
+}) {
+  const t = useT();
+  return (
+    <div className="overflow-hidden rounded-2xl border border-accent/40 bg-gradient-to-br from-accent/15 to-accent-2/15 p-4 sm:p-5">
+      <div className="flex items-center gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent/20 text-accent">
+          <Gift className="h-5 w-5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-base font-bold text-fg">
+            {t("renewalDiscount.title", { percent: offer.percent ?? 0 })}
+          </p>
+          <p className="mt-0.5 text-xs text-fg-muted sm:text-sm">{t("renewalDiscount.subtitle")}</p>
+          {offer.expires_at && (
+            <p className="mt-1 text-xs font-semibold text-accent">
+              {t("renewalDiscount.until", { date: formatDate(offer.expires_at) })}
+            </p>
+          )}
+        </div>
+        {onDismiss && (
+          <button
+            type="button"
+            onClick={onDismiss}
+            aria-label={t("common.hide")}
+            className="shrink-0 text-fg-subtle transition-colors hover:text-fg"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+      {showCta && (
+        <Link
+          to="/billing"
+          className="btn-gradient mt-3 flex h-11 w-full items-center justify-center gap-1.5 rounded-xl text-sm font-semibold transition-all active:scale-[0.98]"
+        >
+          {t("renewalDiscount.cta")} <ArrowRight className="h-4 w-4" />
+        </Link>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Блок скидки для страницы оплаты: сам спрашивает бэкенд и не прячется — человек
+ * уже пришёл платить, и ему важно видеть, что цена ниже не по ошибке. Кнопки
+ * «Продлить» нет: тарифы прямо под блоком.
+ */
+export function RenewalDiscountBanner() {
+  const offer = useRenewalDiscount(true);
+  if (!offerIsLive(offer)) return null;
+  return <RenewalOfferBanner offer={offer} showCta={false} />;
+}
+
 /** Предупреждение о трафике: прогресс-бар «использовано / лимит» (оба в байтах). */
 function TrafficBanner({
   out,
@@ -141,8 +217,11 @@ function TrafficBanner({
  */
 export function RenewalBanner({
   subscription,
+  offer,
 }: {
   subscription: SubscriptionInfoResponse | null;
+  /** Действующая скидка на продление (useRenewalDiscount); нет — плашка как раньше. */
+  offer?: RenewalDiscountStatus | null;
 }) {
   const [expiryDismissed, setExpiryDismissed] = useState(
     () => sessionStorage.getItem(DISMISS_EXPIRY) === "1",
@@ -181,9 +260,15 @@ export function RenewalBanner({
   const trafficOut = !isUnlimited && limit > 0 && used >= limit;
   const trafficLow = !isUnlimited && !trafficOut && pct >= TRAFFIC_WARN_PCT;
 
-  const showExpiry = expired || (soon && !expiryDismissed);
+  // Скидка — только к живой подписке: истёкшей нужна «Подписка истекла», а
+  // приостановленную человек вернёт сам. Скрытие общее с мягким предупреждением:
+  // это та же плашка продления, и закрытая один раз не должна вернуться в
+  // другом виде до конца сессии.
+  const offerOn = !paused && !expired && offerIsLive(offer);
+  const showOffer = offerOn && !expiryDismissed;
+  const showExpiry = expired || (soon && !expiryDismissed && !offerOn);
   const showTraffic = trafficOut || (trafficLow && !trafficDismissed);
-  if (!showExpiry && !showTraffic) return null;
+  if (!showOffer && !showExpiry && !showTraffic) return null;
 
   const dismissExpiry = () => {
     sessionStorage.setItem(DISMISS_EXPIRY, "1");
@@ -196,6 +281,7 @@ export function RenewalBanner({
 
   return (
     <div className="space-y-3">
+      {showOffer && offer && <RenewalOfferBanner offer={offer} onDismiss={dismissExpiry} />}
       {showExpiry && (
         <ExpiryBanner expired={expired} days={days} soon={soon} onDismiss={dismissExpiry} />
       )}

@@ -675,26 +675,34 @@ export interface AdminBroadcast {
   success_count: number;
   failed_count: number;
   created_at: string | null;
+  // Только у рассылки «Истекают скоро» (audience TG_EXPIRING): на сколько дней вперёд.
+  expiring_days?: number | null;
 }
 
 export type BroadcastChannel =
-  | "TG_ALL" | "TG_PLAN" | "TG_SUBSCRIBED" | "TG_UNSUBSCRIBED" | "TG_TRIAL" | "TG_EXPIRED"
+  | "TG_ALL" | "TG_PLAN" | "TG_SUBSCRIBED" | "TG_UNSUBSCRIBED" | "TG_TRIAL" | "TG_EXPIRED" | "TG_EXPIRING"
   | "EMAIL_ALL" | "EMAIL_SUBSCRIBED" | "EMAIL_TRIAL" | "EMAIL_EXPIRING" | "EMAIL_EXPIRED";
 
 export const broadcastsAdminApi = {
   list: () => adminApi.get<{ items: AdminBroadcast[]; total: number }>("/broadcasts"),
   get: (task_id: string) => adminApi.get<AdminBroadcast>(`/broadcasts/${task_id}`),
-  // planId нужен только каналу TG_PLAN: размер этой аудитории зависит от тарифа,
-  // поэтому счётчики перезапрашиваются при его смене.
-  audienceCounts: (planId?: number) =>
-    adminApi.get<Record<BroadcastChannel, number>>(
-      planId ? `/broadcasts/audience-counts?plan_id=${planId}` : "/broadcasts/audience-counts",
-    ),
-  create: (text: string, channels: BroadcastChannel[], planId?: number) =>
+  // planId нужен только каналу TG_PLAN, expiringDays — только TG_EXPIRING: размер
+  // этих аудиторий зависит от выбора, поэтому счётчики перезапрашиваются при его смене.
+  audienceCounts: (planId?: number, expiringDays?: number) => {
+    const q = new URLSearchParams();
+    if (planId) q.set("plan_id", String(planId));
+    if (expiringDays) q.set("expiring_days", String(expiringDays));
+    const qs = q.toString();
+    return adminApi.get<Record<BroadcastChannel, number>>(
+      qs ? `/broadcasts/audience-counts?${qs}` : "/broadcasts/audience-counts",
+    );
+  },
+  create: (text: string, channels: BroadcastChannel[], planId?: number, expiringDays?: number) =>
     adminApi.post<{ telegram: string[]; email: number[] }>("/broadcasts", {
       text,
       channels,
       plan_id: planId,
+      expiring_days: expiringDays,
     }),
 };
 
@@ -975,6 +983,82 @@ export interface WinbackConfig {
 export const winbackAdminApi = {
   get: () => adminApi.get<WinbackConfig>("/winback"),
   update: (data: Partial<WinbackConfig>) => adminApi.put<WinbackConfig>("/winback", data),
+};
+
+// ---------- Скидка на продление до окончания подписки ----------
+
+export interface RenewalDiscountConfig {
+  enabled: boolean;
+  percent: number;
+  days_before: number;
+  lifetime_hours: number;
+  cooldown_days: number;
+  skip_early_renewers: boolean;
+  // Только чтение: нижняя граница дней (чтобы не совпасть с напоминаниями) и
+  // предупреждение, если win-back щедрее.
+  min_days_before?: number;
+  note?: string | null;
+}
+
+export interface RenewalDiscountChannels {
+  telegram: boolean;
+  push: boolean;
+  email: boolean;
+}
+
+export interface RenewalDiscountPreview {
+  window_from: string;
+  window_to: string;
+  horizon_days: number;
+  examined: number;
+  would_grant: number;
+  truncated: boolean;
+  skipped: Record<string, number>;
+  reason_labels: Record<string, string>;
+  sample: {
+    user_id: number | null;
+    expire_at: string;
+    grant_at: string;
+    channels: RenewalDiscountChannels;
+    would_grant: boolean;
+    reason: string | null;
+  }[];
+  message: { telegram_html: string; push_title: string; push_body: string };
+}
+
+export interface RenewalDiscountStats {
+  period_days: number;
+  granted: number;
+  used: number;
+  expired: number;
+  active: number;
+  revoked: number;
+  paid_rub: number;
+  discount_given_rub: number;
+  tg_failed: number;
+  push_delivered: number;
+  recent: {
+    user_id: number | null;
+    percent: number;
+    granted_at: string;
+    expires_at: string;
+    status: string;
+    tg_status: string | null;
+  }[];
+}
+
+export type RenewalDiscountTelegramOutcome = "sent" | "no_telegram" | "blocked" | "failed";
+
+export const renewalDiscountAdminApi = {
+  get: () => adminApi.get<RenewalDiscountConfig>("/renewal-discount"),
+  update: (data: Partial<RenewalDiscountConfig>) =>
+    adminApi.put<RenewalDiscountConfig>("/renewal-discount", data),
+  preview: (horizonDays: number) =>
+    adminApi.get<RenewalDiscountPreview>(`/renewal-discount/preview?horizon_days=${horizonDays}`),
+  stats: (days: number) => adminApi.get<RenewalDiscountStats>(`/renewal-discount/stats?days=${days}`),
+  testSend: () =>
+    adminApi.post<{ telegram: RenewalDiscountTelegramOutcome; push: number }>("/renewal-discount/test-send", {}),
+  revokeActive: () => adminApi.post<{ revoked: number }>("/renewal-discount/revoke-active", { confirm: true }),
 };
 
 // ---------- Месячный дайджест пользователю ----------

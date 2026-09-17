@@ -56,6 +56,10 @@ run_alembic >/dev/null
 # 0007: журнал писем сводки и отписки. Без журнала проход писем не шлёт ничего.
 [ "$(q "SELECT to_regclass('digest_email_sends')::text")" = "digest_email_sends" ] || fail "digest_email_sends не создана"
 [ "$(q "SELECT to_regclass('email_opt_outs')::text")" = "email_opt_outs" ] || fail "email_opt_outs не создана"
+# 0008: выдачи скидки на продление. Два уникальных индекса держат «одна выдача на
+# срок» и «одна открытая скидка на человека» — без них крон выдал бы повторно.
+[ "$(q "SELECT to_regclass('renewal_discount_grants')::text")" = "renewal_discount_grants" ] || fail "renewal_discount_grants не создана"
+[ "$(q "SELECT count(*) FROM pg_indexes WHERE tablename='renewal_discount_grants' AND indexname IN ('ux_renewal_discount_period','ux_renewal_discount_open') AND indexdef LIKE 'CREATE UNIQUE%'")" = "2" ] || fail "у renewal_discount_grants нет уникальных индексов"
 [ "$(q "SELECT version_num FROM alembic_version_overlay")" = "$HEAD" ] || fail "версия != $HEAD"
 [ "$(q "SELECT count(*) FROM information_schema.columns WHERE table_name='users' AND column_name='cabinet_balance'")" = "1" ] || fail "users.cabinet_balance нет"
 CREATED="$(q "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")"

@@ -36,6 +36,7 @@ import AdminTopupPage from "@/pages/admin/AdminTopupPage";
 import AdminMorningSummaryPage from "@/pages/admin/AdminMorningSummaryPage";
 import AdminTrialDiscountPage from "@/pages/admin/AdminTrialDiscountPage";
 import AdminWinbackPage from "@/pages/admin/AdminWinbackPage";
+import AdminRenewalDiscountPage from "@/pages/admin/AdminRenewalDiscountPage";
 import AdminPromoBannerPage from "@/pages/admin/AdminPromoBannerPage";
 import AdminDigestPage from "@/pages/admin/AdminDigestPage";
 import AdminReservePage from "@/pages/admin/AdminReservePage";
@@ -291,6 +292,14 @@ export default function App() {
               element={
                 <AdminRoute>
                   <AdminWinbackPage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/renewal-discount"
+              element={
+                <AdminRoute>
+                  <AdminRenewalDiscountPage />
                 </AdminRoute>
               }
             />

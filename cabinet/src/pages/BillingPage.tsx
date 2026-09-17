@@ -7,6 +7,7 @@ import { balanceApi } from "@/api/balance";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PromocodeCard } from "@/components/PromocodeCard";
 import { TrialDiscountBanner } from "@/components/TrialDiscountBanner";
+import { RenewalDiscountBanner } from "@/components/RenewalBanner";
 import { formatTrafficLimit } from "@/lib/format";
 import { changeLoss, paymentsBlocked, readBillingPreselect, type ChangeLoss } from "@/lib/planChange";
 import type {
@@ -436,6 +437,8 @@ export default function BillingPage() {
 
       {/* Скидка на первую покупку триальщику — баннер-таймер (если активна) */}
       <TrialDiscountBanner />
+      {/* Скидка на продление до окончания подписки (если выдана) */}
+      <RenewalDiscountBanner />
 
       {/* Промокод — можно активировать бонус, не покупая тариф */}
       <PromocodeCard />
