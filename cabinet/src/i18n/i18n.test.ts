@@ -48,3 +48,42 @@ describe("i18n полнота словарей", () => {
     }
   });
 });
+
+// Ключ, которого нет в словаре, translate() показывает как есть: на кнопке оплаты
+// вышло бы «billing.changeConfirmYes». Словарь у владельца живёт отдельной
+// локальной копией, и новые ключи туда переносят руками. Забытый перенос тесты
+// поймают здесь, а не пользователь на странице. Смотрим только буквальные ключи:
+// t("область.строка") и translate("…"), в том числе с переносом строки.
+const SOURCES = import.meta.glob<string>(
+  ["/src/**/*.{ts,tsx}", "!/src/**/*.test.{ts,tsx}", "!/src/test/**"],
+  { query: "?raw", import: "default", eager: true },
+);
+const LITERAL_KEY = /\b(?:t|translate)\(\s*(["'`])([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+)\1/g;
+
+function literalKeys(): Map<string, string[]> {
+  const used = new Map<string, string[]>();
+  for (const [file, text] of Object.entries(SOURCES)) {
+    for (const m of text.matchAll(LITERAL_KEY)) {
+      const key = m[2]!;
+      used.set(key, [...(used.get(key) ?? []), file]);
+    }
+  }
+  return used;
+}
+
+describe("i18n ключи из кода", () => {
+  it("каждый буквальный ключ из t()/translate() есть в ru", () => {
+    const used = literalKeys();
+    // Страховка от пустого прохода: если поиск файлов сломается, тест не должен
+    // молча стать зелёным. Ключи блока устройств и подтверждения смены тарифа
+    // проверяем поимённо: их забыть при переносе дороже всего.
+    expect(used.size).toBeGreaterThan(100);
+    for (const key of ["deviceUpsell.title", "billing.changeWarn", "billing.changeConfirmYes"]) {
+      expect(used.has(key), `поиск не нашёл ${key} в коде`).toBe(true);
+    }
+    const missing = [...used.entries()]
+      .filter(([key]) => !(key in DICT.ru))
+      .map(([key, files]) => `${key} (${[...new Set(files)].join(", ")})`);
+    expect(missing, `в словаре ru нет ключей:\n${missing.join("\n")}`).toEqual([]);
+  });
+});
