@@ -47,7 +47,7 @@ from src.infrastructure.services.overlay_push import _fill, _record_user_notific
 KIND = "digest"
 
 # Brevo free — 300 писем в день на ВСЁ, коды входа в том числе. Сводка забирает
-# не больше двух третей, остальным ставится `over_limit` (сейчас адресатов 6).
+# не больше двух третей, остальным ставится `over_limit`.
 EMAIL_MAX_PER_RUN = 200
 EMAIL_PAUSE = 0.5
 DRY_RUN_LIMIT = 25

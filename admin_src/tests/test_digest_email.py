@@ -633,6 +633,109 @@ async def test_smtp_branded_has_list_unsubscribe_and_from(monkeypatch: pytest.Mo
     assert messages[-1]["List-Unsubscribe"] is None
 
 
+class _LogCapture:
+    """Всё, что отправитель написал в loguru, одной строкой на запись."""
+
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+        self._id: Optional[int] = None
+
+    def __enter__(self) -> "_LogCapture":
+        from loguru import logger
+
+        self._id = logger.add(lambda m: self.lines.append(str(m)), format="{message}", level="DEBUG")
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        from loguru import logger
+
+        logger.remove(self._id)
+
+    @property
+    def text(self) -> str:
+        return "\n".join(self.lines)
+
+
+@pytest.mark.asyncio
+async def test_branded_brevo_log_has_no_recipient_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Проход сводки шлёт пачку писем: адрес в логе на каждое превратил бы лог
+    воркера в список почт клиентов. Ни при успехе, ни при отказе Brevo адреса нет."""
+    status = {"code": 201, "text": "{}"}
+
+    class FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeClient":
+            return self
+
+        async def __aexit__(self, *exc: Any) -> None:
+            return None
+
+        async def post(self, url: str, json: dict, headers: dict) -> Any:
+            return SimpleNamespace(status_code=status["code"], text=status["text"])
+
+    monkeypatch.setattr(sender_mod.httpx, "AsyncClient", FakeClient)
+    address = "Client.Person@example.test"
+
+    with _LogCapture() as logs:
+        await _sender(BREVO).send_branded(
+            to=address, subject="S", body="B", from_email="digest@example.test"
+        )
+    assert "via Brevo (status 201)" in logs.text
+    assert address.lower() not in logs.text.lower()
+
+    # Brevo отказал и вернул адрес в теле ответа (в другом регистре).
+    status.update(code=400, text=f'{{"message":"{address.lower()} is blocked"}}')
+    with _LogCapture() as logs, pytest.raises(EmailDeliveryError):
+        await _sender(BREVO).send_branded(
+            to=address, subject="S", body="B", from_email="digest@example.test"
+        )
+    assert "400" in logs.text, "код ответа нужен для разбора"
+    assert address.lower() not in logs.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_branded_smtp_refused_log_has_no_recipient_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SMTPRecipientsRefused несёт адрес в самом тексте ошибки — в лог он не попадает."""
+    address = "client.person@example.test"
+
+    class RefusingSMTP:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def __enter__(self) -> "RefusingSMTP":
+            return self
+
+        def __exit__(self, *exc: Any) -> None:
+            return None
+
+        def ehlo(self) -> None:
+            return None
+
+        def starttls(self) -> None:
+            return None
+
+        def login(self, *args: Any) -> None:
+            return None
+
+        def send_message(self, message: Any) -> None:
+            upper = address.upper()
+            raise sender_mod.smtplib.SMTPRecipientsRefused(
+                {upper: (550, f"5.1.1 <{upper}>: Recipient address rejected".encode())}
+            )
+
+    monkeypatch.setattr(sender_mod.smtplib, "SMTP", RefusingSMTP)
+    monkeypatch.setattr(sender_mod.smtplib, "SMTP_SSL", RefusingSMTP)
+
+    with _LogCapture() as logs, pytest.raises(EmailDeliveryError):
+        await _sender(CUSTOM).send_branded(
+            to=address, subject="S", body="B", from_email="digest@example.test"
+        )
+    assert address not in logs.text.lower()
+    assert "SMTPRecipientsRefused" in logs.text and "550" in logs.text
+
+
 # ── Конфиг, расход, лента ─────────────────────────────────────────────────────
 
 

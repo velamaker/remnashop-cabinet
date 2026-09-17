@@ -78,6 +78,16 @@ def _escape(text: str) -> str:
         text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     )
 
+def _without_address(message: str, address: str) -> str:
+    """Текст ошибки без адреса получателя — для лога рассылки.
+
+    Без учёта регистра: почтовый сервер возвращает адрес так, как ему удобно.
+    """
+    address = (address or "").strip()
+    if not address:
+        return message
+    return re.sub(re.escape(address), "<recipient>", message, flags=re.IGNORECASE)
+
 def _text_to_html(body: str) -> str:
     """Простейшая обёртка plain-text → HTML."""
     safe = _escape(body).replace("\n", "<br>")
@@ -376,7 +386,9 @@ class OverlaySmtpEmailSender(BaseSmtpEmailSender):
                 s["from_email"] = from_email
             subject, text, html = _render_branded(subject, body, brand or self._brand(s), **opts)
             if self._use_brevo(s):
-                await self._send_brevo(s, to=to, subject=subject, text=text, html=html)
+                await self._send_brevo(
+                    s, to=to, subject=subject, text=text, html=html, log_recipient=False
+                )
             else:
                 headers = (
                     {
@@ -393,10 +405,24 @@ class OverlaySmtpEmailSender(BaseSmtpEmailSender):
         except Exception as e:
             # Адрес получателя в лог не пишем: рассылка идёт пачкой, и лог превратился
             # бы в список почт клиентов. Кому не ушло — видно по журналу отправок.
-            logger.error(f"Failed to send branded email: {e}")
+            # Текст ошибки адрес тоже несёт (SMTPRecipientsRefused — словарь с ним,
+            # Brevo может вернуть его в теле ответа), поэтому вырезаем его и оттуда:
+            # код ответа сервера для разбора остаётся.
+            logger.error(
+                f"Failed to send branded email: {type(e).__name__}: {_without_address(str(e), to)}"
+            )
             raise EmailDeliveryError("Failed to send email. Please try again later.") from e
 
-    async def _send_brevo(self, s: dict, *, to: str, subject: str, text: str, html: str) -> None:
+    async def _send_brevo(
+        self,
+        s: dict,
+        *,
+        to: str,
+        subject: str,
+        text: str,
+        html: str,
+        log_recipient: bool = True,
+    ) -> None:
         from_name = (s["from_name"] or "").strip()
         from_email = (s["from_email"] or "").strip()
 
@@ -420,7 +446,10 @@ class OverlaySmtpEmailSender(BaseSmtpEmailSender):
             raise RuntimeError(
                 f"Brevo API returned {resp.status_code}: {resp.text[:300]}"
             )
-        logger.info(f"Email sent to '{to}' via Brevo (status {resp.status_code})")
+        if log_recipient:
+            logger.info(f"Email sent to '{to}' via Brevo (status {resp.status_code})")
+        else:
+            logger.info(f"Email sent via Brevo (status {resp.status_code})")
 
     def _send_smtp(
         self,
