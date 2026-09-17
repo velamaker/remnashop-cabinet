@@ -98,6 +98,49 @@ async def was_change_granted(
     return bool(after_expire > before_expire)
 
 
+async def was_balance_purchase_granted(
+    *,
+    error: BaseException,
+    session: AsyncSession,
+    payment_id: object,
+    subscription_dao: SubscriptionDao,
+    user_id: int,
+    before: object,
+) -> "bool | None":
+    """Выдана ли покупка с баланса, которая закончилась исключением. None — не знаем.
+
+    Порядок условий денежный:
+      1) `PurchaseError` — выдача упала, база перевела счёт в FAILED: НЕ выдано;
+      2) счёт не COMPLETED (не создан, PENDING, FAILED): НЕ выдано;
+      3) и только потом — изменилась ли подписка (`was_change_granted`).
+    Одна проверка строки подписки врёт при гонке: соседняя покупка могла сменить
+    строку, пока наша упала, — и деньги не вернулись бы за то, чего человек не получил.
+    """
+    from src.core.exceptions import PurchaseError
+
+    if isinstance(error, PurchaseError):
+        return False
+    if payment_id is None:
+        return False
+    try:
+        row = (
+            await session.execute(
+                text("SELECT status::text FROM transactions WHERE payment_id = CAST(:pid AS uuid)"),
+                {"pid": str(payment_id)},
+            )
+        ).first()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"pay_with_balance: статус счёта не прочитан: {exc}")
+        try:
+            await session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+    if row is None or str(row[0]) != TransactionStatus.COMPLETED.value:
+        return False
+    return await was_change_granted(subscription_dao, user_id, before)
+
+
 async def _alert_admins_balance(message: str, title: str = "⚠️ Продление с баланса") -> None:
     """Сказать владельцу. Никогда не мешает основному пути."""
     try:

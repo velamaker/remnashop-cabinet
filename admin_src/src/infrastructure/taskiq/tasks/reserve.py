@@ -457,6 +457,13 @@ async def run_reserve(
                 "  SELECT 1 FROM reserve_grants r "
                 "  WHERE r.user_id = u.id AND r.ended = false"
                 ") "
+                # Подписка на ПАУЗЕ не истекла: срок строки стоит в прошлом, а оплаченный
+                # остаток лежит в паузе. Резерв поверх паузы сдвигал срок строки на окно,
+                # и перенос остатка при смене тарифа принимал такую строку за резерв.
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM subscription_freezes f "
+                "  WHERE f.user_id = u.id AND f.active = true"
+                ") "
                 "AND EXISTS ("
                 "  SELECT 1 FROM transactions t "
                 "  WHERE t.user_id = u.id AND t.status = 'COMPLETED' "

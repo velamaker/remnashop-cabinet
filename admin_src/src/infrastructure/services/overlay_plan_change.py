@@ -51,11 +51,15 @@ from sqlalchemy import text
 ASSETS_DIR = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets"))
 CONFIG_PATH = ASSETS_DIR / "plan_change.json"
 
-# Установки из git получают перенос включённым: сгорание оплаченных дней для
-# покупателя выглядит как ошибка магазина. Выключить — `{"enabled": false}` в файле,
-# без пересборки (файл читается на каждый вызов).
+# В этом релизе перенос ВЫКЛЮЧЕН по умолчанию: включается только явным
+# `{"enabled": true}` в файле, без пересборки (файл читается на каждый вызов).
+# Смену тарифа за деньги и подарки по промокоду включают раздельно (`promo_enabled`).
+# Выключатель денежный, поэтому трактуется строго: включено — только настоящий
+# JSON-`true`. Битый файл, строка "true", лишняя запятая — ВЫКЛЮЧЕНО и ERROR в лог:
+# ошибка в файле не имеет права молча включить перенос.
 DEFAULT_CONFIG: dict[str, Any] = {
-    "enabled": True,
+    "enabled": False,
+    "promo_enabled": False,
     "notify_admins": True,
 }
 
@@ -85,22 +89,44 @@ _ZERO_UUID = "00000000-0000-0000-0000-000000000000"
 # ── настройки ───────────────────────────────────────────────────────────────
 
 
+_OFF = {"enabled": False, "promo_enabled": False, "notify_admins": True}
+
+
 def load_config() -> dict[str, Any]:
-    """Выключатель и уведомления. Нет файла — дефолт; битый — дефолт + warning."""
+    """Выключатели и уведомления. Нет файла — умолчание (выключено).
+
+    Строго: `enabled`/`promo_enabled` включены, только если в файле JSON-`true`. Файл не
+    читается, не JSON, не объект, значение не bool — выключено и ERROR в лог.
+    """
     try:
-        data = json.loads(CONFIG_PATH.read_text("utf-8"))
+        raw = CONFIG_PATH.read_text("utf-8")
     except FileNotFoundError:
         return dict(DEFAULT_CONFIG)
     except Exception as exc:  # noqa: BLE001
-        logger.warning(f"plan_change: не удалось прочитать {CONFIG_PATH} ({exc}) — беру дефолт")
-        return dict(DEFAULT_CONFIG)
+        logger.error(f"plan_change: {CONFIG_PATH} не читается ({exc}) — перенос ВЫКЛЮЧЕН")
+        return dict(_OFF)
+    try:
+        data = json.loads(raw)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"plan_change: {CONFIG_PATH} — не JSON ({exc}) — перенос ВЫКЛЮЧЕН")
+        return dict(_OFF)
     if not isinstance(data, dict):
-        logger.warning(f"plan_change: {CONFIG_PATH} не объект — беру дефолт")
-        return dict(DEFAULT_CONFIG)
-    return {
-        "enabled": bool(data.get("enabled", DEFAULT_CONFIG["enabled"])),
-        "notify_admins": bool(data.get("notify_admins", DEFAULT_CONFIG["notify_admins"])),
-    }
+        logger.error(f"plan_change: {CONFIG_PATH} — не объект — перенос ВЫКЛЮЧЕН")
+        return dict(_OFF)
+
+    out: dict[str, Any] = {}
+    for key in ("enabled", "promo_enabled"):
+        value = data.get(key, DEFAULT_CONFIG[key])
+        if not isinstance(value, bool):
+            logger.error(f"plan_change: {key}={value!r} в {CONFIG_PATH} не true/false — ВЫКЛЮЧЕНО")
+            value = False
+        out[key] = value is True
+    notify = data.get("notify_admins", DEFAULT_CONFIG["notify_admins"])
+    if not isinstance(notify, bool):
+        logger.error(f"plan_change: notify_admins={notify!r} не true/false — уведомления включены")
+        notify = True
+    out["notify_admins"] = notify
+    return out
 
 
 def _wrapped(module_name: str, class_name: str, method: str) -> bool:
@@ -132,7 +158,12 @@ def overlay_active() -> bool:
     Это читают витрина кабинета и окно подтверждения в боте: обещать перенос можно,
     только если он произойдёт. Правка не встала — честное «без пересчёта».
     """
-    return patch_applied() and bool(load_config().get("enabled"))
+    return patch_applied() and load_config().get("enabled") is True
+
+
+def promo_active() -> bool:
+    """Подарок другого тарифа пересчитывает остаток: правка встала И `promo_enabled`."""
+    return promo_patch_applied() and load_config().get("promo_enabled") is True
 
 
 def process_name() -> str:
@@ -247,6 +278,9 @@ class CarryResult:
     breakdown: tuple[dict, ...] = ()
     # Докупки, чья стоимость НЕ перенесена (другая валюта, режим без переноса).
     extras_lost: int = 0
+    # Почему часть дней не перенесена: "cap" — упор в MAX_BONUS_DAYS; "old_price" —
+    # цена старых дней неизвестна; "new_price" — у нового срока нет цены. None — потерь нет.
+    lost_reason: Optional[str] = None
 
     @property
     def added_days(self) -> int:
@@ -276,12 +310,15 @@ def state_mode(state: CarryState, now: datetime) -> tuple[str, Optional[int]]:
         return "lifetime", None
     left = remaining_seconds(state, now) or 0
     if (
-        state.reserve_expire_at is not None
+        state.frozen_seconds is None
+        and state.reserve_expire_at is not None
         and state.expire_at is not None
         and state.expire_at <= state.reserve_expire_at + RESERVE_SLACK
     ):
         # Резерв — бесплатная страховка истёкшим; оплаченный RENEW поверх открытой
-        # выдачи двигает срок дальше резерва и остаётся настоящим.
+        # выдачи двигает срок дальше резерва и остаётся настоящим. Активная пауза
+        # ВАЖНЕЕ резерва: срок строки на паузе стоит в прошлом, крон резерва мог выдать
+        # окно, но оплаченный остаток лежит в паузе — его сжечь нельзя.
         return "reserve", 0
     if left <= 0:
         return "none", 0
@@ -302,19 +339,18 @@ def _frac(value: Any) -> Optional[Fraction]:
 
 
 def _layer_day_price(layer: Layer, currency: str, prices: Mapping[tuple[int, int, str], Fraction]) -> Optional[Fraction]:
-    """Цена дня слоя в валюте счёта. None — перевести нельзя."""
+    """Цена дня слоя в валюте счёта. None — слой в другой валюте.
+
+    Валюты НЕ переводим вовсе, даже через витрину владельца: соотношение цен тарифов
+    в рублях и звёздах плавает от тарифа к тарифу, и круги RUB → XTR → RUB накачивали
+    стоимость. Слой в чужой валюте оценивается как дни без оплаты — по самой низкой
+    цене дня текущего тарифа в валюте счёта (нижняя граница).
+    """
     if layer.paid <= 0 or layer.seconds <= 0:
         return None
-    if layer.currency == currency:
-        return layer.paid * DAY / layer.seconds
-    # Другая валюта: доля уплаченного от витрины переносится на витрину в нужной
-    # валюте того же тарифа и срока. Курсов нет — только цены владельца.
-    if layer.plan_id is None or layer.duration <= 0 or layer.listed <= 0:
+    if layer.currency != currency:
         return None
-    listed_here = prices.get((layer.plan_id, layer.duration, currency))
-    if listed_here is None or listed_here <= 0:
-        return None
-    return listed_here * (layer.paid / layer.listed) / layer.duration
+    return layer.paid * DAY / layer.seconds
 
 
 def cheapest_day_price(state: CarryState, currency: str) -> Optional[Fraction]:
@@ -477,13 +513,14 @@ def compute_carryover(
             value=value + extras_value, new_day_price=new_day, bonus_days=extra_days,
             bonus_seconds=bonus_seconds, lost_days=lost, capped=capped,
             source_payment_ids=tuple(sources), breakdown=tuple(breakdown), extras_lost=extras_lost,
+            lost_reason="cap" if capped else None,
         )
 
     if new_day is None:
         return CarryResult(
             mode="unpriced", remaining_seconds=left, remaining_days=left_days, value=Fraction(0),
             new_day_price=None, bonus_days=0, bonus_seconds=0, lost_days=left_days, capped=False,
-            extras_lost=extras_live,
+            extras_lost=extras_live, lost_reason="new_price" if left_days else None,
         )
 
     total = value + extras_value
@@ -494,22 +531,54 @@ def compute_carryover(
     if capped:
         lost += left_days - math.floor(Fraction(left_days * MAX_BONUS_DAYS, uncapped))
     lost = min(lost, math.ceil(left / DAY))
+    reason = "cap" if capped else ("old_price" if lost > 0 else None)
     return CarryResult(
         mode="carry", remaining_seconds=left, remaining_days=left_days, value=total,
         new_day_price=new_day, bonus_days=bonus, bonus_seconds=0, lost_days=lost, capped=capped,
         source_payment_ids=tuple(sources), breakdown=tuple(breakdown), extras_lost=extras_lost,
+        lost_reason=reason,
     )
 
 
-def failed_result(expire_at: Optional[datetime], now: datetime) -> CarryResult:
-    """Состояние не загрузилось: выдача по правилам базы, остаток — для ручного «Продлить»."""
-    left = max(0, int((expire_at - now).total_seconds())) if expire_at is not None else 0
+def failed_result(
+    expire_at: Optional[datetime],
+    now: datetime,
+    *,
+    frozen_seconds: Optional[int] = None,
+    reserve_expire_at: Optional[datetime] = None,
+) -> CarryResult:
+    """Расчёт не удался: выдача по правилам базы, остаток — для ручного «Продлить».
+
+    Остаток для алерта — по тем же правилам, что у расчёта: на паузе — сохранённый
+    остаток (срок строки стоит в прошлом), на резерве без паузы — 0 (страховка не
+    переносится). Пауза и резерв передаются, если их удалось прочитать.
+    """
     if expire_at is not None and expire_at.year == UNLIMITED_YEAR:
         left = 0
+    elif frozen_seconds is not None:
+        left = max(0, int(frozen_seconds))
+    elif (
+        reserve_expire_at is not None
+        and expire_at is not None
+        and expire_at <= reserve_expire_at + RESERVE_SLACK
+    ):
+        left = 0
+    else:
+        left = max(0, int((expire_at - now).total_seconds())) if expire_at is not None else 0
     return CarryResult(
         mode="failed", remaining_seconds=left, remaining_days=left // DAY, value=Fraction(0),
         new_day_price=None, bonus_days=0, bonus_seconds=0, lost_days=left // DAY, capped=False,
     )
+
+
+def worth_reporting(result: CarryResult) -> bool:
+    """Стоит ли писать владельцу про обычный перенос: дни добавлены или что-то потеряно.
+
+    Смена истёкшей подписки («+0 дн.», терять нечего) — рутина, владельцу не пишем.
+    """
+    if result.mode in ("lifetime", "refund", "failed"):
+        return result.mode != "refund" or (result.remaining_days or 0) > 0
+    return result.added_days > 0 or result.lost_days > 0 or result.capped or result.extras_lost > 0
 
 
 def target_expire(now: datetime, new_duration: int, result: CarryResult) -> datetime:
@@ -600,6 +669,8 @@ def promo_block_reason(result: CarryResult) -> str:
         why = "бессрочная подписка станет срочной"
     elif result.mode == "refund":
         why = "по подписке был возврат оплаты"
+    elif result.mode == "carry" and result.lost_reason == "cap":
+        why = f"{result.lost_days} дн. сверх предела переноса"
     elif result.mode == "carry" and result.lost_days > 0:
         why = f"{result.lost_days} дн. без известной цены"
     else:
@@ -620,6 +691,9 @@ class PromoCarry:
 # ── SQL ─────────────────────────────────────────────────────────────────────
 
 DEFAULT_CURRENCY_SQL = "SELECT default_currency::text FROM settings ORDER BY id LIMIT 1"
+
+# Сколько ждать замок строки users под оплатой.
+LOCK_TIMEOUT_MS = 30000
 
 LOCK_CURRENT_SQL = (
     "SELECT s.id, s.expire_at, s.status::text, s.is_trial, "
@@ -644,33 +718,46 @@ RESERVE_SQL = (
     "WHERE user_id = :uid AND ended = false AND reserve_expire_at > now()"
 )
 
+# Только возвраты ТАРИФНЫХ платежей: пополнение баланса (id −2) и подарок другому
+# человеку к подписке этого человека отношения не имеют.
 REFUND_SQL = (
-    "SELECT EXISTS (SELECT 1 FROM transactions "
-    "WHERE user_id = :uid AND status = 'REFUNDED' AND is_test = false "
-    "AND updated_at > now() - interval '365 days')"
+    "SELECT EXISTS (SELECT 1 FROM transactions t "
+    "WHERE t.user_id = :uid AND t.status = 'REFUNDED' AND t.is_test = false "
+    "AND (t.plan_snapshot->>'id')::int > 0 "
+    "AND NOT EXISTS (SELECT 1 FROM gift_payments gp WHERE gp.payment_id = t.payment_id) "
+    "AND t.updated_at > now() - interval '365 days')"
 )
 
 LAST_CARRY_SQL = (
     "SELECT source, created_at, currency, value_amount, bonus_days, bonus_seconds, "
-    "new_day_price, mode, capped, remaining_seconds, new_plan_id, new_duration "
+    "new_day_price, mode, capped, remaining_seconds, new_plan_id, new_duration, payment_id::text "
     "FROM plan_change_carryovers WHERE subscription_id = :sid "
     "ORDER BY created_at DESC, id DESC LIMIT 1"
 )
 
+# Слои строки: продления после отсечки + счёт, которым строка создана. Создающий —
+# по журналу (payment_id переноса source='purchase'), если он есть: время тут не
+# надёжно (две смены почти одновременно, RENEW чужого тарифа, пересчитанный как
+# смена). Журнала нет — окно вокруг создания строки, только тот же тариф, что у
+# строки, и без подарков другим людям (gift_payments, «Баланс · подарок»).
 LAYERS_SQL = (
-    "SELECT payment_id::text, purchase_type::text, currency::text, "
-    "(pricing->>'final_amount')::numeric, (pricing->>'original_amount')::numeric, "
-    "(plan_snapshot->>'id')::int, (plan_snapshot->>'duration')::int, updated_at "
-    "FROM transactions "
-    "WHERE user_id = :uid AND status = 'COMPLETED' AND is_test = false "
-    "AND (plan_snapshot->>'id')::int > 0 AND (plan_snapshot->>'duration')::int > 0 "
-    "AND (pricing->>'final_amount')::numeric > 0 "
-    "AND payment_id <> CAST(:exclude AS uuid) "
-    "AND ( (purchase_type = 'RENEW' AND updated_at > CAST(:cut AS timestamptz)) "
-    "OR (CAST(:with_create AS boolean) AND purchase_type IN ('NEW', 'CHANGE') "
-    "AND updated_at BETWEEN CAST(:row_created AS timestamptz) - interval '120 seconds' "
+    "SELECT t.payment_id::text, t.purchase_type::text, t.currency::text, "
+    "(t.pricing->>'final_amount')::numeric, (t.pricing->>'original_amount')::numeric, "
+    "(t.plan_snapshot->>'id')::int, (t.plan_snapshot->>'duration')::int, t.updated_at "
+    "FROM transactions t "
+    "WHERE t.user_id = :uid AND t.status = 'COMPLETED' AND t.is_test = false "
+    "AND (t.plan_snapshot->>'id')::int > 0 AND (t.plan_snapshot->>'duration')::int > 0 "
+    "AND (t.pricing->>'final_amount')::numeric > 0 "
+    "AND t.payment_id <> CAST(:exclude AS uuid) "
+    "AND NOT EXISTS (SELECT 1 FROM gift_payments gp WHERE gp.payment_id = t.payment_id) "
+    "AND COALESCE(t.gateway_display_name, '') <> 'Баланс · подарок' "
+    "AND ( (t.purchase_type = 'RENEW' AND t.updated_at > CAST(:cut AS timestamptz)) "
+    "OR t.payment_id = CAST(:create_pid AS uuid) "
+    "OR (CAST(:with_window AS boolean) AND t.purchase_type IN ('NEW', 'CHANGE') "
+    "AND (t.plan_snapshot->>'id')::int = CAST(:row_plan_id AS integer) "
+    "AND t.updated_at BETWEEN CAST(:row_created AS timestamptz) - interval '120 seconds' "
     "AND CAST(:row_created AS timestamptz) + interval '5 seconds') ) "
-    "ORDER BY updated_at DESC"
+    "ORDER BY t.updated_at DESC"
 )
 
 PRICES_SQL = (
@@ -731,14 +818,21 @@ def _row_to_sub(row: Any) -> Optional[SubRow]:
     )
 
 
-async def lock_current_subscription(session: Any, user_id: int) -> Optional[SubRow]:
+async def lock_current_subscription(
+    session: Any, user_id: int, *, timeout_ms: int = LOCK_TIMEOUT_MS
+) -> Optional[SubRow]:
     """Замок на строке users и СВЕЖЕЕ чтение текущей подписки одним запросом.
 
     Сырым SQL, а не `get_current`: сессия живёт с `expire_on_commit=False`, и
     повторный ORM-select вернул бы объект из identity map со старым сроком —
     продление, закоммиченное соседним процессом, осталось бы невидимым.
+
+    Ожидание замка ограничено `lock_timeout` (только на этот запрос, потом — как было):
+    зависший сосед не должен держать оплату до общего таймаута запроса.
     """
+    await session.execute(text(f"SET LOCAL lock_timeout = '{int(timeout_ms)}ms'"))
     row = (await session.execute(text(LOCK_CURRENT_SQL), {"uid": user_id})).first()
+    await session.execute(text("SET LOCAL lock_timeout TO DEFAULT"))
     return _row_to_sub(row)
 
 
@@ -750,7 +844,7 @@ async def read_subscription_row(session: Any, subscription_id: int) -> Optional[
 def _carry_layer(row: Any) -> Optional[Layer]:
     """Перенос, которым строка создана, как слой: его стоимость — уже в деньгах."""
     (_source, _created, currency, value_amount, bonus_days, bonus_seconds, new_day_price,
-     mode, capped, remaining, new_plan_id, new_duration) = row
+     mode, capped, remaining, new_plan_id, new_duration) = tuple(row)[:12]
     seconds = int(bonus_days or 0) * DAY + int(bonus_seconds or 0)
     value = _frac(value_amount) or Fraction(0)
     if seconds <= 0 or value <= 0:
@@ -797,8 +891,13 @@ async def load_carry_state(
 
     carry_row = (await session.execute(text(LAST_CARRY_SQL), {"sid": subscription.id})).first()
     cut = carry_row[1] if carry_row is not None else created_at
+    # Строка создана покупкой с переносом — создающий счёт известен точно, по журналу.
     # Промокод меняет тариф В ТОЙ ЖЕ строке: её создающий счёт уже пересчитан в перенос.
-    with_create = created_at is not None and not (carry_row is not None and carry_row[0] == "promocode")
+    # Журнала нет — ищем создающий в окне вокруг создания строки.
+    create_pid = None
+    if carry_row is not None and carry_row[0] == "purchase" and len(tuple(carry_row)) > 12:
+        create_pid = carry_row[12]
+    with_window = created_at is not None and carry_row is None
 
     layer_rows: list[Any] = []
     if cut is not None:
@@ -810,7 +909,9 @@ async def load_carry_state(
                         "uid": user_id,
                         "exclude": str(exclude_payment_id) if exclude_payment_id else _ZERO_UUID,
                         "cut": cut,
-                        "with_create": with_create,
+                        "create_pid": str(create_pid) if create_pid else _ZERO_UUID,
+                        "with_window": with_window,
+                        "row_plan_id": int(subscription.plan_id) if subscription.plan_id is not None else -1,
                         "row_created": created_at or cut,
                     },
                 )
@@ -822,8 +923,11 @@ async def load_carry_state(
     for pid, ptype, cur, final, original, plan_id, duration, _updated in layer_rows:
         final_f = _frac(final) or Fraction(0)
         original_f = _frac(original) or final_f
+        # Создающий по журналу бывает и RENEW (продление чужого тарифа, пересчитанное как
+        # смена) — узнаём его по счёту, а не по типу.
+        is_create = create_pid is not None and str(pid) == str(create_pid)
         layer = Layer(
-            kind="renew" if ptype == "RENEW" else "create",
+            kind="create" if is_create or ptype != "RENEW" else "renew",
             payment_id=str(pid) if pid else None,
             seconds=int(duration) * DAY,
             currency=str(cur),
@@ -832,10 +936,10 @@ async def load_carry_state(
             plan_id=int(plan_id) if plan_id is not None else None,
             duration=int(duration),
         )
-        if ptype == "RENEW":
+        if layer.kind == "renew":
             renews.append(layer)  # уже от новых к старым
         elif create is None:
-            create = layer  # самый поздний NEW/CHANGE в окне
+            create = layer  # по журналу — единственный; в окне — самый поздний
 
     layers: list[Layer] = list(renews)
     if create is not None:
@@ -940,24 +1044,49 @@ async def promo_web_refusal(
     *,
     user: Any,
     code: str,
+    validate_promocode: Any,
     subscription_dao: Any,
-    promocode_dao: Any,
     now: datetime,
-) -> Optional[str]:
-    """Причина НЕ активировать подарок другого тарифа в вебе — или None.
+) -> Optional[tuple[int, str]]:
+    """Отказ активировать подарок другого тарифа в вебе: (HTTP-статус, текст) — или None.
 
     В боте подарок подтверждают дважды и видят, что будет с остатком. В вебе
     подтверждения нет: раньше подарок молча сжигал оплаченный остаток. Теперь остаток
     переносится по цене дня, а там, где целиком перенести нельзя (бессрочная, возврат,
-    дни без известной цены, нет цены подарка), веб отказывает с понятной причиной.
-    Выключатель выключен или правка активации не встала — поведение как раньше.
+    дни без известной цены, нет цены подарка), — 409 с понятной причиной.
+
+    Порядок важен: сначала код проверяется ТЕМ ЖЕ интерактором, что при активации
+    (активен, не истёк, не использован). Недействительный код — None: активация сама
+    вернёт свою понятную ошибку, а не «подарок заменит тариф». Сбой проверки остатка —
+    503 «не удалось проверить», а не 409 про замену.
+    Перенос подарков выключен (`promo_enabled`) или правка не встала — как раньше.
     """
-    if not load_config().get("enabled") or not promo_patch_applied():
+    if not promo_active():
         return None
+    # Интерактор и исключения базы — внутри: модуль не тянет application-слой.
+    from src.application.use_cases.promocode.queries.validate import ValidatePromocodeDto
+    from src.core.exceptions import (
+        PromocodeAlreadyActivatedError,
+        PromocodeExpiredError,
+        PromocodeNotAvailableError,
+        PromocodeNotFoundError,
+    )
+
+    invalid = (
+        PromocodeNotFoundError,
+        PromocodeExpiredError,
+        PromocodeAlreadyActivatedError,
+        PromocodeNotAvailableError,
+    )
     try:
-        promo = await promocode_dao.get_by_code(code)
+        promo = await validate_promocode(user, ValidatePromocodeDto(code=code, user=user))
+    except invalid:
+        return None
+    except Exception as exc:  # noqa: BLE001
+        return await _promo_check_failed(session, user, exc)
+    try:
         reward = getattr(getattr(promo, "reward_type", None), "value", getattr(promo, "reward_type", None))
-        if promo is None or str(reward) != "SUBSCRIPTION":
+        if str(reward) != "SUBSCRIPTION":
             return None
         snapshot = getattr(promo, "plan_snapshot", None) or {}
         plan_id, duration = snapshot.get("id"), snapshot.get("duration")
@@ -969,16 +1098,20 @@ async def promo_web_refusal(
             duration=int(duration), now=now,
         )
     except Exception as exc:  # noqa: BLE001
-        try:
-            await session.rollback()
-        except Exception:  # noqa: BLE001
-            pass
-        logger.warning(f"promocode: перенос остатка user_id={getattr(user, 'id', '?')} не проверен ({exc})")
-        # Не знаем, сгорят ли дни, — не активируем молча: деньги человека дороже минуты.
-        return PROMO_CHECK_FAILED
+        return await _promo_check_failed(session, user, exc)
     if carried is None or not promo_loses_days(carried.result):
         return None
-    return promo_block_reason(carried.result)
+    return 409, promo_block_reason(carried.result)
+
+
+async def _promo_check_failed(session: Any, user: Any, exc: Exception) -> tuple[int, str]:
+    try:
+        await session.rollback()
+    except Exception:  # noqa: BLE001
+        pass
+    logger.error(f"promocode: остаток user_id={getattr(user, 'id', '?')} не проверен ({exc})")
+    # Не знаем, сгорят ли дни, — не активируем молча: деньги человека дороже минуты.
+    return 503, PROMO_CHECK_FAILED
 
 
 async def carry_already_applied(session: Any, payment_id: Any) -> bool:
@@ -1090,6 +1223,13 @@ MODE_TITLES = {
 }
 
 
+LOST_REASON_TITLES = {
+    "cap": f"упор в предел переноса {MAX_BONUS_DAYS} дн.",
+    "old_price": "цена старых дней неизвестна (импорт, тариф вне витрины, другая валюта)",
+    "new_price": "у нового срока нет цены в валюте счёта",
+}
+
+
 def admin_carry_text(
     user_log: str,
     old_name: str,
@@ -1115,8 +1255,8 @@ def admin_carry_text(
         f"Остаток {left_text} → +{result.added_days} дн. ({MODE_TITLES.get(result.mode, result.mode)})",
     ]
     if result.lost_days:
-        lines.append(f"Не перенесено: {result.lost_days} дн.")
-    if result.capped:
+        lines.append(f"Не перенесено: {result.lost_days} дн. — {LOST_REASON_TITLES.get(result.lost_reason, 'причина неизвестна')}")
+    if result.capped and result.lost_reason != "cap":
         lines.append(f"Упёрлось в предел {MAX_BONUS_DAYS} дн.")
     if result.extras_lost:
         lines.append(f"Докупки без переноса: {result.extras_lost}")

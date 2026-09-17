@@ -20,7 +20,7 @@ compose = importlib.import_module("compose")
 
 def test_offers_handler_never_claims_carryover():
     source = inspect.getsource(compose.subscription_offers)
-    for field in ("plan_change_keeps_days", "plan_change_carry", "carry_mode"):
+    for field in ("plan_change_keeps_days", "plan_change_carry", "carry_mode", "plan_change_carry_active"):
         assert field not in source, f"адаптер начал отдавать {field} — кабинет пообещает перенос дней"
 
 

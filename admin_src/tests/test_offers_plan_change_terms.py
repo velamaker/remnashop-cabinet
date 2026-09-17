@@ -11,8 +11,11 @@
     а на паузе берёт сохранённый остаток — `expire_at` там стоит на месте;
   * `/offers` отдаёт поля именно через оверлей-схему: FastAPI режет ответ по
     `response_model`, и с базовой схемой условия молча пропали бы;
-  * `plan_change_keeps_days` = перенос РЕАЛЬНО случится (`overlay_active`): правка
-    встала и выключатель включён; выключено — false, кабинет предупреждает по-старому;
+  * `plan_change_carry_active` = перенос РЕАЛЬНО случится (`overlay_active`): правка
+    встала и выключатель включён; выключено — поля нет, кабинет предупреждает по-старому;
+  * `plan_change_keeps_days` — для СТАРЫХ сборок кабинета: true, только если ничего не
+    пропадёт; бессрочная, возврат, потеря дней хоть на одной цели — false, чтобы старая
+    сборка предупредила;
   * сбой чтения паузы или состояния переноса витрину не роняет (это единственный
     путь к покупке), а «не знаем» не выдаётся за «перенесём»;
   * резерв не переносится: `current_days_left` = 0;
@@ -47,6 +50,12 @@ from src.core.enums import Currency, PaymentGatewayType, SubscriptionStatus  # n
 
 NOW = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
 DAY = 86400
+
+
+@pytest.fixture(autouse=True)
+def carry_switched_on(monkeypatch):
+    """По умолчанию перенос выключен — витрину проверяем с явно включённым выключателем."""
+    monkeypatch.setattr(carry, "load_config", lambda: {"enabled": True, "promo_enabled": False, "notify_admins": True})
 
 
 def terms(**over: Any) -> dict:
@@ -223,7 +232,8 @@ async def test_offers_report_days_left_for_active_subscription():
     session = FakeSession(row=None)
     resp = await call_offers(session, subscription(days=29.5))
     assert resp.plan_change_keeps_days is carry.overlay_active()
-    assert resp.plan_change_keeps_days is True, "в образе правка встала, выключатель по умолчанию включён"
+    assert resp.plan_change_keeps_days is True, "в образе правка встала, выключатель включён фикстурой"
+    assert resp.plan_change_carry_active is True
     assert resp.carry_mode == "carry"
     assert resp.current_days_left == 29
     assert resp.current_frozen is False
@@ -309,9 +319,9 @@ async def test_offers_carry_table_per_plan_term_currency():
     entries = [e.model_dump() for e in resp.plan_change_carry]
     assert entries == [
         {"plan_code": "DUO2", "duration_days": 30, "currency": "RUB", "mode": "carry",
-         "bonus_days": 14, "lost_days": 0, "capped": False, "extras_lost": 0},
+         "bonus_days": 14, "lost_days": 0, "capped": False, "extras_lost": 0, "lost_reason": None},
         {"plan_code": "DUO2", "duration_days": 90, "currency": "RUB", "mode": "carry",
-         "bonus_days": 17, "lost_days": 0, "capped": False, "extras_lost": 0},
+         "bonus_days": 17, "lost_days": 0, "capped": False, "extras_lost": 0, "lost_reason": None},
     ]
     dumped = resp.model_dump()
     assert dumped["carry_mode"] == "carry" and dumped["plan_change_carry"][0]["bonus_days"] == 14
@@ -351,6 +361,55 @@ async def test_offers_switch_off_means_no_promise(monkeypatch):
     assert resp.plan_change_keeps_days is False
     assert calls == [], "выключено — состояние даже не читаем"
     assert resp.carry_mode is None
+
+
+async def test_offers_default_switch_is_off(monkeypatch):
+    """Без файла выключателя — перенос выключен: витрина ничего не обещает."""
+    monkeypatch.undo()
+    monkeypatch.setattr(carry, "CONFIG_PATH", carry.ASSETS_DIR / "__нет_такого_файла__.json")
+    resp = await call_offers(FakeSession(row=None), subscription(days=20.5))
+    assert resp.plan_change_keeps_days is False and resp.plan_change_carry_active is None
+
+
+def _entry(**over):
+    base = dict(plan_code="DUO2", duration_days=30, currency="RUB", mode="carry", bonus_days=14, lost_days=0)
+    base.update(over)
+    return offers_mod.PlanChangeCarryEntry(**base)
+
+
+def test_legacy_keeps_days_false_whenever_something_is_lost():
+    """Старая сборка кабинета при keeps_days=true не предупреждает вовсе — даём true, только
+    если НИЧЕГО не пропадёт."""
+    assert offers_mod.legacy_keeps_days("carry", [_entry()]) is True
+    assert offers_mod.legacy_keeps_days("reserve", []) is True
+    assert offers_mod.legacy_keeps_days("none", []) is True
+    assert offers_mod.legacy_keeps_days("lifetime", []) is False
+    assert offers_mod.legacy_keeps_days("refund", []) is False
+    assert offers_mod.legacy_keeps_days("carry", [_entry(), _entry(lost_days=3, lost_reason="old_price")]) is False
+    assert offers_mod.legacy_keeps_days("carry", [_entry(mode="unpriced", bonus_days=0, lost_days=0)]) is False
+    assert offers_mod.legacy_keeps_days("carry", [_entry(capped=True)]) is False
+    assert offers_mod.legacy_keeps_days("carry", [_entry(extras_lost=1)]) is False
+
+
+async def test_offers_lost_days_turn_legacy_flag_off_but_table_stays():
+    """Дни без известной цены (тариф вне витрины): старая сборка предупредит, новая — по таблице."""
+    unknown = carry.Layer("create", "p", 30 * DAY, "XTR", Fraction(50), Fraction(50), 10, 30)
+    resp = await call_offers(
+        FakeSession(row=None), subscription(days=29.5), loader=fake_loader(layers=(unknown,)),
+        plans=ShowcaseSafe(), gateways=OneGateway(),
+    )
+    assert resp.plan_change_carry_active is True
+    assert resp.plan_change_keeps_days is False
+    assert resp.plan_change_carry[0].lost_days > 0 and resp.plan_change_carry[0].lost_reason == "old_price"
+
+
+async def test_offers_lifetime_turns_legacy_flag_off():
+    sub = subscription(days=30)
+    sub.expire_at = sub.expire_at.replace(year=2099)
+    sub.is_unlimited = True
+    resp = await call_offers(FakeSession(row=None), sub)
+    assert resp.carry_mode == "lifetime"
+    assert resp.plan_change_keeps_days is False and resp.plan_change_carry_active is True
 
 
 async def test_offers_patch_not_applied_means_no_promise(monkeypatch):

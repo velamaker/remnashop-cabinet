@@ -12,7 +12,10 @@
   * дни без оплаты — по самой дешёвой цене дня текущего тарифа; тарифа нет в витрине —
     «перенести нельзя»;
   * резерв, бессрочная, удалённая, возврат, бессрочный новый тариф — без переноса;
-  * другая валюта — только через витрину владельца, курсов нет;
+  * другая валюта НЕ переводится вовсе: такой слой — дни без оплаты в валюте счёта
+    (круги RUB↔XTR иначе накачивали стоимость);
+  * пауза важнее резерва; сбой расчёта показывает остаток по тем же правилам;
+  * выключатели в assets/plan_change.json читаются строго: включено только JSON-true;
   * докупки (точка расширения следующей фичи) — в carry и same_plan, только в той же
     валюте; иначе видно в `extras_lost`.
 
@@ -147,6 +150,7 @@ def test_d_imported_plan_days_cannot_be_carried():
     assert got.mode == "carry"
     assert got.bonus_days == 0
     assert got.lost_days == 10
+    assert got.lost_reason == "old_price"
 
 
 def test_d_plan_outside_showcase_days_cannot_be_carried():
@@ -158,25 +162,61 @@ def test_d_plan_outside_showcase_days_cannot_be_carried():
     assert got.bonus_days == 4 and got.lost_days == 0
 
 
-def test_e_foreign_currency_layer_through_owner_showcase():
-    """Слой в звёздах final 40 / original 50 за 30 дн.; витрина того же срока в RUB = 120.
-
-    Цена дня слоя в рублях = 120 × 40/50 / 30 = 16/5. Курсов нет — только витрина.
-    """
+def test_e_foreign_currency_layer_is_valued_as_unpaid_days():
+    """Слой в звёздах при счёте в рублях НЕ переводится: его дни — по самой низкой рублёвой
+    цене дня текущего тарифа (1095/365 = 3), как дни без оплаты. 30 × 3 = 90 → /8 = 11."""
     xtr = layer("create", 40, 30, listed=50, currency="XTR")
-    assert carry._layer_day_price(xtr, "RUB", {(OLD, 30, "RUB"): Fraction(120)}) == Fraction(16, 5)
-    got = run(state(left=30, layers=[xtr], prices={(OLD, 30, "RUB"): 120}), amount=240)
-    assert got.value == 96
-    assert got.bonus_days == 12
+    prices = {(OLD, 30, "RUB"): 120, (OLD, 365, "RUB"): 1095}
+    assert carry._layer_day_price(xtr, "RUB", {k: Fraction(v) for k, v in prices.items()}) is None
+    got = run(state(left=30, layers=[xtr], prices=prices), amount=240)
+    assert got.value == 90
+    assert got.bonus_days == 11
+    assert got.lost_days == 0
 
 
-def test_e_foreign_currency_layer_without_price_becomes_unpaid_days():
-    """Рублёвой цены у тарифа слоя нет — его дни идут в «без оплаты» (здесь цены нет вовсе)."""
+def test_e_foreign_currency_layer_without_price_becomes_lost():
+    """Рублёвых цен у текущего тарифа нет — дни чужой валюты «перенести нельзя»."""
     xtr = layer("create", 40, 30, listed=50, currency="XTR")
     got = run(state(left=30, layers=[xtr], prices={(OLD, 30, "XTR"): 50}), amount=240)
     assert got.bonus_days == 0
     assert got.lost_days == 30
+    assert got.lost_reason == "old_price"
     assert any(b.get("converted") is False for b in got.breakdown)
+
+
+# Скептик: витрина с «плавающим» соотношением цен рубли/звёзды у разных тарифов.
+FX_PRICES = {(12, 30, "RUB"): 129, (12, 30, "XTR"): 72, (16, 30, "RUB"): 519, (16, 30, "XTR"): 298,
+             (12, 365, "RUB"): 1249, (12, 365, "XTR"): 714, (16, 365, "RUB"): 5249, (16, 365, "XTR"): 3000}
+
+
+def _fx_row_after(result, plan, dur, price, cur):
+    """Слои новой строки так, как их соберёт load_carry_state после переноса."""
+    layers = [carry.Layer("create", None, dur * DAY, cur, Fraction(price), Fraction(price), plan, dur)]
+    if result.bonus_days > 0:
+        value = min(result.value, Fraction(price, dur) * result.bonus_days)
+        layers.append(carry.Layer("carry", None, result.bonus_days * DAY, cur, value, value, plan, dur))
+    return state(expire=carry.target_expire(NOW, dur, result), layers=layers, prices=FX_PRICES, old_plan_id=plan)
+
+
+def test_fx_rub_xtr_cycles_never_pump_value():
+    """10 кругов 16×30 ₽ → 12×30 ⭐ → 16×30 ₽: стоимость строки в рублях не растёт сверх заплаченного."""
+    st = state(left=365, layers=[layer("create", 5249, 365, plan_id=16)], prices=FX_PRICES, old_plan_id=16)
+    r = run(st, amount=519, plan_id=16)
+    st = _fx_row_after(r, 16, 30, 519, "RUB")
+
+    def rub_value(s_):
+        left = carry.remaining_seconds(s_, NOW)
+        return carry._value_layers(s_, left, "RUB")[0]
+
+    start = rub_value(st)
+    paid = Fraction(0)
+    for _ in range(10):
+        r = run(st, amount=72, duration=30, plan_id=12, currency="XTR")
+        st = _fx_row_after(r, 12, 30, 72, "XTR")
+        r = run(st, amount=519, duration=30, plan_id=16, currency="RUB")
+        st = _fx_row_after(r, 16, 30, 519, "RUB")
+        paid += Fraction(519) + Fraction(129)  # 72 ⭐ по витрине того же срока = 129 ₽
+    assert rub_value(st) - start - paid <= 0
 
 
 def test_f_same_plan_is_one_to_one_to_the_second():
@@ -197,6 +237,7 @@ def test_g_technical_cap_3650_days():
     assert got.bonus_days == carry.MAX_BONUS_DAYS
     assert got.lost_days == 1000 - math.floor(1000 * 3650 / 100000)
     assert got.lost_days == 964
+    assert got.lost_reason == "cap"
 
 
 def test_h_remainder_worth_less_than_one_new_day():
@@ -309,9 +350,21 @@ def test_n_modes_without_carry():
 
     no_price = run(state(left=20, layers=paid), amount=0)
     assert no_price.mode == "unpriced" and no_price.lost_days == 20 and no_price.bonus_days == 0
+    assert no_price.lost_reason == "new_price"
+    assert run(state(left=29, layers=paid), amount=240).lost_reason is None
 
     expired = run(state(expire=NOW - timedelta(days=1), layers=paid), amount=240)
     assert expired.mode == "none"
+
+
+def test_pause_wins_over_reserve():
+    """Скептик: пауза с 20 оплаченными днями, срок строки в прошлом, крон резерва выдал окно
+    (срок строки = окно резерва). Оплаченные дни паузы не сгорают молча."""
+    reserve_until = NOW + timedelta(days=7)
+    st = state(expire=reserve_until, reserve=reserve_until, frozen=20 * DAY, layers=[layer("create", 120, 30)])
+    assert carry.state_mode(st, NOW) == ("carry", 20 * DAY)
+    got = run(st, amount=240)
+    assert got.mode == "carry" and got.bonus_days == 10 and got.remaining_days == 20
 
 
 def test_n_state_mode_is_target_independent():
@@ -406,6 +459,81 @@ def test_target_expire_per_mode():
     failed = carry.failed_result(NOW + timedelta(days=12), NOW)
     assert failed.mode == "failed" and failed.remaining_days == 12 and failed.bonus_days == 0
     assert carry.target_expire(NOW, 30, failed) == NOW + timedelta(days=30)
+
+
+def test_failed_result_follows_pause_and_reserve():
+    """Алерт «остаток не пересчитан» называет верный остаток: пауза — сохранённый, резерв — 0."""
+    past = NOW - timedelta(days=3)
+    assert carry.failed_result(past, NOW, frozen_seconds=25 * DAY).remaining_days == 25
+    reserve_until = NOW + timedelta(days=7)
+    assert carry.failed_result(reserve_until, NOW, reserve_expire_at=reserve_until).remaining_days == 0
+    # Пауза важнее резерва и здесь.
+    got = carry.failed_result(reserve_until, NOW, frozen_seconds=9 * DAY, reserve_expire_at=reserve_until)
+    assert got.remaining_days == 9 and got.lost_days == 9
+    assert carry.failed_result(NOW.replace(year=carry.UNLIMITED_YEAR), NOW, frozen_seconds=5 * DAY).remaining_days == 0
+
+
+def test_worth_reporting_skips_routine_zero_changes():
+    """Смена истёкшей подписки «+0 дн.» владельцу не пишется; дни, потеря, бессрочная — пишутся."""
+    expired = run(state(expire=NOW - timedelta(days=1), layers=[layer("create", 120, 30)]), amount=240)
+    assert not carry.worth_reporting(expired)
+    small = run(state(left=1, layers=[layer("create", 30, 30)]), amount=300)
+    assert not carry.worth_reporting(small)
+    assert carry.worth_reporting(run(state(left=29, layers=[layer("create", 120, 30)]), amount=240))
+    assert carry.worth_reporting(run(state(left=10, old_plan_id=-1), amount=300))
+    assert carry.worth_reporting(run(state(left=10, unlimited=True), amount=300))
+    assert carry.worth_reporting(run(state(left=10, refund=True), amount=300))
+    assert carry.worth_reporting(carry.failed_result(NOW + timedelta(days=3), NOW))
+
+
+def test_roundtrip_money_never_exceeds_paid():
+    """Скептик: 16×365 → 12×30 → 16×365 → 12×365 → 16×30 на реальных соотношениях витрины —
+    стоимость строки не больше заплаченного за все шаги."""
+    prices = {(12, 30, "RUB"): 129, (12, 365, "RUB"): 1249, (16, 30, "RUB"): 519, (16, 365, "RUB"): 5249}
+    st = state(left=365, layers=[layer("create", 5249, 365, plan_id=16)], prices=prices, old_plan_id=16)
+    total = Fraction(5249)
+    for plan_id, dur, price in [(12, 30, 129), (16, 365, 5249), (12, 365, 1249), (16, 30, 519)]:
+        r = run(st, amount=price, duration=dur, plan_id=plan_id)
+        total += price
+        layers = [layer("create", price, dur, plan_id=plan_id)]
+        if r.bonus_days:
+            value = min(r.value, Fraction(price, dur) * r.bonus_days)
+            layers.append(carry.Layer("carry", None, r.bonus_days * DAY, "RUB", value, value, plan_id, dur))
+        st = state(expire=carry.target_expire(NOW, dur, r), layers=layers, prices=prices, old_plan_id=plan_id)
+        assert sum((l.paid for l in layers), Fraction(0)) <= total
+
+
+# ── выключатель ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "content, enabled, promo",
+    [
+        (None, False, False),                                   # нет файла — выключено
+        ("", False, False),                                     # пустой
+        ('{"enabled": false,}', False, False),                  # лишняя запятая — не JSON
+        ('{"enabled": "true"}', False, False),                  # строка, а не bool
+        ('{"enabled": 1}', False, False),
+        ('["enabled"]', False, False),                          # не объект
+        ('{"enabled": true}', True, False),
+        ('{"enabled": true, "promo_enabled": true}', True, True),
+        ('{"promo_enabled": true}', False, True),               # подарки отдельно от покупки
+        ('{"enabled": true, "promo_enabled": "yes"}', True, False),
+    ],
+)
+def test_switch_is_strict(tmp_path, monkeypatch, content, enabled, promo):
+    path = tmp_path / "plan_change.json"
+    if content is not None:
+        path.write_text(content, "utf-8")
+    monkeypatch.setattr(carry, "CONFIG_PATH", path)
+    cfg = carry.load_config()
+    assert cfg["enabled"] is enabled
+    assert cfg["promo_enabled"] is promo
+    assert cfg["notify_admins"] is True
+
+
+def test_default_is_off_in_this_release():
+    assert carry.DEFAULT_CONFIG["enabled"] is False and carry.DEFAULT_CONFIG["promo_enabled"] is False
 
 
 def test_carry_layer_value_never_exceeds_converted_days():

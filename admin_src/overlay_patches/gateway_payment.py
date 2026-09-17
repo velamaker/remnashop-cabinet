@@ -116,7 +116,6 @@ from src.core.utils.i18n_helpers import (
 )
 
 from . import PatchTargetChanged, expect_source
-from .plan_change_carryover import outcome_for
 
 # sha256 методов базы v0.8.2.
 BASE_METHODS = {
@@ -150,20 +149,30 @@ def _days_left(subscription) -> "int | None":
 
 
 async def _after_change(self, user: UserDto, transaction: TransactionDto, before) -> None:
-    """Сказать владельцу, чем кончилась смена тарифа. Только после выдачи, только в try."""
+    """Сказать владельцу, чем кончилась смена тарифа. Только после выдачи, только в try.
+
+    Импорт правки покупки — ЛЕНИВЫЙ, здесь: модуль шлюза не должен тянуть за собой
+    соседнюю правку на своём импорте (порядок хуков у разных процессов разный).
+    """
+    from .plan_change_carryover import outcome_for
+
     config = carry.load_config()
-    if not config.get("enabled") or before is None or getattr(before, "is_trial", False):
+    if config.get("enabled") is not True or before is None or getattr(before, "is_trial", False):
         return
 
     outcome = outcome_for(self.purchase_subscription, transaction.payment_id)
     if outcome is None:
+        if transaction.purchase_type != PurchaseType.CHANGE:
+            return  # RENEW своего тарифа — обычная работа базы
         # Выключатель включён, CHANGE не-триала, а наша ветка не работала: правка покупки
         # в этом процессе не встала (или ей не дали сессию) — база сожгла остаток.
+        left = _days_left(before)
         logger.error(
             f"carry: перенос не применился в процессе {carry.process_name()} "
-            f"(счёт '{transaction.payment_id}', user {user.log})"
+            f"(счёт '{transaction.payment_id}', user {user.log}, остаток {left})"
         )
-        await _notify_admins_raw(self, carry.admin_not_applied_text(user.log, _days_left(before)))
+        if left is None or left > 0 or getattr(before, "is_unlimited", False):
+            await _notify_admins_raw(self, carry.admin_not_applied_text(user.log, left))
         return
     if outcome.get("skipped") or not outcome.get("applied"):
         return
@@ -174,11 +183,18 @@ async def _after_change(self, user: UserDto, transaction: TransactionDto, before
             self, carry.admin_failed_text(user.log, outcome["load_error"], result.remaining_days)
         )
         return
-    if outcome.get("record_error"):
+    if outcome.get("record_error") or outcome.get("idempotency_error"):
         await _notify_admins_raw(
             self,
-            carry.admin_unrecorded_text(user.log, result, outcome["record_error"], transaction.payment_id),
+            carry.admin_unrecorded_text(
+                user.log, result, outcome.get("record_error") or outcome["idempotency_error"],
+                transaction.payment_id,
+            ),
         )
+        return
+    # Рутина («+0 дн.» у истёкшей подписки) владельцу не пишется; добавленные дни,
+    # потеря, бессрочная и возврат — пишутся.
+    if not carry.worth_reporting(result):
         return
     if result.mode != "refund" and not config.get("notify_admins"):
         return
@@ -404,16 +420,17 @@ def apply() -> str:
                 await self.redirect.to_failed_payment(user.telegram_id)
             raise PurchaseError(e)
 
-        # OVERLAY: отчёт о переносе остатка при смене тарифа (best-effort, после выдачи).
-        if transaction.purchase_type == PurchaseType.CHANGE:
+        await self.event_publisher.publish(event)
+
+        # OVERLAY: отчёт о переносе остатка (best-effort). ПОСЛЕ выдачи и события покупки:
+        # уведомление владельцу не задерживает и не срывает то, за что заплачено.
+        if transaction.purchase_type in (PurchaseType.CHANGE, PurchaseType.RENEW):
             try:
                 await _after_change(self, user, transaction, subscription)
             except Exception:  # noqa: BLE001 — уведомление не срывает выдачу
                 logger.exception(
                     f"carry: отчёт о смене тарифа не отправлен (счёт '{transaction.payment_id}')"
                 )
-
-        await self.event_publisher.publish(event)
 
         if not transaction.pricing.is_free:
             # The purchase is already COMPLETED and committed. Referral rewards are

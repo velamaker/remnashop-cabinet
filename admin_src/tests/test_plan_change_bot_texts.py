@@ -7,7 +7,8 @@
     рендерит каждый вариант `$carry_state` с числами без разделителей тысяч.
   * Вариант ПО УМОЛЧАНИЮ — «без пересчета»: переменной нет (обёртка геттера не встала)
     или перенос выключен — бот не пообещает перенос, которого не будет.
-  * Итог покупки: строка переноса появляется только при `carry_days > 0`.
+  * Итог покупки: строка переноса появляется только при явном `carry_added = YES`; без
+    переменных (обёртка не встала) итог рендерится без чисел и не падает.
   * Обёртка окна подтверждения: сбой расчёта → OFF; переменные есть и у RENEW.
 """
 
@@ -80,7 +81,9 @@ def test_confirm_carry_numbers_without_grouping(bundle):
     "state, expected",
     [
         ("SMALL", "меньше одного дня нового плана"),
-        ("LOST", "а ещё 9 дн. перенести нельзя"),
+        ("LOST", "а ещё 9 дн. перенести нельзя — цена прежних дней неизвестна"),
+        ("CAPPED", "это предел переноса, ещё 9 дн. не поместятся"),
+        ("NOPRICE", "Остаток 5 дн. перенести нельзя: у выбранного срока нет цены"),
         ("LIFETIME", "Бессрочная подписка будет"),
         ("NONE", "будет <u>заменена</u> выбранной.</i>"),
         ("OFF", "без пересчета оставшегося срока"),
@@ -124,12 +127,19 @@ SUCCESS_ARGS = {
 
 
 def test_success_shows_carry_line_only_when_days_added(bundle):
-    with_days, _ = bundle.format("msg-subscription-success", {**SUCCESS_ARGS, "carry_days": 14})
+    with_days, _ = bundle.format("msg-subscription-success", {**SUCCESS_ARGS, "carry_added": "YES", "carry_days": 14})
     assert "Остаток прежнего плана пересчитан: <b>+14 дн.</b>" in with_days
-    without, _ = bundle.format("msg-subscription-success", {**SUCCESS_ARGS, "carry_days": 0})
+    without, _ = bundle.format("msg-subscription-success", {**SUCCESS_ARGS, "carry_added": "NO", "carry_days": 0})
     assert "пересчитан" not in without
-    big, _ = bundle.format("msg-subscription-success", {**SUCCESS_ARGS, "carry_days": 3650})
+    big, _ = bundle.format("msg-subscription-success", {**SUCCESS_ARGS, "carry_added": "YES", "carry_days": 3650})
     assert "+3650 дн." in big
+
+
+def test_success_without_carry_variables_does_not_crash(bundle):
+    """Скептик: обёртка геттера не встала — переменных нет. Итог покупки обязан отрисоваться."""
+    text, _errors = bundle.format("msg-subscription-success", dict(SUCCESS_ARGS))
+    assert "Ваша подписка была изменена" in text
+    assert "пересчитан" not in text
 
 
 # ── обёртка геттера ─────────────────────────────────────────────────────────
@@ -234,9 +244,10 @@ def test_vars_for_result_mapping():
     assert bot.vars_for_result(res())["carry_state"] == "CARRY"
     assert bot.vars_for_result(res(bonus_days=0))["carry_state"] == "SMALL"
     assert bot.vars_for_result(res(lost_days=2))["carry_state"] == "LOST"
-    assert bot.vars_for_result(res(capped=True))["carry_state"] == "LOST"
+    assert bot.vars_for_result(res(capped=True, lost_days=5, lost_reason="cap"))["carry_state"] == "CAPPED"
+    assert bot.vars_for_result(res(lost_days=5, lost_reason="old_price"))["carry_state"] == "LOST"
     assert bot.vars_for_result(res(mode="same_plan", bonus_days=0, bonus_seconds=10 * 86400))["carry_bonus"] == 10
-    assert bot.vars_for_result(res(mode="unpriced", bonus_days=0, lost_days=10))["carry_state"] == "LOST"
+    assert bot.vars_for_result(res(mode="unpriced", bonus_days=0, lost_days=10))["carry_state"] == "NOPRICE"
     assert bot.vars_for_result(res(mode="lifetime"))["carry_state"] == "LIFETIME"
     assert bot.vars_for_result(res(mode="reserve"))["carry_state"] == "NONE"
     assert bot.vars_for_result(res(mode="refund"))["carry_state"] == "OFF"

@@ -5,6 +5,10 @@
 Любое исключение возвращало деньги. С переносом остатка это стало «бесплатной сменой
 тарифа с бонусом»: смена выдана, дни перенесены, деньги вернулись.
 
+ПОРЯДОК УСЛОВИЙ. «Выдано» — только если выдача не упала (`PurchaseError`) и счёт
+COMPLETED; подписка сверяется ВТОРЫМ условием. Одна сверка строки врёт при гонке:
+соседняя покупка сменила строку, пока наша упала, — и деньги не вернулись бы.
+
 ПОЧЕМУ НЕ ПО СРОКУ. `was_subscription_granted` судит по сдвигу срока — для RENEW верно.
 Смена тарифа создаёт НОВУЮ строку, и её срок бывает раньше старого (полгода дешёвого
 тарифа → два месяца дорогого). Поэтому `was_change_granted` сначала смотрит, сменилась
@@ -86,10 +90,14 @@ class Result:
     def scalar_one_or_none(self):
         return self.value
 
+    def first(self):
+        return None if self.value is None else (self.value,)
+
 
 class Session:
-    def __init__(self, balance_after: Decimal) -> None:
+    def __init__(self, balance_after: Decimal, tx_status: "str | None" = "COMPLETED") -> None:
         self.balance_after = balance_after
+        self.tx_status = tx_status
         self.refunds = 0
         self.debits = 0
         self.commits = 0
@@ -101,6 +109,8 @@ class Session:
             return Result(self.balance_after)
         if "cabinet_balance + :amt" in sql:
             self.refunds += 1
+        if "SELECT status::text FROM transactions" in sql:
+            return Result(self.tx_status)
         return Result(None)
 
     async def commit(self):
@@ -164,16 +174,17 @@ class Transactions:
 class ProcessPayment:
     """Выдаёт (или нет) и падает ПОСЛЕ — как Telegram у заблокировавшего бота."""
 
-    def __init__(self, dao: SubscriptionDao, grant: bool) -> None:
+    def __init__(self, dao: SubscriptionDao, grant: bool, error: "BaseException | None" = None) -> None:
         self.dao = dao
         self.grant = grant
+        self.error = error or RuntimeError("Forbidden: bot was blocked by the user")
 
     @property
     def system(self):
         async def run(data):
             if self.grant:
                 self.dao.granted = True
-            raise RuntimeError("Forbidden: bot was blocked by the user")
+            raise self.error
 
         return run
 
@@ -188,7 +199,7 @@ USER = SimpleNamespace(
 )
 
 
-async def pay(monkeypatch, *, grant: bool, after, after_raises: bool = False):
+async def pay(monkeypatch, *, grant: bool, after, after_raises: bool = False, tx_status="COMPLETED", error=None):
     alerts: list[str] = []
 
     async def alert(message, title="x"):
@@ -196,7 +207,7 @@ async def pay(monkeypatch, *, grant: bool, after, after_raises: bool = False):
 
     monkeypatch.setattr(balance, "_alert_admins_balance", alert)
     dao = SubscriptionDao(before=sub(5, 180), after=after, after_raises=after_raises)
-    session = Session(Decimal("760"))
+    session = Session(Decimal("760"), tx_status)
     raw = offers_mod.pay_with_balance.__dishka_orig_func__
     outcome = None
     try:
@@ -204,7 +215,7 @@ async def pay(monkeypatch, *, grant: bool, after, after_raises: bool = False):
             body=offers_mod.PayWithBalanceRequest(plan_code="DUO2", duration_days=30, gateway_type=PaymentGatewayType.YOOMONEY),
             user=USER, session=session, uow=Uow(), subscription_dao=dao, payment_gateway_dao=Gateways(),
             pricing_service=PricingService(), get_available_plans=Plans(PLAN), match_plan=NoMatch(),
-            transaction_dao=Transactions(), process_payment=ProcessPayment(dao, grant),
+            transaction_dao=Transactions(), process_payment=ProcessPayment(dao, grant, error),
         )
     except Exception as exc:  # noqa: BLE001
         outcome = exc
@@ -232,3 +243,20 @@ async def test_unknown_refunds_and_alerts(monkeypatch):
     assert session.refunds == 1
     assert getattr(outcome, "status_code", None) == 502
     assert len(alerts) == 1
+
+
+async def test_purchase_error_refunds_even_if_subscription_row_changed(monkeypatch):
+    """Выдача упала (PurchaseError, счёт FAILED), а строка подписки сменилась соседней
+    покупкой — это НЕ наша выдача: деньги возвращаем."""
+    from src.core.exceptions import PurchaseError
+
+    session, alerts, outcome = await pay(monkeypatch, grant=True, after=sub(6, 60), tx_status="FAILED",
+                                         error=PurchaseError(RuntimeError("panel down")))
+    assert session.refunds == 1
+    assert getattr(outcome, "status_code", None) == 502
+
+
+async def test_invoice_not_completed_refunds(monkeypatch):
+    for status in ("PENDING", "FAILED", None):
+        session, alerts, outcome = await pay(monkeypatch, grant=True, after=sub(6, 60), tx_status=status)
+        assert session.refunds == 1, status

@@ -139,7 +139,7 @@ async def carry_preview(session: Any, user: Any, current: Any, plan: Any) -> Opt
     """Предпросмотр переноса для окна. Выключено, правка не встала или сбой — None."""
     carry = _carry()
     try:
-        if not carry.load_config().get("enabled") or not carry.promo_patch_applied():
+        if not carry.promo_active():
             return None
         plan_id = getattr(plan, "id", None)
         duration = getattr(plan, "duration", None)

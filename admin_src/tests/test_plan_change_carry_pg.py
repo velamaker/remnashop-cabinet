@@ -59,7 +59,8 @@ _BASE_DDL = (
     "  status transaction_status NOT NULL, is_test boolean NOT NULL DEFAULT false,"
     "  purchase_type purchase_type NOT NULL, currency currency NOT NULL, pricing jsonb NOT NULL,"
     "  plan_snapshot jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),"
-    "  updated_at timestamptz NOT NULL)",
+    "  updated_at timestamptz NOT NULL, gateway_display_name varchar(255))",
+    "CREATE TABLE gift_payments (payment_id uuid PRIMARY KEY, user_id integer)",
     "CREATE TABLE plans (id integer PRIMARY KEY, is_active boolean NOT NULL)",
     "CREATE TABLE plan_durations (id serial PRIMARY KEY, plan_id integer NOT NULL, days integer NOT NULL)",
     "CREATE TABLE plan_prices (id serial PRIMARY KEY, plan_duration_id integer NOT NULL,"
@@ -129,14 +130,14 @@ async def person(conn, *, days_left: float = 100, created_ago: float = 20, plan_
 
 
 async def invoice(conn, uid, *, kind, at, final="120", original=None, plan_id=10, duration=30,
-                  status="COMPLETED", is_test=False, currency="RUB", payment_id=None):
+                  status="COMPLETED", is_test=False, currency="RUB", payment_id=None, display=None):
     pid = payment_id or uuid.uuid4()
     await conn.execute(
         "INSERT INTO transactions (payment_id, user_id, status, is_test, purchase_type, currency, pricing, "
-        "plan_snapshot, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        "plan_snapshot, updated_at, gateway_display_name) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         pid, uid, status, is_test, kind, currency,
         json.dumps({"final_amount": final, "original_amount": original or final, "discount_percent": 0}),
-        json.dumps({"id": plan_id, "duration": duration}), at,
+        json.dumps({"id": plan_id, "duration": duration}), at, display,
     )
     return pid
 
@@ -326,6 +327,108 @@ async def test_savepoint_isolates_failed_read_and_keeps_outer_work(db):
     await session.commit()
     assert state.old_plan_id == 10
     assert await db.conn.fetchval("SELECT count(*) FROM plan_change_carryovers") == 0
+
+
+async def _real_prices(conn):
+    await conn.execute("INSERT INTO plans (id, is_active) VALUES (12, true), (16, true)")
+    for plan_id, days, price in ((12, 30, "129"), (12, 365, "1249"), (16, 30, "519"), (16, 365, "5249")):
+        did = await conn.fetchval("INSERT INTO plan_durations (plan_id, days) VALUES ($1, $2) RETURNING id", plan_id, days)
+        await conn.execute("INSERT INTO plan_prices (plan_duration_id, currency, price) VALUES ($1, 'RUB', $2)", did, Decimal(price))
+
+
+async def test_gift_right_after_row_creation_is_not_create_layer(db):
+    """Скептик C: подарок ДРУГОМУ человеку (NEW, настоящий тариф, final > 0) через 3 с после
+    создания строки становился «создающим» слоем — строка стоила бы как подарок, а не как 129 ₽."""
+    await _real_prices(db.conn)
+    uid, sid, created = await person(db.conn, days_left=30, created_ago=0.0001, plan_id=12)
+    change = await invoice(db.conn, uid, kind="CHANGE", at=created - timedelta(seconds=1), final="129", plan_id=12)
+    # Подарок с баланса — по подписи; подарок через шлюз — по gift_payments; тот же тариф.
+    await invoice(db.conn, uid, kind="NEW", at=created + timedelta(seconds=3), final="1249", plan_id=12,
+                  duration=365, display="Баланс · подарок")
+    gift = await invoice(db.conn, uid, kind="NEW", at=created + timedelta(seconds=4), final="1249", plan_id=12, duration=365)
+    await db.conn.execute("INSERT INTO gift_payments (payment_id, user_id) VALUES ($1, $2)", gift, uid)
+    # Чужой тариф в окне — не создающий этой строки.
+    await invoice(db.conn, uid, kind="NEW", at=created + timedelta(seconds=2), final="5249", plan_id=16, duration=365)
+    _row, state = await load(db, uid, extra=[16])
+    assert [(l.kind, l.payment_id) for l in state.layers] == [("create", str(change))]
+
+
+async def test_concurrent_changes_create_layer_comes_from_journal(db):
+    """Скептик D: две смены почти одновременно — окно по времени указало бы на ЧУЖОЙ счёт.
+    Строка, созданная переносом, знает свой счёт по журналу."""
+    await _real_prices(db.conn)
+    T = NOW - timedelta(days=1)
+    uid = await db.conn.fetchval("INSERT INTO users DEFAULT VALUES RETURNING id")
+    r2 = await db.conn.fetchval(
+        "INSERT INTO subscriptions (user_id, status, expire_at, plan_snapshot, created_at) "
+        "VALUES ($1, 'DELETED', $2, $3, $4) RETURNING id",
+        uid, NOW + timedelta(days=500), json.dumps({"id": 16, "duration": 365}), T + timedelta(seconds=0.45))
+    r3 = await db.conn.fetchval(
+        "INSERT INTO subscriptions (user_id, status, expire_at, plan_snapshot, created_at) "
+        "VALUES ($1, 'ACTIVE', $2, $3, $4) RETURNING id",
+        uid, T + timedelta(days=30 + 1220), json.dumps({"id": 12, "duration": 30}), T + timedelta(seconds=0.35))
+    await db.conn.execute("UPDATE users SET current_subscription_id = $1 WHERE id = $2", r3, uid)
+    await invoice(db.conn, uid, kind="CHANGE", at=T + timedelta(seconds=0.40), final="5249", plan_id=12, duration=30)
+    tx_b = await invoice(db.conn, uid, kind="CHANGE", at=T + timedelta(seconds=0.30), final="129", plan_id=12, duration=30)
+    await db.conn.execute(
+        "INSERT INTO plan_change_carryovers (payment_id, source, user_id, old_subscription_id, subscription_id, "
+        "new_plan_id, new_duration, mode, currency, value_amount, new_day_price, bonus_days, expire_after, created_at) "
+        "VALUES ($1, 'purchase', $2, $3, $4, 12, 30, 'carry', 'RUB', 5249, 4.3, 1220, $5, $6)",
+        tx_b, uid, r2, r3, T + timedelta(days=1250), T + timedelta(seconds=0.35))
+    _row, state = await load(db, uid, extra=[16])
+    assert [(l.kind, l.payment_id) for l in state.layers] == [("create", str(tx_b)), ("carry", None)]
+    assert state.layers[0].paid == 129
+
+
+async def test_rerouted_renew_is_create_layer_by_journal(db):
+    """RENEW чужого тарифа, пересчитанный как смена, — создающий слой новой строки по журналу."""
+    uid, sid, created = await person(db.conn, days_left=60, created_ago=1, plan_id=20)
+    renew = await invoice(db.conn, uid, kind="RENEW", at=created - timedelta(minutes=10), final="240", plan_id=20)
+    await db.conn.execute(
+        "INSERT INTO plan_change_carryovers (payment_id, source, user_id, old_subscription_id, subscription_id, "
+        "new_plan_id, new_duration, mode, currency, value_amount, new_day_price, bonus_days, expire_after, created_at) "
+        "VALUES ($1, 'purchase', $2, 1, $3, 20, 30, 'carry', 'RUB', 240, 8, 30, $4, $5)",
+        renew, uid, sid, NOW + timedelta(days=60), created)
+    _row, state = await load(db, uid)
+    assert [(l.kind, l.payment_id) for l in state.layers] == [("create", str(renew)), ("carry", None)]
+
+
+async def test_refunds_of_topups_and_gifts_do_not_disable_carry(db):
+    """Скептик H: возврат пополнения (id −2) и подарка другому — не возврат подписки."""
+    uid, sid, created = await person(db.conn, days_left=100, plan_id=12)
+    await invoice(db.conn, uid, kind="NEW", at=NOW - timedelta(days=10), status="REFUNDED", plan_id=-2, duration=0, final="500")
+    gift = await invoice(db.conn, uid, kind="NEW", at=NOW - timedelta(days=9), status="REFUNDED", plan_id=12, final="129")
+    await db.conn.execute("INSERT INTO gift_payments (payment_id, user_id) VALUES ($1, $2)", gift, uid)
+    _row, state = await load(db, uid)
+    assert state.refund_recent is False
+    await invoice(db.conn, uid, kind="RENEW", at=NOW - timedelta(days=8), status="REFUNDED", plan_id=12, final="129")
+    _row, state = await load(db, uid)
+    assert state.refund_recent is True
+
+
+async def test_lock_wait_is_bounded(db):
+    """Замок строки users под оплатой не ждёт бесконечно: lock_timeout срабатывает."""
+    import asyncio
+
+    uid, sid, created = await person(db.conn, days_left=30)
+    holder = await asyncpg.connect(DSN)
+    try:
+        await holder.execute(f"SET search_path TO {db.schema}")
+        tr = holder.transaction()
+        await tr.start()
+        await holder.execute("SELECT 1 FROM users WHERE id = $1 FOR UPDATE", uid)
+        with pytest.raises(Exception) as err:
+            await asyncio.wait_for(carry.lock_current_subscription(db.session, uid, timeout_ms=300), 5)
+        assert "lock" in str(err.value).lower() and not isinstance(err.value, asyncio.TimeoutError)
+        await tr.rollback()
+    finally:
+        await holder.close()
+    await db.session.rollback()
+    # После отката — обычное ожидание по умолчанию, замок берётся.
+    row = await carry.lock_current_subscription(db.session, uid)
+    assert row.id == sid
+    assert (await db.session.execute(carry.text("SHOW lock_timeout"))).scalar() == "0"
+    await db.session.rollback()
 
 
 async def test_user_fk_is_declared_for_duplicate_merge(db):

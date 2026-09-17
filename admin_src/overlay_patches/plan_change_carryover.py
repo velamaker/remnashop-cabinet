@@ -6,9 +6,16 @@
 человек, перешедший на тариф побольше за неделю после продления, терял месяц.
 
 ЧТО ДЕЛАЕМ. ОБОРАЧИВАЕМ `_execute`, а не копируем: наша ветка — только CHANGE для
-подписки, которая не триал, при включённом выключателе. Всё прочее (NEW, RENEW,
-триал, выключено) уходит в нетронутую базу. В нашей ветке — тот же порядок, что у
-базы, плюс перенос, в одной транзакции:
+подписки, которая не триал, при включённом выключателе. Всё прочее (NEW, триал,
+выключено) уходит в нетронутую базу.
+
+RENEW ЧУЖОГО ТАРИФА. Счёт на продление создан, пока человек был на тарифе A, а оплачен
+после смены на B с переносом. База такой счёт не сверяет: `max(срок, now) + срок A` и
+снимок тарифа A поверх срока, набранного переносом в дни B, — дешёвые дни превращаются
+в дорогие, и цикл повторяем. Поэтому RENEW под замком сверяется с тарифом строки: тот же
+тариф — база, другой — наша ветка, как смена с пересчётом по стоимости.
+
+В нашей ветке — тот же порядок, что у базы, плюс перенос, в одной транзакции:
 
   замок users + свежее чтение строки → запись журнала по счёту уже есть? выход →
   состояние (SAVEPOINT) → расчёт → старая строка DELETED → панель ОДНИМ вызовом
@@ -34,6 +41,7 @@ from __future__ import annotations
 
 # Импорты модульного уровня — урок NameError (overlay-nameerror-class): функции ниже
 # объявлены ЗДЕСЬ и ищут глобали здесь, шапка базового модуля им не видна.
+from dataclasses import replace
 from datetime import timedelta  # noqa: F401 — держим рядом с базой: тело может понадобиться
 from typing import Any, Optional
 
@@ -94,17 +102,53 @@ def PurchaseSubscription_init(
     self.session = session
 
 
-def _wants_carry(self: Any, data: Any) -> bool:
+def _wants_carry(self: Any, data: Any) -> Optional[str]:
+    """Какая ветка нужна: "change" — перенос, "renew" — сверка RENEW под замком, None — база."""
     carry = _carry()
     transaction = getattr(data, "transaction", None)
     subscription = getattr(data, "subscription", None)
     if transaction is None or subscription is None or getattr(self, "session", None) is None:
-        return False
-    if transaction.purchase_type != PurchaseType.CHANGE or subscription.is_trial:
-        return False
+        return None
+    if subscription.is_trial:
+        return None
     if not getattr(data, "user", None) or not getattr(transaction, "plan_snapshot", None):
-        return False
-    return bool(carry.load_config().get("enabled"))
+        return None
+    if transaction.purchase_type not in (PurchaseType.CHANGE, PurchaseType.RENEW):
+        return None
+    if carry.load_config().get("enabled") is not True:
+        return None
+    return "change" if transaction.purchase_type == PurchaseType.CHANGE else "renew"
+
+
+async def renew_with_plan_check(self: Any, actor: UserDto, data: Any, base_execute: Any) -> None:
+    """RENEW под замком: тот же тариф, что у строки, — база; другой — смена с пересчётом."""
+    carry = _carry()
+    user = data.user
+    plan = data.transaction.plan_snapshot
+    async with self.uow:
+        row = await carry.lock_current_subscription(self.session, user.id)
+        other_plan = (
+            row is not None
+            and not row.is_trial
+            and not row.is_unlimited
+            and str(row.status).upper() != "DELETED"
+            and row.plan_id is not None
+            and int(row.plan_id) != int(plan.id)
+        )
+        if not other_plan:
+            if row is not None and row.id != getattr(data.subscription, "id", None):
+                fresh = await self.subscription_dao.get_current(user.id)
+                if fresh is not None and fresh.id == row.id:
+                    data = replace(data, subscription=fresh)
+            setattr(self, OUTCOME_ATTR, None)
+            # Замок держим до коммита базы: соседняя смена тарифа подождёт это продление.
+            await base_execute(self, actor, data)
+            return
+    logger.warning(
+        f"{actor.log} carry: RENEW счёта '{data.transaction.payment_id}' на тариф {plan.id}, "
+        f"а строка уже на тарифе {row.plan_id} — пересчитываю как смену тарифа по стоимости"
+    )
+    await change_with_carryover(self, actor, data, base_execute, rerouted_renew=True)
 
 
 def _currency_code(transaction: Any) -> str:
@@ -130,14 +174,20 @@ def _draft(current: Any, plan: Any, expire_at: Any) -> SubscriptionDto:
     )
 
 
-async def change_with_carryover(self: Any, actor: UserDto, data: Any, base_execute: Any) -> None:
+async def change_with_carryover(
+    self: Any, actor: UserDto, data: Any, base_execute: Any, *, rerouted_renew: bool = False
+) -> None:
     carry = _carry()
     user = data.user
     transaction = data.transaction
     plan = transaction.plan_snapshot
     currency = _currency_code(transaction)
     now = datetime_now()
-    outcome: dict[str, Any] = {"payment_id": transaction.payment_id, "applied": False}
+    outcome: dict[str, Any] = {
+        "payment_id": transaction.payment_id,
+        "applied": False,
+        "rerouted_renew": rerouted_renew,
+    }
     setattr(self, OUTCOME_ATTR, outcome)
 
     logger.info(
@@ -166,8 +216,18 @@ async def change_with_carryover(self: Any, actor: UserDto, data: Any, base_execu
             if fresh is not None and fresh.id == row.id:
                 current = fresh
 
-        # 2. Идемпотентность: перенос по этому счёту уже был.
-        if await carry.carry_already_applied(self.session, transaction.payment_id):
+        # 2. Идемпотентность: перенос по этому счёту уже был. Проверка — в SAVEPOINT:
+        # сбой (например, таблицы журнала ещё нет) не имеет права сорвать ОПЛАЧЕННУЮ
+        # смену. Не проверили — считаем «переноса не было» (CAS базы и так пускает
+        # выдачу по счёту один раз) и говорим владельцу.
+        already = False
+        try:
+            async with self.session.begin_nested():
+                already = await carry.carry_already_applied(self.session, transaction.payment_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"{actor.log} carry: проверка журнала по счёту не удалась ({exc}) — продолжаю")
+            outcome["idempotency_error"] = f"{type(exc).__name__}: {exc}"
+        if already:
             logger.warning(
                 f"{actor.log} carry: по счёту '{transaction.payment_id}' перенос уже записан — выхожу"
             )
@@ -175,7 +235,7 @@ async def change_with_carryover(self: Any, actor: UserDto, data: Any, base_execu
             await self.session.rollback()
             return
 
-        # 3. Состояние и расчёт. Сбой загрузки не срывает оплаченную выдачу.
+        # 3. Состояние и расчёт. Сбой загрузки или расчёта не срывает оплаченную выдачу.
         state = None
         try:
             async with self.session.begin_nested():
@@ -191,20 +251,28 @@ async def change_with_carryover(self: Any, actor: UserDto, data: Any, base_execu
             logger.exception(f"{actor.log} carry: состояние не загрузилось — выдаю без переноса")
             outcome["load_error"] = f"{type(exc).__name__}: {exc}"
 
+        result = None
         if state is not None:
-            new_list = carry.new_day_amount(
-                transaction.pricing, plan.id, plan.duration, currency, state.prices
+            try:
+                new_list = carry.new_day_amount(
+                    transaction.pricing, plan.id, plan.duration, currency, state.prices
+                )
+                result = carry.compute_carryover(
+                    state,
+                    new_plan_id=plan.id,
+                    new_duration=plan.duration,
+                    new_list_amount=new_list,
+                    currency=currency,
+                    now=now,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(f"{actor.log} carry: расчёт переноса упал — выдаю без переноса")
+                outcome["load_error"] = f"{type(exc).__name__}: {exc}"
+        if result is None:
+            frozen, reserve = await _pause_and_reserve(carry, self.session, user.id, state)
+            result = carry.failed_result(
+                row.expire_at, now, frozen_seconds=frozen, reserve_expire_at=reserve
             )
-            result = carry.compute_carryover(
-                state,
-                new_plan_id=plan.id,
-                new_duration=plan.duration,
-                new_list_amount=new_list,
-                currency=currency,
-                now=now,
-            )
-        else:
-            result = carry.failed_result(row.expire_at, now)
 
         # 4. Старая строка — DELETED (как база).
         await self.subscription_dao.update_status(
@@ -281,6 +349,21 @@ async def change_with_carryover(self: Any, actor: UserDto, data: Any, base_execu
     )
 
 
+async def _pause_and_reserve(carry: Any, session: Any, user_id: int, state: Any) -> tuple[Any, Any]:
+    """Пауза и резерв для остатка в алерте о сбое. Берём из состояния или читаем отдельно."""
+    if state is not None:
+        return state.frozen_seconds, state.reserve_expire_at
+    frozen = reserve = None
+    try:
+        async with session.begin_nested():
+            row = (await session.execute(carry.text(carry.FREEZE_SQL), {"uid": user_id})).first()
+            frozen = int(row[0]) if row and row[0] is not None else None
+            reserve = (await session.execute(carry.text(carry.RESERVE_SQL), {"uid": user_id})).scalar()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"carry: пауза и резерв для алерта не прочитаны ({exc})")
+    return frozen, reserve
+
+
 def apply() -> str:
     import src.application.use_cases.subscription.commands.purchase as target
 
@@ -298,17 +381,20 @@ def apply() -> str:
     base_execute = cls._execute
 
     async def PurchaseSubscription_execute(self, actor: UserDto, data: Any) -> None:
-        if not _wants_carry(self, data):
+        branch = _wants_carry(self, data)
+        if branch == "change":
+            await change_with_carryover(self, actor, data, base_execute)
+        elif branch == "renew":
+            await renew_with_plan_check(self, actor, data, base_execute)
+        else:
             setattr(self, OUTCOME_ATTR, None)
             await base_execute(self, actor, data)
-            return
-        await change_with_carryover(self, actor, data, base_execute)
 
     PurchaseSubscription_execute._overlay_wrapped = True  # type: ignore[attr-defined]
     PurchaseSubscription_init._overlay_wrapped = True  # type: ignore[attr-defined]
     cls.__init__ = PurchaseSubscription_init
     cls._execute = PurchaseSubscription_execute
-    return "смена тарифа пересчитывает остаток по цене дня (CHANGE не-триала)"
+    return "смена тарифа пересчитывает остаток по цене дня (CHANGE не-триала, RENEW чужого тарифа)"
 
 
 def outcome_for(purchase_subscription: Any, payment_id: Any) -> Optional[dict]:

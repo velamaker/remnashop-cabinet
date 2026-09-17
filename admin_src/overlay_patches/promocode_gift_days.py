@@ -13,7 +13,7 @@
 
 Цена дня подарка — витринная цена его срока в валюте по умолчанию (точного срока нет —
 самая высокая цена дня тарифа). Перенести нельзя (бессрочная, возврат, тарифа нет в
-таблице цен, выключатель `assets/plan_change.json`) — «замена», как раньше: в боте
+таблице цен, выключатель `promo_enabled` в `assets/plan_change.json`) — «замена», как раньше: в боте
 человека предупреждают и просят подтвердить дважды, веб такой подарок не активирует.
 
 Запись журнала переноса пишется в ТОЙ ЖЕ сессии без commit: её закоммитит `_execute`
@@ -94,7 +94,8 @@ async def plan_promo_carry(self: Any, user: Any, subscription: Any, plan: Any, n
     """Расчёт переноса для подарка другого тарифа. None — «замена», как раньше."""
     carry = _carry()
     session = getattr(self, "session", None)
-    if session is None or not carry.load_config().get("enabled"):
+    # Подарки включаются отдельно от смены тарифа за деньги (`promo_enabled`).
+    if session is None or carry.load_config().get("promo_enabled") is not True:
         return None
     try:
         async with session.begin_nested():

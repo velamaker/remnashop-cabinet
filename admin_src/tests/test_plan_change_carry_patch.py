@@ -14,7 +14,10 @@
   * упала панель — исключение наружу, commit и журнала нет;
   * упал журнал или загрузка состояния — выдача всё равно закоммичена, итог с ошибкой
     лежит для отчёта владельцу;
-  * пауза гасится до commit; NEW / RENEW / триал / выключатель — нетронутая база;
+  * пауза гасится до commit; NEW / RENEW своего тарифа / триал / выключатель — база;
+  * RENEW ЧУЖОГО тарифа (счёт создан до смены, оплачен после) — не база: смена с
+    пересчётом по стоимости, иначе дни дешёвого тарифа стали бы днями дорогого;
+  * сбой проверки журнала или расчёта не срывает оплаченную смену;
   * отчёт владельцу и алерт возврата (обёртка ProcessPayment).
 
 Подделки ведут общий журнал вызовов — порядок проверяется по нему. Запуск — внутри
@@ -73,6 +76,9 @@ class FakeResult:
     def first(self) -> Optional[tuple]:
         return self.row
 
+    def scalar(self) -> Any:
+        return self.row[0] if self.row else None
+
 
 class FakeNested:
     def __init__(self, log: Log) -> None:
@@ -88,9 +94,10 @@ class FakeNested:
 
 
 class FakeSession:
-    def __init__(self, log: Log, row: tuple) -> None:
+    def __init__(self, log: Log, row: tuple, frozen_seconds: Optional[int] = None) -> None:
         self.log = log
         self.row = row
+        self.frozen_seconds = frozen_seconds
 
     async def execute(self, stmt: Any, params: Any = None) -> FakeResult:
         sql = str(stmt)
@@ -98,6 +105,8 @@ class FakeSession:
             self.log.append(("lock", dict(params)))
             return FakeResult(self.row)
         self.log.append(("sql", sql))
+        if "FROM subscription_freezes" in sql and self.frozen_seconds is not None:
+            return FakeResult((self.frozen_seconds,))
         return FakeResult(None)
 
     def begin_nested(self) -> FakeNested:
@@ -200,6 +209,8 @@ class World:
     purchase_type: Any = PurchaseType.CHANGE
     panel_fails: bool = False
     discount: int = 20
+    tx_plan_id: int = NEW_PLAN
+    row_frozen_seconds: Optional[int] = None
 
     def build(self):
         remna = uuid.UUID("00000000-0000-0000-0000-00000000abcd")
@@ -211,7 +222,7 @@ class World:
             expire_at=expire_dto, plan_snapshot=SimpleNamespace(id=OLD_PLAN, name="OLD"),
             status=SubscriptionStatus.ACTIVE,
         )
-        self.session = FakeSession(self.log, row)
+        self.session = FakeSession(self.log, row, self.row_frozen_seconds)
         self.sub_dao = FakeSubscriptionDao(self.log, current)
         self.interactor = purchase.PurchaseSubscription(
             FakeUow(self.log), FakeUserDao(self.log), self.sub_dao, FakeRemnawave(self.log, self.panel_fails),
@@ -219,7 +230,8 @@ class World:
         )
         self.user = SimpleNamespace(id=42, remna_name="rs_42", purchase_discount=self.discount, log="[USER:42]")
         self.transaction = SimpleNamespace(
-            id=1, payment_id=uuid.uuid4(), purchase_type=self.purchase_type, plan_snapshot=plan_snapshot(),
+            id=1, payment_id=uuid.uuid4(), purchase_type=self.purchase_type,
+            plan_snapshot=plan_snapshot(self.tx_plan_id),
             pricing=SimpleNamespace(original_amount=Decimal("240"), discount_percent=20, final_amount=Decimal("192")),
             currency=Currency.RUB,
         )
@@ -289,8 +301,12 @@ async def test_change_single_panel_call_with_bonus_and_one_commit(spies):
     await execute(world)
     log = world.log
 
-    # Замок раньше любого ORM-чтения; состояние — от строки из-под замка.
+    # Замок раньше любого ORM-чтения; состояние — от строки из-под замка. Ожидание
+    # замка ограничено lock_timeout только на этот запрос.
     assert log.index_of("lock") < log.index_of("load_state")
+    sqls = [d for n, d in log if n == "sql"]
+    assert any("SET LOCAL lock_timeout = '30000ms'" in q for q in sqls)
+    assert any("SET LOCAL lock_timeout TO DEFAULT" in q for q in sqls)
     assert "get_current" not in log.names()
     assert spies["load"][0]["exclude"] == world.transaction.payment_id
     assert NEW_PLAN in spies["load"][0]["ids"]
@@ -342,7 +358,6 @@ async def test_pause_is_closed_before_commit(spies):
     "world_kwargs, marker",
     [
         ({"trial": True}, "update_user"),
-        ({"purchase_type": PurchaseType.RENEW}, "sub_update"),
         ({"purchase_type": PurchaseType.NEW}, "create_user"),
     ],
 )
@@ -356,6 +371,86 @@ async def test_trial_new_renew_go_to_untouched_base(spies, world_kwargs, marker)
     assert marker in names
     if world_kwargs.get("trial"):
         assert call(world.log, "update_user")["plan"] is not None, "триал — ветка базы с plan="
+
+
+async def test_renew_of_same_plan_is_base_under_lock(spies):
+    world = World(purchase_type=PurchaseType.RENEW, tx_plan_id=OLD_PLAN).build()
+    await execute(world)
+    names = world.log.names()
+    assert names.index("lock") < names.index("sub_update"), "база продлевает под нашим замком"
+    assert "load_state" not in names and "record" not in names and "update_status" not in names
+    assert patch_mod.outcome_for(world.interactor, world.transaction.payment_id) is None
+
+
+async def test_renew_of_other_plan_after_change_is_converted_by_value(spies):
+    """BLOCKER скептика: счёт RENEW дорогого тарифа создан ДО смены на дешёвый, оплачен ПОСЛЕ.
+
+    База поставила бы снимок дорогого тарифа поверх срока, набранного переносом в дни
+    дешёвого (дни дешёвого → дни дорогого, цикл повторяем). Теперь это смена с пересчётом
+    по стоимости: 29 дн. по 4/день = 116 → тариф счёта 240/30 = 8/день → +14 дн.
+    """
+    world = World(purchase_type=PurchaseType.RENEW, tx_plan_id=NEW_PLAN).build()
+    await execute(world)
+    names = world.log.names()
+    assert "sub_update" not in names, "базовое продление не выполнялось"
+    panel = call(world.log, "update_user")
+    assert panel["plan"] is None
+    assert panel["subscription"].expire_at == NOW + timedelta(days=30 + 14)
+    assert panel["subscription"].plan_snapshot.id == NEW_PLAN
+    assert call(world.log, "update_status") == (5, SubscriptionStatus.DELETED)
+    assert spies["record"][0]["payment_id"] == world.transaction.payment_id
+    assert spies["load"][0]["exclude"] == world.transaction.payment_id, "счёт RENEW не слой старой строки"
+    outcome = patch_mod.outcome_for(world.interactor, world.transaction.payment_id)
+    assert outcome["applied"] and outcome["rerouted_renew"] is True
+
+
+async def test_renew_other_plan_on_trial_or_switch_off_is_base(spies, monkeypatch):
+    world = World(purchase_type=PurchaseType.RENEW, tx_plan_id=NEW_PLAN, trial=True).build()
+    await execute(world)
+    assert "load_state" not in world.log.names()
+    monkeypatch.setattr(carry, "load_config", lambda: {"enabled": False, "notify_admins": True})
+    world = World(purchase_type=PurchaseType.RENEW, tx_plan_id=NEW_PLAN).build()
+    await execute(world)
+    names = world.log.names()
+    assert "lock" not in names and "sub_update" in names
+
+
+async def test_idempotency_check_failure_does_not_fail_paid_change(spies, monkeypatch):
+    """Скептик: таблицы журнала нет — проверка «уже переносили?» падает. Смена оплачена:
+    выдаём, коммитим, флаг для алерта владельцу."""
+    async def boom(session, payment_id):
+        raise RuntimeError('relation "plan_change_carryovers" does not exist')
+
+    monkeypatch.setattr(carry, "carry_already_applied", boom)
+    world = World().build()
+    await execute(world)
+    names = world.log.names()
+    assert "update_user" in names and "commit" in names
+    assert "savepoint_rollback" in names
+    outcome = patch_mod.outcome_for(world.interactor, world.transaction.payment_id)
+    assert "plan_change_carryovers" in outcome["idempotency_error"]
+
+
+async def test_compute_failure_grants_base_term(spies, monkeypatch):
+    def broken(*args, **kwargs):
+        raise ZeroDivisionError("bad price")
+
+    monkeypatch.setattr(carry, "compute_carryover", broken)
+    world = World(days_left=29).build()
+    await execute(world)
+    assert call(world.log, "update_user")["subscription"].expire_at == NOW + timedelta(days=30)
+    assert "commit" in world.log.names()
+    outcome = patch_mod.outcome_for(world.interactor, world.transaction.payment_id)
+    assert outcome["result"].mode == "failed" and "bad price" in outcome["load_error"]
+
+
+async def test_state_failure_reports_paused_remainder(spies):
+    """Состояние не загрузилось, но пауза читается отдельно: алерт называет её остаток."""
+    spies["load_raises"] = RuntimeError("timeout")
+    world = World(days_left=-3, row_frozen_seconds=17 * DAY).build()
+    await execute(world)
+    outcome = patch_mod.outcome_for(world.interactor, world.transaction.payment_id)
+    assert outcome["result"].mode == "failed" and outcome["result"].remaining_days == 17
 
 
 async def test_switch_off_returns_base_behaviour(spies, monkeypatch):
@@ -479,7 +574,8 @@ def result(**over: Any) -> Any:
     return carry.CarryResult(**base)
 
 
-async def after_change(monkeypatch, outcome: Optional[dict], *, notify=True, enabled=True):
+async def after_change(monkeypatch, outcome: Optional[dict], *, notify=True, enabled=True,
+                       purchase_type=PurchaseType.CHANGE, days_before: float = 29):
     monkeypatch.setattr(carry, "load_config", lambda: {"enabled": enabled, "notify_admins": notify})
     pid = uuid.uuid4()
     purchase_subscription = SimpleNamespace()
@@ -487,9 +583,9 @@ async def after_change(monkeypatch, outcome: Optional[dict], *, notify=True, ena
         outcome = {"payment_id": pid, **outcome}
     setattr(purchase_subscription, patch_mod.OUTCOME_ATTR, outcome)
     harness = SimpleNamespace(purchase_subscription=purchase_subscription, notifier=FakeNotifier())
-    before = SimpleNamespace(is_trial=False, expire_at=NOW + timedelta(days=29), is_unlimited=False,
-                             plan_snapshot=SimpleNamespace(name="OLD"))
-    transaction = SimpleNamespace(payment_id=pid, plan_snapshot=plan_snapshot())
+    before = SimpleNamespace(is_trial=False, expire_at=datetime.now(timezone.utc) + timedelta(days=days_before),
+                             is_unlimited=False, plan_snapshot=SimpleNamespace(name="OLD"))
+    transaction = SimpleNamespace(payment_id=pid, plan_snapshot=plan_snapshot(), purchase_type=purchase_type)
     user = SimpleNamespace(log="[USER:42]")
     await gateway_mod._after_change(harness, user, transaction, before)
     return harness.notifier
@@ -516,6 +612,57 @@ async def test_process_without_patch_alerts_owner(monkeypatch):
     texts = raw_texts(await after_change(monkeypatch, None))
     assert len(texts) == 1 and "не применился" in texts[0]
     assert raw_texts(await after_change(monkeypatch, None, enabled=False)) == []
+
+
+async def test_routine_zero_change_is_not_reported(monkeypatch):
+    """Смена истёкшей подписки «+0 дн.» — рутина, владельцу не пишем."""
+    zero = result(mode="none", remaining_seconds=0, remaining_days=0, value=Fraction(0), new_day_price=None,
+                  bonus_days=0)
+    assert raw_texts(await after_change(monkeypatch, {"applied": True, "result": zero})) == []
+    small = result(bonus_days=0)
+    assert raw_texts(await after_change(monkeypatch, {"applied": True, "result": small})) == []
+    lost = result(bonus_days=0, lost_days=5, lost_reason="old_price")
+    texts = raw_texts(await after_change(monkeypatch, {"applied": True, "result": lost}))
+    assert len(texts) == 1 and "цена старых дней неизвестна" in texts[0]
+    cap = result(bonus_days=3650, lost_days=964, capped=True, lost_reason="cap")
+    assert "предел переноса" in raw_texts(await after_change(monkeypatch, {"applied": True, "result": cap}))[0]
+
+
+async def test_not_applied_alert_only_when_days_burn_and_only_for_change(monkeypatch):
+    assert raw_texts(await after_change(monkeypatch, None, days_before=-2)) == []
+    assert raw_texts(await after_change(monkeypatch, None, purchase_type=PurchaseType.RENEW)) == []
+    assert len(raw_texts(await after_change(monkeypatch, None))) == 1
+
+
+async def test_idempotency_error_is_reported(monkeypatch):
+    texts = raw_texts(
+        await after_change(monkeypatch, {"applied": True, "result": result(), "idempotency_error": "no table"})
+    )
+    assert len(texts) == 1 and "no table" in texts[0]
+
+
+def test_owner_report_goes_after_purchase_event():
+    """Отчёт — после выдачи и события покупки, не перед ними."""
+    import ast
+    import inspect
+    import textwrap
+
+    source = textwrap.dedent(inspect.getsource(gateway_mod.apply))
+    tree = ast.parse(source)
+    handler = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "ProcessPayment_handle_success")
+    body = ast.get_source_segment(source, handler)
+    assert body.index("self.event_publisher.publish(event)") < body.index("_after_change(")
+
+
+def test_gateway_does_not_import_purchase_patch_at_module_level():
+    """Импорт правки покупки из правки шлюза — только ленивый, внутри функции."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(gateway_mod))
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            assert "plan_change_carryover" not in (node.module or ""), "модульный импорт plan_change_carryover"
 
 
 async def test_journal_failure_is_reported(monkeypatch):

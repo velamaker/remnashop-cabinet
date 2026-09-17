@@ -397,7 +397,9 @@ CASES: list[Case] = [
                 "lost_days": F("int"),
                 "capped": F("bool", req=False),
                 "extras_lost": F("int", req=False),
+                "lost_reason": F("str", req=False, null=True),
             }),
+            "plan_change_carry_active": F("bool", req=False, null=True),
         },
     ),
     Case(

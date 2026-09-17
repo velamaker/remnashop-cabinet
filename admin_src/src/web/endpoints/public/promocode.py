@@ -13,6 +13,7 @@
 дня. Где целиком перенести нельзя (бессрочная, возврат, дни без известной цены), здесь
 подтверждения нет — поэтому отказ 409 с причиной, а не молчаливое сгорание дней
 (overlay_plan_change.promo_web_refusal; в боте такой подарок подтверждают дважды).
+Отказ — только для ДЕЙСТВИТЕЛЬНОГО кода; сбой проверки — 503, а не 409 про замену.
 """
 
 from typing import Any
@@ -23,11 +24,12 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.application.common.dao import PromocodeDao, SubscriptionDao
+from src.application.common.dao import SubscriptionDao
 from src.application.use_cases.promocode.commands.activate import (
     ActivatePromocode,
     ActivatePromocodeDto,
 )
+from src.application.use_cases.promocode.queries.validate import ValidatePromocode
 from src.core.exceptions import (
     PromocodeAlreadyActivatedError,
     PromocodeExpiredError,
@@ -72,7 +74,7 @@ async def activate_promocode_endpoint(
     activate_promocode: FromDishka[ActivatePromocode],
     session: FromDishka[AsyncSession],
     subscription_dao: FromDishka[SubscriptionDao],
-    promocode_dao: FromDishka[PromocodeDao],
+    validate_promocode: FromDishka[ValidatePromocode],
 ) -> dict[str, Any]:
     code = body.code.strip()
     if not code:
@@ -81,11 +83,11 @@ async def activate_promocode_endpoint(
         )
 
     refusal = await promo_web_refusal(
-        session, user=user, code=code, subscription_dao=subscription_dao,
-        promocode_dao=promocode_dao, now=datetime_now(),
+        session, user=user, code=code, validate_promocode=validate_promocode,
+        subscription_dao=subscription_dao, now=datetime_now(),
     )
     if refusal:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=refusal)
+        raise HTTPException(status_code=refusal[0], detail=refusal[1])
 
     try:
         promo = await activate_promocode(

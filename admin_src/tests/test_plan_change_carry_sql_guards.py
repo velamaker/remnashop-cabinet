@@ -35,26 +35,40 @@ def norm(sql: str) -> str:
         (
             "LAYERS_SQL",
             [
-                "status = 'COMPLETED'",
-                "is_test = false",
-                "(pricing->>'final_amount')::numeric > 0",
-                "(plan_snapshot->>'id')::int > 0",
-                "(plan_snapshot->>'duration')::int > 0",
-                "payment_id <> CAST(:exclude AS uuid)",
-                "purchase_type = 'RENEW' AND updated_at > CAST(:cut AS timestamptz)",
-                "CAST(:with_create AS boolean) AND purchase_type IN ('NEW', 'CHANGE')",
+                "t.status = 'COMPLETED'",
+                "t.is_test = false",
+                "(t.pricing->>'final_amount')::numeric > 0",
+                "(t.plan_snapshot->>'id')::int > 0",
+                "(t.plan_snapshot->>'duration')::int > 0",
+                "t.payment_id <> CAST(:exclude AS uuid)",
+                "NOT EXISTS (SELECT 1 FROM gift_payments gp WHERE gp.payment_id = t.payment_id)",
+                "COALESCE(t.gateway_display_name, '') <> 'Баланс · подарок'",
+                "t.purchase_type = 'RENEW' AND t.updated_at > CAST(:cut AS timestamptz)",
+                "OR t.payment_id = CAST(:create_pid AS uuid)",
+                "CAST(:with_window AS boolean) AND t.purchase_type IN ('NEW', 'CHANGE')",
+                "(t.plan_snapshot->>'id')::int = CAST(:row_plan_id AS integer)",
                 "CAST(:row_created AS timestamptz) - interval '120 seconds'",
                 "CAST(:row_created AS timestamptz) + interval '5 seconds'",
-                "WHERE user_id = :uid",
-                "ORDER BY updated_at DESC",
+                "WHERE t.user_id = :uid",
+                "ORDER BY t.updated_at DESC",
             ],
         ),
         ("RESERVE_SQL", ["ended = false", "reserve_expire_at > now()", "user_id = :uid"]),
-        ("REFUND_SQL", ["status = 'REFUNDED'", "interval '365 days'", "user_id = :uid", "is_test = false"]),
+        (
+            "REFUND_SQL",
+            [
+                "t.status = 'REFUNDED'",
+                "interval '365 days'",
+                "t.user_id = :uid",
+                "t.is_test = false",
+                "(t.plan_snapshot->>'id')::int > 0",
+                "NOT EXISTS (SELECT 1 FROM gift_payments gp WHERE gp.payment_id = t.payment_id)",
+            ],
+        ),
         ("FREEZE_SQL", ["user_id = :uid AND active = true"]),
         ("CLOSE_FREEZE_SQL", ["SET active = false", "WHERE user_id = :uid AND active = true"]),
         ("LOCK_CURRENT_SQL", ["JOIN subscriptions s ON s.id = u.current_subscription_id", "WHERE u.id = :uid", "FOR UPDATE OF u"]),
-        ("LAST_CARRY_SQL", ["WHERE subscription_id = :sid", "ORDER BY created_at DESC"]),
+        ("LAST_CARRY_SQL", ["WHERE subscription_id = :sid", "ORDER BY created_at DESC", "payment_id::text"]),
         ("PRICES_SQL", ["d.plan_id = ANY(CAST(:ids AS integer[]))", "pl.is_active"]),
         ("INSERT_CARRY_SQL", ["ON CONFLICT (payment_id) DO NOTHING"]),
         ("CARRY_APPLIED_SQL", ["WHERE payment_id = CAST(:pid AS uuid)"]),
@@ -80,3 +94,24 @@ def test_renew_cut_is_strict():
     sql = norm(carry.LAYERS_SQL)
     assert "updated_at >= CAST(:cut" not in sql
     assert ":cut AS timestamptz) - interval" not in sql
+
+
+def test_lock_waits_are_bounded():
+    """Замок строки users ждёт не дольше lock_timeout — и только на этом запросе."""
+    import inspect
+
+    src = norm(inspect.getsource(carry.lock_current_subscription))
+    assert "SET LOCAL lock_timeout = '{int(timeout_ms)}ms'" in src
+    assert "SET LOCAL lock_timeout TO DEFAULT" in src
+    assert src.index("SET LOCAL lock_timeout =") < src.index("LOCK_CURRENT_SQL") < src.index("TO DEFAULT")
+
+
+def test_reserve_is_not_granted_over_active_pause():
+    """Резерв поверх паузы сдвигал срок строки на окно и прятал оплаченный остаток паузы."""
+    import importlib.util
+    import pathlib
+
+    origin = importlib.util.find_spec("src.infrastructure.taskiq.tasks.reserve").origin
+    src = pathlib.Path(origin).read_text("utf-8")
+    assert "SELECT 1 FROM subscription_freezes f " in src
+    assert "WHERE f.user_id = u.id AND f.active = true" in src

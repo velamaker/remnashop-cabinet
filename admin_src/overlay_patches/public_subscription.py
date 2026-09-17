@@ -34,7 +34,6 @@ from src.application.common import Remnawave
 from src.application.common.dao import (
     PaymentGatewayDao,
     PlanDao,
-    PromocodeDao,
     SubscriptionDao,
     TransactionDao,
 )
@@ -52,6 +51,7 @@ from src.application.use_cases.promocode.commands.activate import (
     ActivatePromocode,
     ActivatePromocodeDto,
 )
+from src.application.use_cases.promocode.queries.validate import ValidatePromocode
 from src.application.use_cases.remnawave.commands.management import (
     DeleteUserAllDevices,
     DeleteUserDevice,
@@ -125,6 +125,8 @@ class PlanChangeCarryEntry(BaseModel):
     1:1), `unpriced` (у срока нет цены — перенести нельзя), `none` (новый тариф
     бессрочный — переносить нечего). `lost_days` уже включает упор в технический
     предел (`capped`). `extras_lost` — докупки, чья стоимость не перенесётся.
+    `lost_reason` — почему часть дней не перенесётся: `cap` (упор в предел),
+    `old_price` (цена старых дней неизвестна), `new_price` (у срока нет цены).
     """
 
     plan_code: str
@@ -135,6 +137,7 @@ class PlanChangeCarryEntry(BaseModel):
     lost_days: int
     capped: bool = False
     extras_lost: int = 0
+    lost_reason: Optional[str] = None
 
 
 class SubscriptionOffersOverlayResponse(SubscriptionOffersResponse):
@@ -146,9 +149,15 @@ class SubscriptionOffersOverlayResponse(SubscriptionOffersResponse):
     `plan_change_carry`, посчитанную той же чистой функцией, что и зачисление.
     Сервер всё равно пересчитает в момент оплаты — таблица только для показа.
 
-    `plan_change_keeps_days` — перенос ДЕЙСТВИТЕЛЬНО случится: правка покупки встала в
-    этом процессе и выключатель `assets/plan_change.json` включён. Иначе false, и
-    кабинет по-старому предупреждает, что остаток сгорит (честная сторона).
+    `plan_change_carry_active` — перенос ДЕЙСТВИТЕЛЬНО случится: правка покупки встала
+    в этом процессе и выключатель `assets/plan_change.json` включён. Новый кабинет
+    читает таблицу только при нём.
+
+    `plan_change_keeps_days` — флаг для СТАРЫХ сборок кабинета (кэш вкладки, отдельный
+    сайт), которые таблицу не знают: при true они не предупреждают вовсе. Поэтому он
+    true, только когда перенос включён и НИЧЕГО не пропадает — у бессрочной, при
+    возврате, при любой потере дней хоть на одной цели он false, и старая сборка
+    предупреждает по-старому (честная сторона).
 
     Поля необязательные: старые клиенты их не замечают, а кабинет без флага
     `plan_change_keeps_days` (чужой бэкенд, старая сборка) не предупреждает и не
@@ -169,6 +178,8 @@ class SubscriptionOffersOverlayResponse(SubscriptionOffersResponse):
     carry_mode: Optional[str] = None
     # Записи только при carry_mode = carry и только для тарифов со сменой (CHANGE).
     plan_change_carry: Optional[list[PlanChangeCarryEntry]] = None
+    # Перенос включён и состояние загружено — новый кабинет берёт условия из таблицы.
+    plan_change_carry_active: Optional[bool] = None
 
 
 def plan_change_terms(
@@ -406,21 +417,23 @@ async def activate_promocode_web(
     activate_promocode: FromDishka[ActivatePromocode],
     session: FromDishka[AsyncSession],
     subscription_dao: FromDishka[SubscriptionDao],
-    promocode_dao: FromDishka[PromocodeDao],
+    validate_promocode: FromDishka[ValidatePromocode],
 ) -> PromocodeActivateResponse:
     _assert_web_purchase_email_verified(user)
+    code = (body.code or "").strip()
     # Подарок другого тарифа, при котором пропадут дни, веб не активирует (подтверждения
-    # тут нет) — см. overlay_plan_change.promo_web_refusal.
+    # тут нет) — см. overlay_plan_change.promo_web_refusal. Недействительный код —
+    # обычная ошибка активации ниже, а не «подарок заменит тариф».
     from src.infrastructure.services import overlay_plan_change as carry
 
     refusal = await carry.promo_web_refusal(
-        session, user=user, code=body.code, subscription_dao=subscription_dao,
-        promocode_dao=promocode_dao, now=datetime_now(),
+        session, user=user, code=code, validate_promocode=validate_promocode,
+        subscription_dao=subscription_dao, now=datetime_now(),
     )
     if refusal:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=refusal)
+        raise HTTPException(status_code=refusal[0], detail=refusal[1])
     try:
-        promo = await activate_promocode(user, ActivatePromocodeDto(code=body.code, user=user))
+        promo = await activate_promocode(user, ActivatePromocodeDto(code=code, user=user))
     except PromocodeNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     except (
@@ -717,6 +730,7 @@ async def pay_with_balance(
         )
     await session.commit()
 
+    transaction: Optional[TransactionDto] = None
     try:
         transaction = TransactionDto(
             payment_id=uuid.uuid4(),
@@ -748,14 +762,23 @@ async def pay_with_balance(
         # после смены бывает с более ранним сроком (см. was_change_granted).
         from src.infrastructure.services.overlay_balance import (
             _alert_admins_balance,
-            was_change_granted,
+            was_balance_purchase_granted,
         )
 
         try:
             await session.rollback()
         except Exception:  # noqa: BLE001
             pass
-        granted = await was_change_granted(subscription_dao, user.id, current)
+        # Выдано — только если счёт COMPLETED и выдача не упала (PurchaseError), и уже
+        # затем — подписка действительно изменилась.
+        granted = await was_balance_purchase_granted(
+            error=e,
+            session=session,
+            payment_id=transaction.payment_id if transaction is not None else None,
+            subscription_dao=subscription_dao,
+            user_id=user.id,
+            before=current,
+        )
         if granted:
             logger.error(
                 f"pay_with_balance: user_id={user.id} — покупка {purchase_type.value} ВЫДАНА, "
@@ -981,6 +1004,16 @@ def carry_entry(plan_code: str, duration_days: int, currency: str, result) -> Op
         lost_days=int(result.lost_days),
         capped=bool(result.capped),
         extras_lost=int(result.extras_lost),
+        lost_reason=result.lost_reason,
+    )
+
+
+def legacy_keeps_days(carry_mode: Optional[str], entries: list[PlanChangeCarryEntry]) -> bool:
+    """`plan_change_keeps_days` для старых сборок: true, только если ничего не пропадёт."""
+    if carry_mode in ("lifetime", "refund"):
+        return False
+    return not any(
+        e.lost_days > 0 or e.mode == "unpriced" or e.capped or e.extras_lost > 0 for e in entries
     )
 
 
@@ -1004,7 +1037,7 @@ async def _carry_terms(
         return False, {}
     if current_subscription.is_trial:
         # Пробник заменяется по правилам базы и не переносится.
-        return True, {"carry_mode": "none"}
+        return True, {"carry_mode": "none", "plan_change_carry_active": True}
 
     now = datetime_now()
     try:
@@ -1050,7 +1083,8 @@ async def _carry_terms(
                     if entry is not None:
                         entries.append(entry)
     fields["plan_change_carry"] = entries
-    return True, fields
+    fields["plan_change_carry_active"] = True
+    return legacy_keeps_days(mode, entries), fields
 
 
 def apply() -> str:

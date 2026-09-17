@@ -3,10 +3,12 @@
 ЧТО ДЕЛАЕМ. Окно подтверждения покупки писало «заменена … без пересчета оставшегося
 срока». С переносом остатка (plan_change_carryover.py) это неправда. Переводы правятся
 в памяти (translations_ru.py): вариант `[CHANGE]` выбирает текст по `$carry_state`
-(CARRY | SMALL | LOST | LIFETIME | NONE | OFF), а числа кладут сюда обёртки геттеров:
+(CARRY | SMALL | LOST | CAPPED | NOPRICE | LIFETIME | NONE | OFF), а числа кладут сюда
+обёртки геттеров:
 
   * `confirm_getter` — предпросмотр той же чистой функцией, что посчитает зачисление;
-  * `success_payment_getter` — сколько дней реально добавлено (из журнала переноса).
+  * `success_payment_getter` — сколько дней реально добавлено (из журнала переноса):
+    `carry_added` = YES/NO и `carry_days`. Строка итога печатается только при явном YES.
 
 ПОЧЕМУ ОБОРАЧИВАЕМ, А НЕ КОПИРУЕМ. Геттеры базы отдают свои данные как есть; мы только
 дописываем ключи. Сверять хэш нечего — копии нет. Любая ошибка расчёта → OFF («без
@@ -72,8 +74,10 @@ def vars_for_result(result: Any) -> dict[str, Any]:
     if mode in ("refund", "failed"):
         return _state("OFF")
     if mode == "unpriced":
-        return _state("LOST", result)
-    if result.lost_days > 0 or result.capped:
+        return _state("NOPRICE", result)
+    if result.capped or result.lost_reason == "cap":
+        return _state("CAPPED", result)
+    if result.lost_days > 0:
         return _state("LOST", result)
     if mode == "carry" and result.bonus_days == 0:
         return _state("SMALL", result)
@@ -188,12 +192,14 @@ async def success_payment_getter(
     **kwargs: Any,
 ) -> dict[str, Any]:
     data = await _BASE["success_payment_getter"](**kwargs)
-    data["carry_days"] = await carry_days_after(
+    days = await carry_days_after(
         session=session,
         subscription_dao=subscription_dao,
         dialog_manager=kwargs.get("dialog_manager"),
         user=kwargs.get("user"),
     )
+    data["carry_days"] = days
+    data["carry_added"] = "YES" if days > 0 else "NO"
     return data
 
 

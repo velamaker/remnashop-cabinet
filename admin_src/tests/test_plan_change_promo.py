@@ -169,7 +169,7 @@ def world(monkeypatch):
     monkeypatch.setattr(carry, "record_carryover", record)
     monkeypatch.setattr(carry, "default_currency", currency)
     monkeypatch.setattr(carry, "close_freeze", close_freeze)
-    monkeypatch.setattr(carry, "load_config", lambda: {"enabled": True, "notify_admins": True})
+    monkeypatch.setattr(carry, "load_config", lambda: {"enabled": False, "promo_enabled": True, "notify_admins": True})
     monkeypatch.setattr(gift_days, "datetime_now", lambda: NOW)
 
     plan = gift_plan()
@@ -228,7 +228,8 @@ async def test_unpriced_gift_is_replaced(world):
 
 
 async def test_switch_off_is_plain_replace_without_journal(world):
-    world.monkeypatch.setattr(carry, "load_config", lambda: {"enabled": False, "notify_admins": True})
+    """Подарки выключены отдельным ключом — даже при включённой смене за деньги."""
+    world.monkeypatch.setattr(carry, "load_config", lambda: {"enabled": True, "promo_enabled": False, "notify_admins": True})
     await apply_gift(world)
     assert panel_call(world)["plan"] is not None
     assert "load_state" not in world.log.names() and world.records == []
@@ -291,11 +292,18 @@ class Activator:
         return SimpleNamespace(reward_type=PromocodeRewardType.SUBSCRIPTION, code="GIFT1", reward=None)
 
 
-class Promos:
-    def __init__(self, promo):
-        self.promo = promo
+class Validator:
+    """Подделка ValidatePromocode: код действителен, недействителен или проверка падает."""
 
-    async def get_by_code(self, code):
+    def __init__(self, promo, error=None):
+        self.promo = promo
+        self.error = error
+        self.codes: list[str] = []
+
+    async def __call__(self, user, dto):
+        self.codes.append(dto.code)
+        if self.error is not None:
+            raise self.error
         return self.promo
 
 
@@ -322,23 +330,26 @@ ENDPOINTS = {
 }
 
 
-async def web(monkeypatch, *, carried, enabled=True, promo_plan=GIFT, current_plan=OLD, endpoint="subscription"):
+async def web(monkeypatch, *, carried, enabled=True, promo_plan=GIFT, current_plan=OLD, endpoint="subscription",
+              validation_error=None, code="GIFT1", validator_box=None):
     async def promo_carry(session, **kwargs):
         if isinstance(carried, Exception):
             raise carried
         return carried
 
     monkeypatch.setattr(carry, "promo_carry", promo_carry)
-    monkeypatch.setattr(carry, "load_config", lambda: {"enabled": enabled, "notify_admins": True})
+    monkeypatch.setattr(carry, "load_config", lambda: {"enabled": False, "promo_enabled": enabled, "notify_admins": True})
     activator = Activator()
     promo = SimpleNamespace(reward_type=PromocodeRewardType.SUBSCRIPTION, plan_snapshot={"id": promo_plan, "duration": 30})
+    validator = Validator(promo, validation_error)
+    if validator_box is not None:
+        validator_box.append(validator)
     sub = SimpleNamespace(is_trial=False, plan_snapshot=SimpleNamespace(id=current_plan))
     user = SimpleNamespace(id=42, auth_type=AuthType.TELEGRAM, is_email_verified=False)
     raw = ENDPOINTS[endpoint]()
-    activator.code = "GIFT1"
     try:
-        await raw(body=SimpleNamespace(code="GIFT1"), user=user, activate_promocode=activator,
-                  session=RollbackSession(), subscription_dao=Subs(sub), promocode_dao=Promos(promo))
+        await raw(body=SimpleNamespace(code=code), user=user, activate_promocode=activator,
+                  session=RollbackSession(), subscription_dao=Subs(sub), validate_promocode=validator)
         return activator.calls, None
     except Exception as exc:  # noqa: BLE001
         return activator.calls, exc
@@ -368,8 +379,36 @@ async def test_web_activates_gift_with_full_carry_or_when_not_involved(monkeypat
 
 @pytest.mark.parametrize("endpoint", sorted(ENDPOINTS))
 async def test_web_state_failure_does_not_burn_silently(monkeypatch, endpoint):
+    """Сбой проверки остатка — не активируем, но и не 409 «подарок заменит тариф»: 503."""
     calls, exc = await web(monkeypatch, carried=RuntimeError("db down"), endpoint=endpoint)
-    assert calls == 0 and getattr(exc, "status_code", None) == 409
+    assert calls == 0 and getattr(exc, "status_code", None) == 503
+    assert "заменит" not in exc.detail
+
+
+@pytest.mark.parametrize("endpoint", sorted(ENDPOINTS))
+@pytest.mark.parametrize("error_name", ["PromocodeNotFoundError", "PromocodeExpiredError",
+                                        "PromocodeAlreadyActivatedError", "PromocodeNotAvailableError"])
+async def test_web_invalid_code_is_not_refused_as_replacement(monkeypatch, endpoint, error_name):
+    """Недействительный код — обычная ошибка активации, а не «подарок заменит тариф»."""
+    import src.core.exceptions as exceptions
+
+    error = getattr(exceptions, error_name)("нет")
+    calls, exc = await web(monkeypatch, carried=carry.PromoCarry(result(lost_days=3), state_stub(), "RUB"),
+                           endpoint=endpoint, validation_error=error)
+    assert calls == 1, "отказа до активации не было — ошибку вернёт сама активация"
+
+
+@pytest.mark.parametrize("endpoint", sorted(ENDPOINTS))
+async def test_web_validation_crash_is_503(monkeypatch, endpoint):
+    calls, exc = await web(monkeypatch, carried=None, endpoint=endpoint, validation_error=RuntimeError("sql"))
+    assert calls == 0 and getattr(exc, "status_code", None) == 503
+
+
+async def test_web_subscription_promocode_trims_spaces(monkeypatch):
+    box: list = []
+    calls, exc = await web(monkeypatch, carried=None, code="  GIFT1  ", validator_box=box)
+    assert (calls, exc) == (1, None)
+    assert box[0].codes == ["GIFT1"]
 
 
 # ── бот: предупреждение перед активацией ────────────────────────────────────
