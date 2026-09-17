@@ -397,11 +397,14 @@ def install() -> None:
         ("запасная копия: вебхук", "src.infrastructure.services.webhook", "apply_webhook"),
     )
 
-    # Вебхуки панели: две правки в разных модулях, поэтому отдельным списком
-    # с явным именем функции.
+    # Вебхуки панели: модели событий (пользователь, устройство), восстановление uuid
+    # и сверка адресатов уведомлений об устройствах — разные модули, поэтому
+    # отдельным списком с явным именем функции.
     webhook = (
         ("вебхуки: модель события", "remnapy.models.webhook", "apply_model"),
         ("вебхуки: восстановление uuid", "src.application.services.remnawave", "apply_handlers"),
+        ("вебхуки: модель устройства", "remnapy.models.webhook", "apply_device_model"),
+        ("вебхуки: устройства — админам, не человеку", "src.application.services.remnawave", "check_device_notify"),
     )
 
     for name, target, patch_module in plan:

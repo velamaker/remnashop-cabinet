@@ -23,6 +23,23 @@
 
 НА 2.x НИЧЕГО НЕ МЕНЯЕТСЯ. Там `uuid` приходит в теле, и обработчик просто не
 находит, что дописывать. Карта в этом случае отсутствует — правка молча пропускает.
+
+УСТРОЙСТВА. В событии `user_hwid_devices.added/deleted` два объекта: пользователь
+и устройство. Пользователя закрывали правки выше, а устройство панель 3.x шлёт с
+числовым `userId` вместо `userUuid` (так же, как её API устройств с 2.8), и модель
+устройства в SDK падала на «userUuid Field required». Бот отвечал 401, панель трижды
+повторяла, и уведомление админам «#UserDeviceAddedEvent» не доходило ни разу.
+Лечится тем же приёмом: `userUuid` у устройства необязателен, а после разбора в
+него пишется uuid владельца — того самого пользователя из события, которого мы
+только что восстановили.
+
+КОМУ УХОДИТ УВЕДОМЛЕНИЕ ОБ УСТРОЙСТВЕ И ПОЧЕМУ БЕЗ ДУБЛЕЙ. База делает из события
+системное уведомление — владельцу и админам (тумблер «USER_DEVICES_UPDATED» в
+настройках уведомлений бота), самому человеку не пишет. Человеку пишет наш крон
+`new_device` («к вашей подписке подключилось новое устройство») — и только тем, у
+кого роль USER. Адресаты не пересекаются, поэтому ничего не гасим. Держится это на
+двух вещах, и обе заперты: сверка обработчика базы и проверка, что событие
+устройства осталось системным (`check_device_notify`), плюс тест на выборку крона.
 """
 
 from __future__ import annotations
@@ -32,10 +49,17 @@ from uuid import UUID
 
 from loguru import logger
 
-from . import PatchTargetChanged, identity_map
+from . import PatchTargetChanged, expect_source, identity_map
 
 # Методы сервиса, которым приходит объект пользователя из события.
 _HANDLERS = ("handle_user_event", "handle_device_event")
+
+# Поля устройства, которые читает обработчик базы, — без них уведомление не собрать.
+_DEVICE_FIELDS = ("hwid", "platform", "device_model", "os_version", "user_agent")
+
+# sha256 обработчика событий устройств базы v0.8.2. Мы его не заменяем, но решение
+# «дублей с кроном new_device нет» верно, пока он шлёт только системные события.
+SHA_DEVICE_HANDLER = "3bd18cdfa24d5071e9da54f9a15a6a8dff64e8286ebc4c24304453bf5fe68975"
 
 
 def apply_model() -> str:
@@ -83,6 +107,69 @@ def apply_model() -> str:
     return f"uuid в событии стал необязательным (моделей: {len(targets)})"
 
 
+def apply_device_model() -> str:
+    """Разрешить устройству приходить без `userUuid` — в 3.x у него только `userId`."""
+    from remnapy.models import webhook as wh
+
+    model = getattr(wh, "HwidUserDeviceDto", None)
+    if model is None:
+        raise PatchTargetChanged(
+            "в remnapy.models.webhook нет HwidUserDeviceDto — модель события устройства "
+            "изменилась, вебхуки устройств панели 3.x перестанут разбираться"
+        )
+    missing = [name for name in _DEVICE_FIELDS if name not in model.model_fields]
+    if missing:
+        raise PatchTargetChanged(
+            f"в модели устройства нет полей {missing} — обработчик базы их читает"
+        )
+
+    field = model.model_fields.get("user_uuid")
+    if field is None:
+        return "поля userUuid в модели устройства уже нет — править нечего"
+    if not field.is_required():
+        return "уже необязательное"
+
+    # Тот же приём, что для пользователя выше: меняем описание поля и пересобираем
+    # валидатор. Наследников у модели нет, а WebhookPayloadDto получает уже готовый
+    # объект события и заново устройство не проверяет.
+    field.annotation = Optional[UUID]
+    field.default = None
+    model.model_rebuild(force=True)
+
+    if model.model_fields["user_uuid"].is_required():
+        raise PatchTargetChanged("userUuid остался обязательным в модели устройства")
+    return "userUuid в событии устройства стал необязательным"
+
+
+def check_device_notify() -> str:
+    """Событие устройства из вебхука — уведомление админам, а не человеку.
+
+    Ничего не меняет, только сверяет. Человеку о новом устройстве пишет крон
+    `new_device`; если база однажды начнёт писать ему сама, он получит одно и то
+    же дважды. Узнать об этом надо на гейте, а не от владельца.
+    """
+    import src.application.services.remnawave as target
+    from src.application.events.base import SystemEvent
+    from src.application.events.base import UserEvent as PersonalEvent
+
+    expect_source(
+        target,
+        "RemnaWebhookService.handle_device_event",
+        SHA_DEVICE_HANDLER,
+        "обработчик вебхуков устройств",
+    )
+    for name in ("UserDeviceAddedEvent", "UserDeviceDeletedEvent"):
+        event = getattr(target, name, None)
+        if event is None:
+            raise PatchTargetChanged(f"обработчик устройств больше не публикует {name}")
+        if not issubclass(event, SystemEvent) or issubclass(event, PersonalEvent):
+            raise PatchTargetChanged(
+                f"{name} больше не системное событие: база шлёт его человеку, и оно "
+                f"задвоится с уведомлением крона new_device — разведите их"
+            )
+    return "устройства: база пишет админам, крон new_device — человеку, дублей нет"
+
+
 def apply_handlers() -> str:
     """Дописать `uuid` в разобранном событии — по числовому id через карту."""
     from src.application.services.remnawave import RemnaWebhookService
@@ -108,6 +195,11 @@ def apply_handlers() -> str:
             async def wrapper(self, event, remna_user, *args, **kwargs):
                 if getattr(remna_user, "uuid", None) is None:
                     await _fill_uuid(remna_user, method_name)
+                # Устройство (handle_device_event) пришло без userUuid — его владелец
+                # и есть пользователь события, uuid которого только что восстановлен.
+                for device in args:
+                    if hasattr(device, "user_uuid") and device.user_uuid is None:
+                        device.user_uuid = getattr(remna_user, "uuid", None)
                 return await orig(self, event, remna_user, *args, **kwargs)
 
             wrapper._overlay_wrapped = True  # type: ignore[attr-defined]
