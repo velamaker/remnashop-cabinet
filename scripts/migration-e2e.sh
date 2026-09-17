@@ -1,7 +1,8 @@
 #!/bin/bash
 # E2E миграций OVERLAY-схемы (alembic-env migrations_overlay) на ОДНОРАЗОВОМ Postgres.
-# Проверяет 5 сценариев: fresh / idempotent / adopt-existing / concurrent-consistency /
-# legacy-reserve (смена ключа reserve_grants на действующей базе, миграция 0005).
+# Проверяет 6 сценариев: fresh / idempotent / adopt-existing / concurrent-consistency /
+# legacy-reserve (смена ключа reserve_grants на действующей базе, миграция 0005) /
+# bulk-jobs (гарантии однократности массовых задач держит сама база, миграция 0009).
 # Прод НЕ трогает (свой контейнер PG). Запускать в CI после сборки образа или локально.
 #
 # Env: IMAGE (дефолт remnashop-remnashop:latest), NETWORK (remnawave-network),
@@ -27,6 +28,13 @@ in_image() {
     -w /opt/remnashop "$IMAGE" sh -c "$1"
 }
 run_alembic() { in_image "$ALEMBIC"; }
+# Python-проверка из репозитория внутри образа: SQL и схема на том же одноразовом PG.
+in_image_py() {
+  docker run --rm --network "$NETWORK" --env-file "$ENV_FILE" \
+    -e DATABASE_HOST="$PG" -e DATABASE_PORT=5432 -e DATABASE_PASSWORD=e2epass \
+    -v "$(pwd)/$1:/tmp/e2e_check.py:ro" \
+    -w /opt/remnashop "$IMAGE" python /tmp/e2e_check.py
+}
 
 # Ожидаемую версию СПРАШИВАЕМ У ALEMBIC, а не пишем числом. Захардкоженная «0001»
 # молча перестала проверять что-либо, как только появилась 0002: сравнение падало бы
@@ -49,7 +57,7 @@ HEAD="$(alembic_head)"
 [ -n "$HEAD" ] || fail "не смог узнать head у alembic"
 echo "== ожидаемая версия overlay: $HEAD =="
 
-echo "[1/5] fresh upgrade → все overlay-таблицы + версия"
+echo "[1/6] fresh upgrade → все overlay-таблицы + версия"
 run_alembic >/dev/null
 [ "$(q "SELECT to_regclass('admin_2fa')::text")" = "admin_2fa" ] || fail "admin_2fa не создана"
 [ "$(q "SELECT to_regclass('session_invalidations')::text")" = "session_invalidations" ] || fail "session_invalidations не создана"
@@ -60,16 +68,21 @@ run_alembic >/dev/null
 # срок» и «одна открытая скидка на человека» — без них крон выдал бы повторно.
 [ "$(q "SELECT to_regclass('renewal_discount_grants')::text")" = "renewal_discount_grants" ] || fail "renewal_discount_grants не создана"
 [ "$(q "SELECT count(*) FROM pg_indexes WHERE tablename='renewal_discount_grants' AND indexname IN ('ux_renewal_discount_period','ux_renewal_discount_open') AND indexdef LIKE 'CREATE UNIQUE%'")" = "2" ] || fail "у renewal_discount_grants нет уникальных индексов"
+# 0009: журнал массовых задач. Частичный уникальный индекс держит «одна активная задача
+# каждого вида» — без него две задачи «+3 дня» на одну выборку дали бы людям +6.
+[ "$(q "SELECT to_regclass('bulk_jobs')::text")" = "bulk_jobs" ] || fail "bulk_jobs не создана"
+[ "$(q "SELECT to_regclass('bulk_job_items')::text")" = "bulk_job_items" ] || fail "bulk_job_items не создана"
+[ "$(q "SELECT count(*) FROM pg_indexes WHERE tablename='bulk_jobs' AND indexname='ux_bulk_jobs_one_active' AND indexdef LIKE 'CREATE UNIQUE%'")" = "1" ] || fail "у bulk_jobs нет индекса одной активной задачи"
 [ "$(q "SELECT version_num FROM alembic_version_overlay")" = "$HEAD" ] || fail "версия != $HEAD"
 [ "$(q "SELECT count(*) FROM information_schema.columns WHERE table_name='users' AND column_name='cabinet_balance'")" = "1" ] || fail "users.cabinet_balance нет"
 CREATED="$(q "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")"
 
-echo "[2/5] idempotent → повтор ничего не ломает"
+echo "[2/6] idempotent → повтор ничего не ломает"
 run_alembic >/dev/null
 [ "$(q "SELECT version_num FROM alembic_version_overlay")" = "$HEAD" ] || fail "версия изменилась при повторе"
 [ "$(q "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")" = "$CREATED" ] || fail "повтор изменил число таблиц"
 
-echo "[3/5] adopt-existing → таблицы есть, version-таблицы нет (как у старой установки)"
+echo "[3/6] adopt-existing → таблицы есть, version-таблицы нет (как у старой установки)"
 docker exec "$PG" psql -U remnashop -d remnashop -q -c "DROP TABLE alembic_version_overlay;" >/dev/null
 BEFORE="$(q "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")"
 run_alembic >/dev/null
@@ -77,7 +90,7 @@ run_alembic >/dev/null
 AFTER="$(q "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")"
 [ "$AFTER" = "$((BEFORE + 1))" ] || fail "adopt изменил схему (таблиц было $BEFORE, стало $AFTER; ожидалось +1 version-таблица)"
 
-echo "[4/5] concurrent-consistency → два upgrade разом дают консистентный итог"
+echo "[4/6] concurrent-consistency → два upgrade разом дают консистентный итог"
 docker exec "$PG" psql -U remnashop -d remnashop -q -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" >/dev/null
 mk_users
 # Прямой alembic (без lifespan-advisory-lock) может дать гонку на version-таблице — один
@@ -89,7 +102,7 @@ wait || true
 [ "$(q "SELECT version_num FROM alembic_version_overlay")" = "$HEAD" ] || fail "concurrent: версия != $HEAD"
 [ "$(q "SELECT to_regclass('admin_2fa')::text")" = "admin_2fa" ] || fail "concurrent: таблицы не созданы"
 
-echo "[5/5] legacy reserve_grants → 0005 переносит ключ, не теряя выдач"
+echo "[5/6] legacy reserve_grants → 0005 переносит ключ, не теряя выдач"
 # Симулируем БД действующей установки: таблица резерва в СТАРОМ виде (PK по user_id),
 # с уже выданным резервом. Именно на таких базах 0005 и поедет.
 docker exec "$PG" psql -U remnashop -d remnashop -q -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" >/dev/null
@@ -127,4 +140,11 @@ docker exec "$PG" psql -U remnashop -d remnashop -q -c "
 [ "$(q "SELECT count(*) FROM reserve_grants")" = "2" ] \
   || fail "0005: после закрытия прошлой выдачи новая не прошла (резерв не повторится)"
 
-echo "MIGRATION-E2E OK: fresh / idempotent / adopt-existing / concurrent-consistency / legacy-reserve — все прошли"
+echo "[6/6] bulk-jobs → однократность массовых задач держит сама база (0009)"
+# Свежая схема: проверка пишет тестовые строки и не должна зависеть от прошлых шагов.
+docker exec "$PG" psql -U remnashop -d remnashop -q -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" >/dev/null
+mk_users
+run_alembic >/dev/null
+in_image_py scripts/bulk-jobs-sql-e2e.py || fail "bulk-jobs: гарантии SQL не подтвердились (см. вывод выше)"
+
+echo "MIGRATION-E2E OK: fresh / idempotent / adopt-existing / concurrent-consistency / legacy-reserve / bulk-jobs — все прошли"

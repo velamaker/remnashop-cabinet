@@ -380,6 +380,178 @@ export const usersAdminApi = {
   },
 };
 
+// ---------- Массовые задачи «Пользователей»: «+N дней» и «Написать» ----------
+
+/** Фильтры списка пользователей — ровно те, что стоят на странице. */
+export interface BulkFilters {
+  search?: string;
+  blocked?: boolean;
+  role?: number;
+  expiring?: number;
+}
+
+export type BulkChannel = "telegram" | "cabinet" | "email";
+
+export interface BulkDaysPreview {
+  matched: number;
+  apply: number;
+  apply_frozen: number;
+  /** Недавно платили или меняли подписку: обработаем в конце прохода. */
+  deferred: number;
+  skipped: Record<string, number>;
+  recently_extended: { count: number; job_id: number | null; days: number | null };
+  sample: { name: string | null; expire_at?: string; new_expire_at?: string }[];
+  segment_hash: string;
+  active_job_id: number | null;
+  limits: { max_days: number; max_users: number };
+}
+
+export interface BulkMessagePreview {
+  matched: number;
+  recipients: number;
+  skipped: Record<string, number>;
+  by_channel: {
+    telegram: number;
+    telegram_bot_blocked: number;
+    push_only: number;
+    email_only: number;
+    cabinet_only: number;
+    unreachable: number;
+  };
+  email_enabled: boolean;
+  segment_hash: string;
+  active_job_id: number | null;
+}
+
+export type BulkJobStatus = "QUEUED" | "PROCESSING" | "PAUSED" | "CANCELING" | "COMPLETED" | "CANCELED" | "ERROR";
+
+export interface BulkJob {
+  id: number;
+  kind: "days" | "message";
+  status: BulkJobStatus;
+  /** null у read-only админа. */
+  created_by: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  total: number;
+  done: number;
+  applied: number;
+  skipped: number;
+  failed: number;
+  unknown: number;
+  verify_flagged: number;
+  params: {
+    days: number | null;
+    include_trial: boolean | null;
+    include_limited: boolean | null;
+    channels: BulkChannel[] | null;
+    text_preview: string | null;
+  };
+  pause_reason: string | null;
+  parent_job_id: number | null;
+  child_job_id: number | null;
+  breakdown: Record<string, number>;
+}
+
+export interface BulkJobItem {
+  user_id: number | null;
+  name: string | null;
+  status: string;
+  category: string | null;
+  reason: string | null;
+  old_expire_at: string | null;
+  target_expire_at: string | null;
+  channels: string | null;
+  verify_note: string | null;
+  error: string | null;
+}
+
+export interface BulkStartResult {
+  job_id: number;
+  status: BulkJobStatus;
+  total: number;
+  apply?: number;
+  recipients?: number;
+  duplicate: boolean;
+}
+
+function bulkFilterQuery(f: BulkFilters, qs: URLSearchParams): URLSearchParams {
+  if (f.search) qs.set("search", f.search);
+  if (f.blocked != null) qs.set("blocked", String(f.blocked));
+  if (f.role != null) qs.set("role", String(f.role));
+  if (f.expiring != null) qs.set("expiring_days", String(f.expiring));
+  return qs;
+}
+
+function bulkFilterBody(f: BulkFilters) {
+  return {
+    search: f.search || null,
+    blocked: f.blocked ?? null,
+    role: f.role ?? null,
+    expiring_days: f.expiring ?? null,
+  };
+}
+
+export const bulkJobsAdminApi = {
+  daysPreview: (f: BulkFilters, p: { days: number; include_trial: boolean; include_limited: boolean }) => {
+    const qs = bulkFilterQuery(f, new URLSearchParams());
+    qs.set("days", String(p.days));
+    qs.set("include_trial", String(p.include_trial));
+    qs.set("include_limited", String(p.include_limited));
+    return adminApi.get<BulkDaysPreview>(`/users/bulk/days/preview?${qs}`);
+  },
+  startDays: (
+    f: BulkFilters,
+    p: {
+      days: number;
+      include_trial: boolean;
+      include_limited: boolean;
+      allow_repeat: boolean;
+      segment_hash: string;
+      expected_apply: number;
+      request_id: string;
+      notify: { text: string; channels: BulkChannel[] } | null;
+    },
+  ) => adminApi.post<BulkStartResult>("/users/bulk/days", { ...bulkFilterBody(f), ...p }),
+  messagePreview: (f: BulkFilters | null, p: { channels: BulkChannel[]; source_job_id?: number | null }) => {
+    const qs = f ? bulkFilterQuery(f, new URLSearchParams()) : new URLSearchParams();
+    if (p.source_job_id != null) qs.set("source_job_id", String(p.source_job_id));
+    qs.set("channels", p.channels.join(","));
+    return adminApi.get<BulkMessagePreview>(`/users/bulk/message/preview?${qs}`);
+  },
+  startMessage: (
+    f: BulkFilters | null,
+    p: {
+      text: string;
+      channels: BulkChannel[];
+      source_job_id: number | null;
+      segment_hash: string;
+      expected_recipients: number;
+      request_id: string;
+      allow_repeat: boolean;
+    },
+  ) => adminApi.post<BulkStartResult>("/users/bulk/message", { ...(f ? bulkFilterBody(f) : {}), ...p }),
+  testMessage: (text: string) =>
+    adminApi.post<{ telegram: boolean; reason: "no_telegram" | "send_failed" | null }>(
+      "/users/bulk/message/test",
+      { text },
+    ),
+  jobs: (limit = 10) =>
+    adminApi.get<{ items: BulkJob[]; active: { days: number | null; message: number | null } }>(
+      `/users/bulk/jobs?limit=${limit}`,
+    ),
+  items: (jobId: number, statuses: string[], limit = 100, offset = 0) => {
+    const qs = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    if (statuses.length) qs.set("status", statuses.join(","));
+    return adminApi.get<{ total: number; items: BulkJobItem[] }>(`/users/bulk/jobs/${jobId}/items?${qs}`);
+  },
+  cancel: (jobId: number) =>
+    adminApi.post<{ job_id: number; status: BulkJobStatus }>(`/users/bulk/jobs/${jobId}/cancel`),
+  resume: (jobId: number) =>
+    adminApi.post<{ job_id: number; status: BulkJobStatus }>(`/users/bulk/jobs/${jobId}/resume`),
+};
+
 // ---------- Детект абьюза триала ----------
 
 export interface AbuseAccount {

@@ -31,6 +31,7 @@ from src.application.use_cases.user import ResetUserReferralCode, SendMessageToU
 from src.application.use_cases.user.commands.messaging import SendMessageToUserDto
 from src.core.enums import SubscriptionStatus
 from src.core.exceptions import PermissionDeniedError
+from src.infrastructure.services.overlay_extend import compute_new_expire, push_subscription_expire
 from remnapy.enums.users import TrafficLimitStrategy
 
 from ._common import AdminUser
@@ -121,19 +122,17 @@ async def extend_subscription(
         raise HTTPException(status_code=404, detail="Пользователь не найден")
 
     now = datetime.now(timezone.utc)
-    # Продление (+): считаем от текущего срока или от now, если уже истёк.
-    # Убавление (−): считаем строго от текущего срока, не опускаем ниже now.
-    if body.days >= 0:
-        base = sub.expire_at if sub.expire_at > now else now
-        sub.expire_at = base + timedelta(days=body.days)
-    else:
-        new_expire = sub.expire_at + timedelta(days=body.days)
-        sub.expire_at = new_expire if new_expire > now else now
-
-    # Сначала синхронизируем срок в панели Remnawave (если упадёт — локально не коммитим).
-    await _sync_remnawave(remnawave.update_user(user=user, uuid=sub.user_remna_id, subscription=sub))
-
-    updated = await subscription_dao.update(sub)
+    # Расчёт срока и порядок записи (панель → наша база) — общие с массовым
+    # «Добавить N дней» (services/overlay_extend.py): правило, поправленное в одном
+    # месте, не должно разъехаться с другим. Сбой панели — 502, локально не коммитим.
+    updated = await push_subscription_expire(
+        user=user,
+        sub=sub,
+        target=compute_new_expire(sub.expire_at, body.days, now),
+        remnawave=remnawave,
+        subscription_dao=subscription_dao,
+        guard=_sync_remnawave,
+    )
     if not updated:
         raise HTTPException(status_code=500, detail="Не удалось обновить подписку")
     await session.commit()

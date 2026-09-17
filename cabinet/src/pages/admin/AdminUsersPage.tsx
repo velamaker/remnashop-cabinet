@@ -15,6 +15,7 @@ import { ApiError } from "@/types/api";
 import { formatDate, formatRelativeOnline } from "@/lib/format";
 import { useAuth } from "@/contexts/AuthContext";
 import { useBranding } from "@/contexts/BrandingContext";
+import { BulkDaysDialog, BulkJobsPanel, BulkMessageDialog } from "./AdminUsersBulk";
 
 const LIMIT = 25;
 
@@ -1301,7 +1302,11 @@ export default function AdminUsersPage() {
   const [bulkValue, setBulkValue] = useState("");
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkMsg, setBulkMsg] = useState<string | null>(null);
-  const { isReadonlyAdmin } = useAuth();
+  // Массовые задачи: какой диалог открыт и чьим получателям пишем («Написать получившим»).
+  const [bulkDialog, setBulkDialog] = useState<"days" | "message" | null>(null);
+  const [messageSource, setMessageSource] = useState<number | null>(null);
+  const [jobsRefresh, setJobsRefresh] = useState(0);
+  const { isReadonlyAdmin, fullAccess } = useAuth();
   const { can: hasFeature } = useBranding();
   const { can, note, disable } = useCapabilities();
 
@@ -1367,6 +1372,27 @@ export default function AdminUsersPage() {
       setExporting(false);
     }
   };
+
+  // Фильтры страницы в форме массовых задач — ровно то, что сейчас в списке.
+  const bulkFilters = {
+    search: search || undefined,
+    role: roleFilter ? Number(roleFilter) : undefined,
+    blocked: statusFilter === "blocked" ? true : statusFilter === "active" ? false : undefined,
+    expiring: expiring ? Number(expiring) : undefined,
+  };
+  const closeBulkDialog = useCallback(() => { setBulkDialog(null); setMessageSource(null); }, []);
+  const bulkStarted = useCallback(() => {
+    setBulkDialog(null);
+    setMessageSource(null);
+    setBulkMsg("Задача запущена — ход виден в «Фоновых задачах» ниже");
+    setJobsRefresh(n => n + 1);
+  }, []);
+  // «Не умею» от ручки массовой задачи — пункт исчезает, диалог закрывается.
+  const bulkUnsupported = useCallback((key: string) => {
+    disable(key);
+    setBulkDialog(null);
+    setMessageSource(null);
+  }, [disable]);
 
   const BULK_LABELS: Record<string, string> = {
     points: "начислить баллы", discount: "выставить персональную скидку",
@@ -1515,7 +1541,15 @@ export default function AdminUsersPage() {
           <span className="text-xs font-medium text-fg-muted">Массово по фильтру:</span>
           <select
             value={bulkAction}
-            onChange={e => { setBulkAction(e.target.value); setBulkMsg(null); }}
+            aria-label="Массовое действие"
+            onChange={e => {
+              const value = e.target.value;
+              setBulkMsg(null);
+              // Дни и сообщение — не «значение + Применить», а диалог с предпросмотром:
+              // селект сразу возвращается в исходное положение.
+              if (value === "days" || value === "message") { setBulkAction(""); setBulkDialog(value); return; }
+              setBulkAction(value);
+            }}
             className="h-8 rounded-lg border border-[var(--border)] bg-bg px-2 text-xs text-fg focus:outline-none focus:ring-1 focus:ring-accent"
           >
             <option value="">— выбрать действие —</option>
@@ -1525,6 +1559,14 @@ export default function AdminUsersPage() {
             <option value="discount">Персональная скидка %</option>
             <option value="block">Заблокировать</option>
             <option value="unblock">Разблокировать</option>
+            {/* Раздача дней и сообщение сотням людей — только полный доступ: модератор
+                с разделом «Пользователи» блокирует одного, но не раздаёт дни всем. */}
+            {fullAccess && hasFeature("bulk_days") && can("users.bulk.days") && (
+              <option value="days">Добавить дни подписки…</option>
+            )}
+            {fullAccess && hasFeature("bulk_message") && can("users.bulk.message") && (
+              <option value="message">Написать сообщение…</option>
+            )}
           </select>
           {(bulkAction === "points" || bulkAction === "discount") && (
             <input
@@ -1544,6 +1586,29 @@ export default function AdminUsersPage() {
           </button>
           {bulkMsg && <span className="text-xs text-fg-subtle">{bulkMsg}</span>}
         </div>
+      )}
+
+      {/* Фоновые задачи видны и read-only (без кнопок): это журнал, а не пульт. */}
+      {(hasFeature("bulk_days") || hasFeature("bulk_message")) && can("users.bulk.jobs") && (
+        <BulkJobsPanel
+          fullAccess={fullAccess}
+          readonly={isReadonlyAdmin}
+          refreshKey={jobsRefresh}
+          onWriteRecipients={(jobId) => { setMessageSource(jobId); setBulkDialog("message"); }}
+          onUnsupported={disable}
+        />
+      )}
+      {bulkDialog === "days" && (
+        <BulkDaysDialog filters={bulkFilters} onClose={closeBulkDialog} onStarted={bulkStarted} onUnsupported={bulkUnsupported} />
+      )}
+      {bulkDialog === "message" && (
+        <BulkMessageDialog
+          filters={messageSource == null ? bulkFilters : null}
+          sourceJobId={messageSource}
+          onClose={closeBulkDialog}
+          onStarted={bulkStarted}
+          onUnsupported={bulkUnsupported}
+        />
       )}
 
       {error && <div className="flex items-center gap-2 rounded-lg bg-danger/8 px-4 py-3 text-sm text-danger"><AlertCircle className="h-4 w-4" />{error}</div>}

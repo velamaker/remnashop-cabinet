@@ -46,9 +46,13 @@ from .trial_discount import router as trial_discount_router
 from .winback import router as winback_router
 from .updates import router as updates_router
 from .users import router as users_router
+from .users_bulk import router as users_bulk_router
 
 router = APIRouter(prefix=API_V1 + "/admin")
 router.include_router(statistics_router)
+# Массовые задачи — раньше users_router: их пути многосегментные и с карточкой
+# `/users/{user_id}` не пересекаются, но порядок страхует от будущих путей в users.
+router.include_router(users_bulk_router)
 router.include_router(users_router)
 router.include_router(subscriptions_router)
 router.include_router(transactions_router)

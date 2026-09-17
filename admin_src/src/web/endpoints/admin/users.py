@@ -77,6 +77,38 @@ def _build_user_where(
     return where_sql, params
 
 
+def build_segment(
+    search: Optional[str],
+    blocked: Optional[bool],
+    role: Optional[int],
+    expiring_days: Optional[int],
+    *,
+    users_only: bool,
+) -> tuple[str, str, dict[str, Any]]:
+    """Сегмент «ровно этот отфильтрованный список»: (join_sql, where_sql, params).
+
+    Один источник для списка, «Массово по фильтру» и массовых задач (users_bulk.py).
+    JOIN «истекают» раньше был склеен в двух местах и мог разъехаться: админ видел
+    бы один список, а массовое действие ушло бы другому.
+
+    users_only=True — массово трогаем ТОЛЬКО обычных пользователей, не персонал, при
+    любых фильтрах (в том числе при выбранной в фильтре роли «Администратор»).
+    """
+    where_sql, params = _build_user_where(search, blocked, role)
+    if users_only:
+        where_sql = (where_sql + " AND u.role = 'USER'") if where_sql else "WHERE u.role = 'USER'"
+    join_sql = ""
+    if expiring_days:
+        # Подписки, у которых срок ещё НЕ вышел, но истекает в окне [сейчас; +N дней].
+        join_sql = (
+            "JOIN (SELECT user_id, min(expire_at) AS expire_at FROM subscriptions "
+            "WHERE expire_at > now() AND expire_at <= now() + make_interval(days => :exp_days) "
+            "GROUP BY user_id) ex ON ex.user_id = u.id"
+        )
+        params["exp_days"] = int(expiring_days)
+    return join_sql, where_sql, params
+
+
 @router.get("")
 @inject
 async def list_users(
@@ -94,19 +126,12 @@ async def list_users(
 ) -> dict[str, Any]:
     # Гибкий фильтр+сортировка. last_login берём из login_events (LEFT JOIN),
     # чтобы можно было сортировать по дате последнего входа.
-    where_sql, params = _build_user_where(search, blocked, role)
-
-    # Фильтр «истекают в N дней» (ретеншн): JOIN на подписки, у которых срок ещё
-    # НЕ вышел, но истекает в окне [сейчас; сейчас+N дней]. Берём ближайшую дату.
-    expiring = expiring_days is not None
-    join_sql = ""
-    if expiring:
-        join_sql = (
-            "JOIN (SELECT user_id, min(expire_at) AS expire_at FROM subscriptions "
-            "WHERE expire_at > now() AND expire_at <= now() + make_interval(days => :exp_days) "
-            "GROUP BY user_id) ex ON ex.user_id = u.id"
-        )
-        params["exp_days"] = int(expiring_days)
+    # Фильтр «истекают в N дней» (ретеншн) — JOIN из build_segment, ближайшая дата
+    # срока идёт колонкой ex.expire_at.
+    join_sql, where_sql, params = build_segment(
+        search, blocked, role, expiring_days, users_only=False
+    )
+    expiring = bool(expiring_days)
 
     # Колонка сортировки — строго из белого списка (без SQL-инъекций).
     sort_col = {
@@ -575,16 +600,9 @@ async def bulk_action(
         raise HTTPException(status_code=400, detail="Укажите ненулевое число баллов")
 
     # Сегмент. Массово трогаем ТОЛЬКО обычных пользователей (не персонал).
-    where_sql, params = _build_user_where(body.search, body.blocked, body.role)
-    where_sql = (where_sql + " AND u.role = 'USER'") if where_sql else "WHERE u.role = 'USER'"
-    join_sql = ""
-    if body.expiring_days:
-        join_sql = (
-            "JOIN (SELECT user_id, min(expire_at) AS expire_at FROM subscriptions "
-            "WHERE expire_at > now() AND expire_at <= now() + make_interval(days => :exp_days) "
-            "GROUP BY user_id) ex ON ex.user_id = u.id"
-        )
-        params["exp_days"] = int(body.expiring_days)
+    join_sql, where_sql, params = build_segment(
+        body.search, body.blocked, body.role, body.expiring_days, users_only=True
+    )
 
     ids = [
         r.id
