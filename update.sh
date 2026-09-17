@@ -47,12 +47,27 @@ done
 if docker compose version >/dev/null 2>&1; then DC="docker compose"
 elif command -v docker-compose >/dev/null 2>&1; then DC="docker-compose"
 else die "Не найден 'docker compose'."; fi
-COMPOSE=(-f docker-compose.yml -f cabinet/docker-compose.cabinet.yml)
+# Набор compose-файлов берём из COMPOSE_FILE в .env, если он там есть. Явные -f
+# отключают COMPOSE_FILE целиком: установка, поднятая с дополнительным файлом
+# (например, локальная резервная копия бэкенда и failover кабинета), после
+# обычного ./update.sh молча теряла его — кабинет пересоздавался без запасного
+# маршрута, а вторая копия бэкенда оставалась на старом образе. install.sh пишет в
+# COMPOSE_FILE те же файлы, что стоят ниже по умолчанию, так что у стандартных
+# установок ничего не меняется.
+CF="$(grep -E '^COMPOSE_FILE=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"'"'" || true)"
+if [ -n "$CF" ]; then
+  COMPOSE=()
+  IFS=: read -ra _cf <<<"$CF"
+  for f in "${_cf[@]}"; do [ -n "$f" ] && COMPOSE+=(-f "$f"); done
+else
+  COMPOSE=(-f docker-compose.yml -f cabinet/docker-compose.cabinet.yml)
+fi
 # Кабинет поверх чужого бота работает через адаптер — он тоже собирается из кода
 # репозитория. Без этого файла обновление оставляло адаптер на СТАРОМ образе
 # (старые compose.py/route_map.json), а compose ругался «orphan containers»
 # и по этой подсказке предлагал снести живой контейнер.
-if grep -qE '^CABINET_BACKEND=bedolaga' .env 2>/dev/null; then
+if grep -qE '^CABINET_BACKEND=bedolaga' .env 2>/dev/null \
+   && [[ ":$CF:" != *":cabinet/docker-compose.adapter.yml:"* ]]; then
   COMPOSE+=(-f cabinet/docker-compose.adapter.yml)
 fi
 
