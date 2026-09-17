@@ -7,8 +7,9 @@ import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ConnectGuide } from "@/components/ConnectGuide";
 import { PlatformIcon } from "@/components/PlatformIcon";
+import { DeviceUpsellCard } from "@/components/DeviceUpsellCard";
 import { formatDate, formatRelativeOnline } from "@/lib/format";
-import type { DeviceResponse, DevicesResponse } from "@/types/api";
+import type { DeviceResponse, DevicesResponse, SubscriptionInfoResponse } from "@/types/api";
 import { ApiError } from "@/types/api";
 import { appFromUserAgent, freeableSlots, sameDeviceGroups } from "@/lib/deviceGroups";
 
@@ -153,7 +154,10 @@ function SameDeviceHint({ devices }: { devices: DeviceResponse[] }) {
 export default function DevicesPage() {
   const t = useT();
   const [data, setData] = useState<DevicesResponse | null>(null);
-  const [subUrl, setSubUrl] = useState<string | null>(null);
+  // Подписка целиком: ссылке подключения нужен url, блоку «Нужно больше устройств?» —
+  // статус, трафик и срок тарифа.
+  const [sub, setSub] = useState<SubscriptionInfoResponse | null>(null);
+  const subUrl = sub?.url ?? null;
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isClearingAll, setIsClearingAll] = useState(false);
@@ -161,7 +165,7 @@ export default function DevicesPage() {
   useEffect(() => {
     subscriptionApi
       .current()
-      .then((s) => setSubUrl(s?.url ?? null))
+      .then((s) => setSub(s ?? null))
       .catch(() => {});
   }, []);
 
@@ -262,6 +266,7 @@ export default function DevicesPage() {
 
         {!isLoading && data && data.devices.length > 0 && (
           <div className="flex flex-col gap-2">
+            <DeviceUpsellCard variant="devices" subscription={sub} devices={data} />
             <SameDeviceHint devices={data.devices} />
             {data.devices.map((device) => (
               <DeviceRow

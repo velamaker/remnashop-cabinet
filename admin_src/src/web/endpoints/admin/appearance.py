@@ -84,6 +84,7 @@ class AppearanceUpdate(BaseModel):
     maintenance_block_registration: Optional[bool] = None  # ограничивать регистрацию
     maintenance_block_payments: Optional[bool] = None      # ограничивать оплату
     enabled_languages: Optional[list[str]] = None          # доступные языки (None = все)
+    device_upsell_enabled: Optional[bool] = None           # «Нужно больше устройств?» при заполненном лимите
 
 
 @router.get("")
@@ -126,6 +127,7 @@ async def update_appearance(body: AppearanceUpdate, _admin: AdminUser) -> dict[s
     for flag in (
         "sub_link_enabled", "crypto_links_enabled", "maintenance_enabled", "maintenance_follow_bot",
         "maintenance_block_login", "maintenance_block_registration", "maintenance_block_payments",
+        "device_upsell_enabled",
     ):
         value = getattr(body, flag)
         if value is not None:

@@ -77,6 +77,7 @@ from src.core.exceptions import (
     PromocodeNotFoundError,
     TrialNotAvailableError,
 )
+from src.core.utils.time import datetime_now
 from src.web.schemas import (
     DeviceDeleteResponse,
     DeviceResponse,
@@ -114,6 +115,62 @@ class DevicesActivityResponse(BaseModel):
     devices: list[DeviceActivityResponse]
     current_count: int
     max_count: int
+
+
+class SubscriptionOffersOverlayResponse(SubscriptionOffersResponse):
+    """Витрина плюс условия смены тарифа — ради честного предупреждения в кабинете.
+
+    Смена тарифа (CHANGE) у нас — срок С НУЛЯ: ветка «CHANGE или триал» в базе зовёт
+    `update_user(plan=…)`, а `RemnawaveImpl._build_update_request` по тарифу ставит
+    `expire_at = days_to_datetime(plan.duration)`, то есть сейчас + длительность.
+    Остаток текущей подписки сгорает, у бессрочной — сгорает «навсегда». Бот об этом
+    предупреждает, кабинет молчал. А блок «Нужно больше устройств?» сам ведёт
+    упёршегося в лимит человека к смене тарифа — промолчать там значило бы продать
+    ему потерю оплаченных дней.
+
+    Поля необязательные: старые клиенты их не замечают, а кабинет без флага
+    `plan_change_keeps_days` (чужой бэкенд, старая сборка) не предупреждает и не
+    предлагает смену вовсе. Переносить остаток начнёт база — это поймает тест
+    test_offers_plan_change_terms.py, и флаг надо будет перевернуть.
+    """
+
+    plan_change_keeps_days: bool = False
+    # Полные оставшиеся сутки текущей подписки (как считает кабинет); на паузе —
+    # из сохранённого остатка. None у бессрочной и без подписки.
+    current_days_left: Optional[int] = None
+    current_is_trial: Optional[bool] = None
+    current_is_unlimited: Optional[bool] = None
+    # None — «не удалось узнать», а не «паузы нет».
+    current_frozen: Optional[bool] = None
+
+
+def plan_change_terms(
+    *,
+    expire_at: Optional[datetime],
+    is_unlimited: bool,
+    is_trial: bool,
+    frozen_seconds: Optional[int],
+    now: datetime,
+) -> dict:
+    """Что сгорит при смене тарифа. Чистая функция — тестируется без БД.
+
+    Пауза важнее срока: пока подписка на паузе, `expire_at` в базе не двигается
+    (и может быть уже в прошлом), а настоящий остаток лежит в `remaining_seconds`.
+    """
+    if frozen_seconds is not None:
+        days: Optional[int] = max(0, int(frozen_seconds) // 86400)
+    elif is_unlimited:
+        days = None
+    elif expire_at is None:
+        days = 0
+    else:
+        days = max(0, int((expire_at - now).total_seconds() // 86400))
+    return {
+        "current_days_left": days,
+        "current_is_trial": is_trial,
+        "current_is_unlimited": is_unlimited,
+        "current_frozen": frozen_seconds is not None,
+    }
 
 
 def _to_device_response(device: HwidDeviceDto) -> DeviceActivityResponse:
@@ -663,16 +720,19 @@ async def pay_with_balance(
     }
 
 
-@router.get("/offers", response_model=SubscriptionOffersResponse)
+# response_model — именно оверлей-схема: FastAPI режет ответ по модели, и с базовой
+# новые поля молча пропали бы вместе с предупреждением о сгорающих днях.
+@router.get("/offers", response_model=SubscriptionOffersOverlayResponse)
 @inject
 async def get_subscription_offers(
     user: CurrentUser,
+    session: FromDishka[AsyncSession],
     subscription_dao: FromDishka[SubscriptionDao],
     payment_gateway_dao: FromDishka[PaymentGatewayDao],
     pricing_service: FromDishka[PricingService],
     get_available_plans: FromDishka[GetAvailablePlans],
     match_plan: FromDishka[MatchPlan],
-) -> SubscriptionOffersResponse:
+) -> SubscriptionOffersOverlayResponse:
     active_gateways = await payment_gateway_dao.get_active()
     web_gateways = [
         gateway
@@ -757,13 +817,48 @@ async def get_subscription_offers(
         for gateway in web_gateways
     ]
 
-    return SubscriptionOffersResponse(
+    terms: dict = {}
+    if current_subscription:
+        # Остаток на паузе. Только чтение, коммит не нужен. Витрина — единственный
+        # путь к покупке, поэтому сбой вспомогательной таблицы не должен её ронять:
+        # откатываем прерванную транзакцию и честно говорим «про паузу не знаем».
+        frozen_seconds: Optional[int] = None
+        frozen_known = True
+        try:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT remaining_seconds FROM subscription_freezes "
+                        "WHERE user_id = :uid AND active = true"
+                    ),
+                    {"uid": user.id},
+                )
+            ).first()
+            frozen_seconds = int(row[0]) if row and row[0] is not None else None
+        except Exception as e:  # noqa: BLE001
+            frozen_known = False
+            await session.rollback()
+            logger.warning(f"offers: не удалось прочитать паузу user_id={user.id} ({e})")
+
+        terms = plan_change_terms(
+            expire_at=current_subscription.expire_at,
+            is_unlimited=current_subscription.is_unlimited,
+            is_trial=current_subscription.is_trial,
+            frozen_seconds=frozen_seconds,
+            now=datetime_now(),
+        )
+        if not frozen_known:
+            terms["current_frozen"] = None
+
+    return SubscriptionOffersOverlayResponse(
         gateways=gateway_offers,
         plans=plan_offers,
         has_current_subscription=bool(current_subscription),
         current_subscription_status=(
             current_subscription.current_status.value if current_subscription else None
         ),
+        plan_change_keeps_days=False,
+        **terms,
     )
 
 

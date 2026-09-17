@@ -151,6 +151,16 @@ export interface SubscriptionOffersResponse {
   plans: PlanOfferResponse[];
   has_current_subscription: boolean;
   current_subscription_status: string | null;
+  // Условия смены тарифа (CHANGE). Шлёт только наш бэкенд: у нас смена = срок с
+  // нуля, и остаток текущей подписки сгорает. Поля нет (чужой бэкенд, старая
+  // сборка) — кабинет не предупреждает и смену тарифа сам не предлагает.
+  plan_change_keeps_days?: boolean;
+  // Полные оставшиеся сутки (на паузе — сохранённый остаток); null у бессрочной.
+  current_days_left?: number | null;
+  current_is_trial?: boolean | null;
+  current_is_unlimited?: boolean | null;
+  // null — бэкенд не смог узнать про паузу.
+  current_frozen?: boolean | null;
 }
 
 export interface PurchaseRequest {

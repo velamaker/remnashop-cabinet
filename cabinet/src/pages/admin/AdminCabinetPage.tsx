@@ -14,7 +14,7 @@ const ALL_LANG_CODES = LANGUAGES.map((l) => l.code);
  * (branding.json через appearance API), меняется только место в меню.
  */
 export default function AdminCabinetPage() {
-  const { refresh } = useBranding();
+  const { refresh, can } = useBranding();
   const [form, setForm] = useState<AdminAppearance | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -51,6 +51,8 @@ export default function AdminCabinetPage() {
         maintenance_block_registration: form.maintenance_block_registration !== false,
         maintenance_block_payments: form.maintenance_block_payments !== false,
         ...(isRestricted ? { enabled_languages: langs } : {}),
+        // Поверх чужого бэкенда блока нет (возможность выключена) — и поле не шлём.
+        ...(can("device_upsell") ? { device_upsell_enabled: form.device_upsell_enabled !== false } : {}),
       });
       await refresh();
       setSaved(true);
@@ -123,6 +125,27 @@ export default function AdminCabinetPage() {
           непрозрачный крипто-алиас на домене кабинета — реальный адрес подписки не
           виден ни в приложении, ни в коде страницы. Работает и когда кабинет на отдельном сервере.
         </p>
+
+        {can("device_upsell") && (
+          <>
+            <label className="mt-3 flex items-center gap-2.5 py-1 text-sm text-fg">
+              <input
+                type="checkbox"
+                checked={form.device_upsell_enabled !== false}
+                onChange={(e) => setForm({ ...form, device_upsell_enabled: e.target.checked })}
+                className="h-4 w-4 accent-[var(--accent)]"
+              />
+              Предлагать тариф побольше, когда заняты все места для устройств
+            </label>
+            <p className="ml-6 text-xs text-fg-subtle">
+              На странице «Устройства» появится блок «Нужно больше устройств?» с ближайшим
+              тарифом, где устройств больше. На Главной — только в последнюю неделю срока,
+              когда смена тарифа почти ничего не сжигает. Если места заняты дублями одного
+              устройства, сначала предложим их освободить. Перед оплатой другого тарифа
+              человек увидит, сколько дней текущего срока пропадёт, и подтвердит смену.
+            </p>
+          </>
+        )}
 
         <div className="mt-4 border-t border-border-subtle pt-4">
           <label className="flex items-center gap-2.5 py-1 text-sm text-fg">

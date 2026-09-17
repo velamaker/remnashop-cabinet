@@ -38,6 +38,8 @@ export interface Appearance {
   maintenance_block_payments?: boolean;
   // Доступные языки кабинета: null/пусто = все; иначе список кодов (ru всегда есть).
   enabled_languages?: string[] | null;
+  // «Нужно больше устройств?» при заполненном лимите (тумблер админки, по умолчанию вкл).
+  device_upsell_enabled?: boolean;
   // Что умеет бэкенд под кабинетом. Отдаёт только адаптер чужого бота; наш
   // бэкенд поля не шлёт, и его отсутствие означает «умеет всё» (см. lib/features).
   features?: Partial<Record<string, boolean>>;
@@ -63,6 +65,7 @@ export interface AdminAppearance {
   maintenance_block_registration?: boolean;
   maintenance_block_payments?: boolean;
   enabled_languages?: string[] | null;
+  device_upsell_enabled?: boolean;
 }
 
 // Публичное оформление — доступно без авторизации.
@@ -80,6 +83,7 @@ export const appearanceAdminApi = {
     maintenance_follow_bot?: boolean; maintenance_message?: string;
     maintenance_block_login?: boolean; maintenance_block_registration?: boolean;
     maintenance_block_payments?: boolean; enabled_languages?: string[];
+    device_upsell_enabled?: boolean;
   }) =>
     adminApi.put<AdminAppearance>("/appearance", data),
   // Загрузка логотипа — multipart, поэтому отдельный fetch (adminApi шлёт JSON).

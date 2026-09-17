@@ -378,6 +378,13 @@ CASES: list[Case] = [
                     "prices": F("list", items=PRICE),
                 }),
             }),
+            # Условия смены тарифа — шлёт только наш бэкенд. Нет флага — кабинет
+            # не предупреждает о сгорающих днях и не предлагает тариф побольше.
+            "plan_change_keeps_days": F("bool", req=False),
+            "current_days_left": F("int", req=False, null=True),
+            "current_is_trial": F("bool", req=False, null=True),
+            "current_is_unlimited": F("bool", req=False, null=True),
+            "current_frozen": F("bool", req=False, null=True),
         },
     ),
     Case(

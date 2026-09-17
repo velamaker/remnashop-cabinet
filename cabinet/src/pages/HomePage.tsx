@@ -25,9 +25,11 @@ import { PromoBanner } from "@/components/PromoBanner";
 import { OnboardingWizard } from "@/components/OnboardingWizard";
 import { TrafficChart } from "@/components/TrafficChart";
 import { ServerStatusCard } from "@/components/ServerStatusCard";
+import { DeviceUpsellCard } from "@/components/DeviceUpsellCard";
 import { formatBytes, formatTrafficLimit, trafficLimitBytes, formatDate, daysUntil } from "@/lib/format";
 import { Flag } from "@/components/Flag";
 import { ApiError } from "@/types/api";
+import type { DevicesResponse } from "@/types/api";
 
 const REFRESH_SECONDS = 60 * 60; // автообновление раз в час
 
@@ -41,6 +43,9 @@ export default function HomePage() {
   const t = useT();
   const { subscription, isLoading, reload } = useSubscription();
   const [devices, setDevices] = useState<{ current: number; max: number } | null>(null);
+  // Полный ответ /devices — блоку «Нужно больше устройств?» нужны сами устройства
+  // (подсказка про дубли), а не только счётчики. Второй запрос не делаем.
+  const [devicesData, setDevicesData] = useState<DevicesResponse | null>(null);
   const [referrals, setReferrals] = useState<number | null>(null);
   const [refEarned, setRefEarned] = useState<number | null>(null);
   const [favServer, setFavServer] = useState<{ name: string; country_code: string; total: number } | null>(null);
@@ -51,7 +56,10 @@ export default function HomePage() {
   const [trial, setTrial] = useState<{ available: boolean; days: number; traffic_gb: number; devices: number } | null>(null);
 
   const loadExtras = useCallback(() => {
-    subscriptionApi.devices().then((d) => setDevices({ current: d.current_count, max: d.max_count })).catch(() => {});
+    subscriptionApi.devices().then((d) => {
+      setDevices({ current: d.current_count, max: d.max_count });
+      setDevicesData(d);
+    }).catch(() => {});
     referralApi.program().then((p) => setReferrals(p.invited_count)).catch(() => {});
     // Заработок — та же цифра, что в карточке боковой панели: на телефоне плитка
     // показывала только «приглашено», и было непонятно, дало это что-нибудь или нет.
@@ -313,6 +321,9 @@ export default function HomePage() {
           </div>
         </div>
       )}
+
+      {/* Лимит устройств заполнен: «освободите места» или тариф побольше (в конце срока) */}
+      {subscription && <DeviceUpsellCard variant="home" subscription={subscription} devices={devicesData} />}
 
       {/* Любимый сервер + Рефералы */}
       <div className="grid gap-4 sm:grid-cols-2">

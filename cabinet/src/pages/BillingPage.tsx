@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { clsx } from "clsx";
-import { Check, ChevronDown, Sparkles, Wallet } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, Sparkles, Wallet } from "lucide-react";
 import { subscriptionApi } from "@/api/subscription";
 import { balanceApi } from "@/api/balance";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PromocodeCard } from "@/components/PromocodeCard";
 import { TrialDiscountBanner } from "@/components/TrialDiscountBanner";
 import { formatTrafficLimit } from "@/lib/format";
+import { changeLoss, paymentsBlocked, readBillingPreselect, type ChangeLoss } from "@/lib/planChange";
 import type {
   PaymentGatewayType,
   PlanOfferResponse,
@@ -37,10 +38,16 @@ function isPopular(plan: PlanOfferResponse): boolean {
   return hay.includes("хит") || hay.includes("популярн");
 }
 
+type ConfirmAction = "gateway" | "balance";
+
 /**
  * Карточка тарифа — аккордеон: свёрнута показывает только имя/бейдж/цену,
  * по клику раскрывается со списком фич и кнопкой «Выбрать». Открыта может
  * быть только одна карточка одновременно (управляется родителем).
+ *
+ * Если покупка сожжёт остаток текущей подписки (`loss`), над кнопками висит
+ * предупреждение, а первый клик по оплате только спрашивает подтверждение
+ * (`confirmAction`) — платит второй.
  */
 function PlanCard({
   plan,
@@ -49,9 +56,12 @@ function PlanCard({
   busy,
   balance,
   expanded,
+  loss,
+  confirmAction,
   onToggle,
   onBuy,
   onBuyBalance,
+  onCancelConfirm,
 }: {
   plan: PlanOfferResponse;
   days: number | null;
@@ -59,9 +69,12 @@ function PlanCard({
   busy: boolean;
   balance: number;
   expanded: boolean;
+  loss: ChangeLoss;
+  confirmAction: ConfirmAction | null;
   onToggle: () => void;
   onBuy: () => void;
   onBuyBalance: () => void;
+  onCancelConfirm: () => void;
 }) {
   const t = useT();
   const { can } = useBranding();
@@ -87,6 +100,7 @@ function PlanCard({
 
   return (
     <div
+      id={`plan-${plan.public_code}`}
       className={clsx(
         "overflow-hidden rounded-2xl border transition-all duration-200",
         expanded
@@ -153,7 +167,51 @@ function PlanCard({
             ))}
           </ul>
 
-          {canBuy && <button
+          {/* Предупреждение до клика: сколько сгорит, видно раньше, чем кнопка оплаты. */}
+          {loss && !confirmAction && (canBuy || canPayBalance) && (
+            <p className="mt-4 flex gap-2 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs text-fg">
+              <AlertTriangle className="mt-px h-4 w-4 shrink-0 text-warning" />
+              <span>
+                {loss.kind === "days"
+                  ? t("billing.changeWarn", { days: loss.days })
+                  : t("billing.changeWarnLifetime")}
+              </span>
+            </p>
+          )}
+
+          {/* Подтверждение прямо в карточке, а не window.confirm: оплата идёт и из
+              Telegram Mini App, где системный диалог ведёт себя по-своему. Пока оно
+              открыто, обычные кнопки оплаты спрятаны — «да» здесь единственный путь. */}
+          {confirmAction && (
+            <div className="mt-4 rounded-xl border border-warning/40 bg-warning/10 p-3">
+              <p className="flex gap-2 text-sm text-fg">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                <span>
+                  {loss?.kind === "days"
+                    ? t("billing.changeConfirm", { days: loss.days })
+                    : t("billing.changeWarnLifetime")}
+                </span>
+              </p>
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                <button
+                  onClick={confirmAction === "balance" ? onBuyBalance : onBuy}
+                  disabled={busy}
+                  className="btn-gradient inline-flex h-11 flex-1 items-center justify-center rounded-xl px-5 text-sm font-semibold text-white transition-all active:scale-[0.98] disabled:opacity-60"
+                >
+                  {busy ? t("billing.goingToPay") : t("billing.changeConfirmYes")}
+                </button>
+                <button
+                  onClick={onCancelConfirm}
+                  disabled={busy}
+                  className="inline-flex h-11 flex-1 items-center justify-center rounded-xl border border-border-subtle bg-bg-subtle px-5 text-sm font-medium text-fg-muted transition-all hover:border-border disabled:opacity-60"
+                >
+                  {t("common.cancel")}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {canBuy && !confirmAction && <button
             onClick={onBuy}
             disabled={busy || !price}
             className="btn-gradient mt-4 inline-flex h-11 w-full items-center justify-center rounded-xl px-5 text-sm font-semibold text-white transition-all active:scale-[0.98] disabled:opacity-60"
@@ -161,7 +219,7 @@ function PlanCard({
             {busy ? t("billing.goingToPay") : t("billing.select")}
           </button>}
 
-          {canPayBalance && (
+          {canPayBalance && !confirmAction && (
             <button
               onClick={onBuyBalance}
               disabled={busy}
@@ -181,9 +239,10 @@ export default function BillingPage() {
   const t = useT();
   const { appearance } = useBranding();
   // Тех-работы: оплата ограничена (галка в оформлении).
-  const payBlocked =
-    appearance?.maintenance === true &&
-    appearance?.maintenance_block_payments !== false;
+  const payBlocked = paymentsBlocked(appearance);
+  // `?plan=&days=` — ссылка из блока «Нужно больше устройств?»: раскрыть тариф и
+  // выбрать срок. Только предвыбор, оплату ссылка не запускает.
+  const [searchParams] = useSearchParams();
   const [offers, setOffers] = useState<SubscriptionOffersResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -195,6 +254,10 @@ export default function BillingPage() {
   const [balance, setBalance] = useState(0);
   // Аккордеон: раскрыта не больше одной карточки тарифа одновременно.
   const [expandedCode, setExpandedCode] = useState<string | null>(null);
+  // Ждёт подтверждения смены тарифа: какая карточка и какой кнопкой платим.
+  const [confirm, setConfirm] = useState<{ code: string; action: ConfirmAction } | null>(null);
+  // К какой карточке прокрутить после загрузки (один раз, из ссылки).
+  const scrollToCode = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -204,7 +267,12 @@ export default function BillingPage() {
       setOffers(data);
       if (data.gateways.length > 0) setSelectedGateway(data.gateways[0]!.gateway_type);
       const firstDuration = data.plans[0]?.durations[0]?.days ?? null;
-      setSelectedDays(firstDuration);
+      const preselect = readBillingPreselect(searchParams, data);
+      setSelectedDays(preselect.days ?? firstDuration);
+      if (preselect.code) {
+        setExpandedCode(preselect.code);
+        scrollToCode.current = preselect.code;
+      }
     } catch (e) {
       setError(e instanceof ApiError ? e.detail : t("billing.errLoad"));
     } finally {
@@ -222,6 +290,37 @@ export default function BillingPage() {
     load();
   }, [load]);
 
+  // Прокрутка к тарифу из ссылки — когда карточки уже на странице.
+  useEffect(() => {
+    const code = scrollToCode.current;
+    if (isLoading || !offers || !code) return;
+    scrollToCode.current = null;
+    const el = document.getElementById(`plan-${code}`);
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [isLoading, offers]);
+
+  // Подтверждение относится к конкретной цене: сменили срок, шлюз или карточку —
+  // спрашиваем заново, иначе «да» ушло бы за другую сумму.
+  useEffect(() => {
+    setConfirm(null);
+  }, [selectedDays, selectedGateway, expandedCode]);
+
+  /**
+   * Первый клик по оплате тарифа, который сожжёт остаток, только спрашивает.
+   * true — можно платить; false — показали подтверждение и ждём второго клика.
+   */
+  const confirmed = (plan: PlanOfferResponse, action: ConfirmAction): boolean => {
+    const loss = offers ? changeLoss(offers, plan) : null;
+    if (loss && !(confirm?.code === plan.public_code && confirm.action === action)) {
+      setConfirm({ code: plan.public_code, action });
+      return false;
+    }
+    setConfirm(null);
+    return true;
+  };
+
   // Доступные сроки (объединение по всем тарифам).
   const termDays = useMemo(() => {
     const set = new Set<number>();
@@ -232,6 +331,7 @@ export default function BillingPage() {
   const handlePurchase = async (plan: PlanOfferResponse) => {
     if (payBlocked) return;
     if (!selectedDays || !selectedGateway) return;
+    if (!confirmed(plan, "gateway")) return;
     setPurchasingCode(plan.public_code);
     setPurchaseError(null);
     try {
@@ -262,6 +362,7 @@ export default function BillingPage() {
   const handleBuyBalance = async (plan: PlanOfferResponse) => {
     if (payBlocked) return;
     if (!selectedDays || !selectedGateway) return;
+    if (!confirmed(plan, "balance")) return;
     setPurchasingCode(plan.public_code);
     setPurchaseError(null);
     try {
@@ -409,11 +510,14 @@ export default function BillingPage() {
             busy={purchasingCode === plan.public_code}
             balance={balance}
             expanded={expandedCode === plan.public_code}
+            loss={changeLoss(offers, plan)}
+            confirmAction={confirm?.code === plan.public_code ? confirm.action : null}
             onToggle={() =>
               setExpandedCode((c) => (c === plan.public_code ? null : plan.public_code))
             }
             onBuy={() => handlePurchase(plan)}
             onBuyBalance={() => handleBuyBalance(plan)}
+            onCancelConfirm={() => setConfirm(null)}
           />
         ))}
       </div>
