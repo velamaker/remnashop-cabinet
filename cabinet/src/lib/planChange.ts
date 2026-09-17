@@ -5,7 +5,9 @@ import type { PaymentGatewayType, PlanOfferResponse, SubscriptionOffersResponse 
  * Смена тарифа: что будет с остатком текущей подписки.
  *
  * ЗАЧЕМ. У нашего бэкенда смена тарифа (CHANGE) пересчитывает остаток в дни нового
- * тарифа по цене дня (`plan_change_keeps_days: true`, числа — в `plan_change_carry`).
+ * тарифа по цене дня (`plan_change_carry_active: true`, числа — в `plan_change_carry`).
+ * `plan_change_keeps_days` — флаг для старых сборок: там он false, как только что-то
+ * пропадает, чтобы старая сборка предупредила.
  * Если перенос выключен, смена начинает срок С НУЛЯ, и остаток сгорает; у бессрочной
  * подписки «навсегда» превращается в выбранный срок. Страница оплаты честно пишет,
  * что произойдёт, и просит подтвердить, только когда что-то пропадает.
@@ -25,7 +27,15 @@ export type ChangeLoss = { kind: "days"; days: number } | { kind: "lifetime" } |
  *  - null — терять нечего или бэкенд не сообщил условия.
  */
 export type ChangeTerms =
-  | { kind: "carry"; left: number; bonus: number; lost: number; samePlan?: boolean }
+  | {
+      kind: "carry";
+      left: number;
+      bonus: number;
+      lost: number;
+      samePlan?: boolean;
+      // cap — упор в предел переноса; иначе — цена прежних дней неизвестна.
+      lostReason?: string | null;
+    }
   | { kind: "lifetime" }
   | { kind: "days"; days: number }
   | null;
@@ -54,10 +64,11 @@ export function changeTerms(
   days: number | null,
   currency: string | null,
 ): ChangeTerms {
-  if (typeof offers.plan_change_keeps_days !== "boolean") return null;
+  const carryActive = offers.plan_change_carry_active === true;
+  if (typeof offers.plan_change_keeps_days !== "boolean" && !carryActive) return null;
   if (plan.recommended_purchase_type !== "CHANGE") return null;
-  // Перенос выключен — прежнее правило: остаток сгорает.
-  if (!offers.plan_change_keeps_days) return changeLoss(offers, plan);
+  // Перенос выключен (или бэкенд без таблицы) — прежнее правило по старому флагу.
+  if (!carryActive) return changeLoss(offers, plan);
   if (offers.current_is_unlimited === true) return { kind: "lifetime" };
   if (offers.current_is_trial === true) return null;
   // Резерв и «нечего переносить» (истекла, удалена) — молчим.
@@ -77,8 +88,9 @@ export function changeTerms(
   if (entry.mode === "none") return null;
   const bonus = Math.max(0, Math.floor(entry.bonus_days));
   const lost = Math.max(0, Math.floor(entry.lost_days));
-  if (entry.mode === "same_plan") return { kind: "carry", left, bonus, lost, samePlan: true };
-  return { kind: "carry", left, bonus, lost };
+  const lostReason = lost > 0 ? (entry.capped ? "cap" : (entry.lost_reason ?? "old_price")) : null;
+  if (entry.mode === "same_plan") return { kind: "carry", left, bonus, lost, samePlan: true, lostReason };
+  return { kind: "carry", left, bonus, lost, lostReason };
 }
 
 /** Спрашивать ли подтверждение перед оплатой: только когда что-то пропадает. */

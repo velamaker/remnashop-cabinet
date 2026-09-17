@@ -205,7 +205,9 @@ export function DeviceUpsellCard({
           )}
           {terms?.kind === "carry" && terms.lost > 0 && (
             <p className="mt-2 rounded-lg border border-warning/40 bg-warning/10 px-2.5 py-1.5 text-xs text-fg">
-              {t("billing.changeCarryLost", { bonus: terms.bonus, lost: terms.lost })}
+              {terms.lostReason === "cap"
+                ? t("billing.changeCarryLostCap", { bonus: terms.bonus, lost: terms.lost })
+                : t("billing.changeCarryLost", { bonus: terms.bonus, lost: terms.lost })}
             </p>
           )}
           <Link

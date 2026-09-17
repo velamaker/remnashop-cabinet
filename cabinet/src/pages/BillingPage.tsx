@@ -186,7 +186,9 @@ function PlanCard({
                   {terms.kind === "days"
                     ? t("billing.changeWarn", { days: terms.days })
                     : terms.kind === "carry"
-                      ? t("billing.changeCarryLost", { bonus: terms.bonus, lost: terms.lost })
+                      ? terms.lostReason === "cap"
+                        ? t("billing.changeCarryLostCap", { bonus: terms.bonus, lost: terms.lost })
+                        : t("billing.changeCarryLost", { bonus: terms.bonus, lost: terms.lost })
                       : t("billing.changeWarnLifetime")}
                 </span>
               </p>

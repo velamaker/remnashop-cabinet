@@ -194,6 +194,7 @@ const carryEntry = (code: string, days: number, bonus: number, lost = 0): PlanCh
 const carrying = (entries: PlanChangeCarryEntry[], over: Partial<SubscriptionOffersResponse> = {}) =>
   offers(showcase(), {
     plan_change_keeps_days: true,
+    plan_change_carry_active: true,
     carry_mode: "carry",
     current_days_left: 29,
     plan_change_carry: entries,
@@ -233,6 +234,17 @@ describe("BillingPage: перенос остатка — с первого кл�
 
     fireEvent.click(yesButton()!);
     await waitFor(() => expect(purchase).toHaveBeenCalledTimes(1));
+  });
+
+  it("упор в предел: текст про предел переноса, а не «цена неизвестна»; подтверждение", async () => {
+    open(carrying([{ ...carryEntry("DUO2", 30, 3650, 964), capped: true, lost_reason: "cap" }], { plan_change_keeps_days: false }));
+    await expand("DUO2");
+    expect(document.body.textContent).toContain(ru("billing.changeCarryLostCap", { bonus: 3650, lost: 964 }));
+    expect(document.body.textContent).not.toContain(ru("billing.changeCarryLost", { bonus: 3650, lost: 964 }));
+    fireEvent.click(selectButton()!);
+    await act(async () => {});
+    expect(purchase).not.toHaveBeenCalled();
+    expect(yesButton()).not.toBeNull();
   });
 
   it("смена срока 30 → 90 меняет число в тексте", async () => {

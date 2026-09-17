@@ -102,7 +102,13 @@ const carrying = (
   entries: PlanChangeCarryEntry[],
   over: Partial<SubscriptionOffersResponse> = {},
 ): SubscriptionOffersResponse =>
-  offers([duo, mine], { plan_change_keeps_days: true, carry_mode: "carry", plan_change_carry: entries, ...over });
+  offers([duo, mine], {
+    plan_change_keeps_days: true,
+    plan_change_carry_active: true,
+    carry_mode: "carry",
+    plan_change_carry: entries,
+    ...over,
+  });
 
 describe("changeTerms: что будет с остатком при смене", () => {
   it("условий нет («Бедолага») — null для любого срока и валюты", () => {
@@ -110,10 +116,11 @@ describe("changeTerms: что будет с остатком при смене",
     expect(changeTerms(o, duo, 30, "RUB")).toBeNull();
     expect(changeTerms(o, duo, 90, "USD")).toBeNull();
     expect(changeTerms(o, duo, null, null)).toBeNull();
-    // Даже если остальные поля на месте: без флага кабинет перенос не обещает.
-    const noFlag = carrying([entry("DUO2", 30, 14)]);
-    delete noFlag.plan_change_keeps_days;
-    expect(changeTerms(noFlag, duo, 30, "RUB")).toBeNull();
+    // Даже если таблица на месте: без флага активного переноса кабинет её не читает —
+    // старый флаг keeps_days=false означает «сгорит».
+    const noFlag = carrying([entry("DUO2", 30, 14)], { plan_change_keeps_days: false });
+    delete noFlag.plan_change_carry_active;
+    expect(changeTerms(noFlag, duo, 30, "RUB")).toEqual({ kind: "days", days: 29 });
   });
 
   it("перенос выключен — прежнее «сгорит» и «навсегда»", () => {
@@ -125,13 +132,13 @@ describe("changeTerms: что будет с остатком при смене",
 
   it("перенос: запись по тарифу, сроку и валюте — без подтверждения", () => {
     const t = changeTerms(carrying([entry("DUO2", 30, 14)]), duo, 30, "RUB");
-    expect(t).toEqual({ kind: "carry", left: 29, bonus: 14, lost: 0 });
+    expect(t).toEqual({ kind: "carry", left: 29, bonus: 14, lost: 0, lostReason: null });
     expect(needsConfirm(t)).toBe(false);
   });
 
   it("другой срок — своя запись; валюта без записи — честное «сгорит» с подтверждением", () => {
     const o = carrying([entry("DUO2", 30, 14), entry("DUO2", 90, 45)]);
-    expect(changeTerms(o, duo, 90, "RUB")).toEqual({ kind: "carry", left: 29, bonus: 45, lost: 0 });
+    expect(changeTerms(o, duo, 90, "RUB")).toEqual({ kind: "carry", left: 29, bonus: 45, lost: 0, lostReason: null });
     const usd = changeTerms(o, duo, 30, "USD");
     expect(usd).toEqual({ kind: "days", days: 29 });
     expect(needsConfirm(usd)).toBe(true);
@@ -139,10 +146,10 @@ describe("changeTerms: что будет с остатком при смене",
 
   it("часть перенести нельзя — подтверждение; бонус 0 без потерь — без подтверждения", () => {
     const lost = changeTerms(carrying([entry("DUO2", 30, 11, { lost_days: 3 })]), duo, 30, "RUB");
-    expect(lost).toEqual({ kind: "carry", left: 29, bonus: 11, lost: 3 });
+    expect(lost).toEqual({ kind: "carry", left: 29, bonus: 11, lost: 3, lostReason: "old_price" });
     expect(needsConfirm(lost)).toBe(true);
     const small = changeTerms(carrying([entry("DUO2", 30, 0)]), duo, 30, "RUB");
-    expect(small).toEqual({ kind: "carry", left: 29, bonus: 0, lost: 0 });
+    expect(small).toEqual({ kind: "carry", left: 29, bonus: 0, lost: 0, lostReason: null });
     expect(needsConfirm(small)).toBe(false);
   });
 
@@ -168,7 +175,7 @@ describe("changeTerms: что будет с остатком при смене",
 
   it("тот же тариф — 1:1; нет цены срока — «сгорит»; новый бессрочный — молчим", () => {
     const same = changeTerms(carrying([entry("DUO2", 30, 29, { mode: "same_plan" })]), duo, 30, "RUB");
-    expect(same).toEqual({ kind: "carry", left: 29, bonus: 29, lost: 0, samePlan: true });
+    expect(same).toEqual({ kind: "carry", left: 29, bonus: 29, lost: 0, samePlan: true, lostReason: null });
     expect(needsConfirm(same)).toBe(false);
     expect(changeTerms(carrying([entry("DUO2", 30, 0, { mode: "unpriced", lost_days: 29 })]), duo, 30, "RUB")).toEqual({
       kind: "days",
@@ -181,6 +188,26 @@ describe("changeTerms: что будет с остатком при смене",
     expect(homeAllows({ kind: "carry", left: 5, bonus: 3, lost: 0 })).toBe(true);
     expect(homeAllows({ kind: "carry", left: 29, bonus: 3, lost: 8 })).toBe(false);
     expect(homeAllows({ kind: "carry", left: 29, bonus: 3, lost: 7 })).toBe(true);
+  });
+
+  it("упор в предел — причина cap, чтобы текст не говорил «цена неизвестна»", () => {
+    const capped = changeTerms(carrying([entry("DUO2", 30, 3650, { lost_days: 964, capped: true, lost_reason: "cap" })]), duo, 30, "RUB");
+    expect(capped).toEqual({ kind: "carry", left: 29, bonus: 3650, lost: 964, lostReason: "cap" });
+  });
+
+  it("старая сборка и новая при потере говорят одно: сгорит / подтвердите", () => {
+    // Бэкенд при любой потере отдаёт keeps_days=false — старая сборка (только changeLoss)
+    // предупреждает; новая читает таблицу и тоже требует подтверждения.
+    const o = carrying([entry("DUO2", 30, 11, { lost_days: 3 })], { plan_change_keeps_days: false });
+    expect(changeLoss(o, duo)).toEqual({ kind: "days", days: 29 });
+    expect(needsConfirm(changeTerms(o, duo, 30, "RUB"))).toBe(true);
+    // Бессрочная и возврат — тоже.
+    const life = carrying([], { plan_change_keeps_days: false, carry_mode: "lifetime", current_is_unlimited: true, current_days_left: null });
+    expect(changeLoss(life, duo)).toEqual({ kind: "lifetime" });
+    expect(changeTerms(life, duo, 30, "RUB")).toEqual({ kind: "lifetime" });
+    const refund = carrying([], { plan_change_keeps_days: false, carry_mode: "refund" });
+    expect(changeLoss(refund, duo)).toEqual({ kind: "days", days: 29 });
+    expect(changeTerms(refund, duo, 30, "RUB")).toEqual({ kind: "days", days: 29 });
   });
 
   it("currencyOf — валюта выбранного шлюза", () => {

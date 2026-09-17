@@ -161,6 +161,9 @@ export interface PlanChangeCarryEntry {
   lost_days: number;
   capped?: boolean;
   extras_lost?: number;
+  // Почему часть дней не перенесётся: cap — упор в предел переноса; old_price — цена
+  // прежних дней неизвестна; new_price — у срока нет цены.
+  lost_reason?: "cap" | "old_price" | "new_price" | string | null;
 }
 
 export interface SubscriptionOffersResponse {
@@ -168,10 +171,9 @@ export interface SubscriptionOffersResponse {
   plans: PlanOfferResponse[];
   has_current_subscription: boolean;
   current_subscription_status: string | null;
-  // Условия смены тарифа (CHANGE). Шлёт только наш бэкенд. true — остаток переносится
-  // по цене дня (сколько — в plan_change_carry); false — перенос выключен, смена
-  // начинает срок с нуля. Поля нет (чужой бэкенд, старая сборка) — кабинет не
-  // предупреждает и смену тарифа сам не предлагает.
+  // Условия смены тарифа (CHANGE). Шлёт только наш бэкенд. Флаг для СТАРЫХ сборок:
+  // true — ничего не пропадёт (они не предупреждают); false — что-то сгорит или перенос
+  // выключен. Поля нет (чужой бэкенд) — кабинет не предупреждает и смену сам не предлагает.
   plan_change_keeps_days?: boolean;
   // Полные оставшиеся сутки (на паузе — сохранённый остаток); null у бессрочной.
   current_days_left?: number | null;
@@ -183,6 +185,8 @@ export interface SubscriptionOffersResponse {
   carry_mode?: string | null;
   // Записи только при carry_mode = carry и только для тарифов со сменой.
   plan_change_carry?: PlanChangeCarryEntry[] | null;
+  // Перенос включён и условия посчитаны — текущий кабинет берёт их из plan_change_carry.
+  plan_change_carry_active?: boolean | null;
 }
 
 export interface PurchaseRequest {

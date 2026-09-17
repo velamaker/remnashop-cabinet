@@ -223,7 +223,8 @@ describe("DeviceUpsellCard на Главной", () => {
 describe("DeviceUpsellCard: перенос остатка по цене дня", () => {
   const carrying = (lost: number, days = 29) =>
     offers(showcase(), {
-      plan_change_keeps_days: true,
+      plan_change_keeps_days: lost === 0,
+      plan_change_carry_active: true,
       carry_mode: "carry",
       current_days_left: days,
       plan_change_carry: [
