@@ -800,6 +800,167 @@ async def revoke_extra_device(
     }
 
 
+# ─── Докупленный трафик (карточка пользователя) ───────────────────────────────
+
+
+@router.get("/user/{user_id}/extra-traffic")
+@inject
+async def user_extra_traffic(
+    user_id: int,
+    admin: AdminUser,
+    session: FromDishka[AsyncSession],
+) -> dict[str, Any]:
+    """Журнал докупок трафика: прибавки и заказы. PREVIEW-админу суммы не показываем."""
+    hide_money = is_readonly_admin(admin)
+    grants = [
+        {
+            "id": int(r[0]),
+            "subscription_id": int(r[1]),
+            "status": r[2],
+            "gb": int(r[3] or 0),
+            "strategy": r[4],
+            "granted_at": r[5].isoformat() if r[5] else None,
+            "ends_at": r[6].isoformat() if r[6] else None,
+            "end_reason": r[7],
+        }
+        for r in (
+            await session.execute(
+                text(
+                    "SELECT id, subscription_id, status, gb, strategy, granted_at, ends_at, "
+                    "end_reason FROM extra_traffic_grants WHERE user_id = :uid "
+                    "ORDER BY created_at DESC LIMIT 50"
+                ),
+                {"uid": user_id},
+            )
+        ).all()
+    ]
+    orders = [
+        {
+            "id": int(r[0]),
+            "status": r[1],
+            "source": r[2],
+            "gb": int(r[3] or 0),
+            "amount": None if hide_money else float(r[4]),
+            "created_at": r[5].isoformat() if r[5] else None,
+            "reason": r[6],
+            "grant_id": r[7],
+        }
+        for r in (
+            await session.execute(
+                text(
+                    "SELECT id, status, source, gb, amount, created_at, reason, grant_id "
+                    "FROM extra_traffic_orders WHERE user_id = :uid ORDER BY created_at DESC LIMIT 50"
+                ),
+                {"uid": user_id},
+            )
+        ).all()
+    ]
+    return {"grants": grants, "orders": orders}
+
+
+class RevokeExtraTrafficRequest(BaseModel):
+    # Решение владельца Р-4: по умолчанию НЕ возвращаем, кнопка спрашивает каждый раз.
+    refund: bool = False
+
+
+@router.post("/user/{user_id}/extra-traffic/{grant_id}/revoke")
+@inject
+async def revoke_extra_traffic(
+    user_id: int,
+    grant_id: int,
+    body: RevokeExtraTrafficRequest,
+    admin: AdminUser,
+    session: FromDishka[AsyncSession],
+    remnawave: FromDishka[Remnawave],
+    transaction_dao: FromDishka[TransactionDao],
+) -> dict[str, Any]:
+    """Отозвать докупленный трафик: снять объём и (по желанию) вернуть ₽ на баланс.
+
+    Лимит считаем тем же правилом, что и крон, — «тариф + оставшиеся прибавки», чтобы
+    ручная щедрость владельца (лимит выше тарифного) не пропала вместе с докупкой.
+
+    Возврат — ПОЛНОЙ суммой заказа, а не «непрожитой частью»: у трафика нет времени,
+    за которое можно посчитать долю, — есть только объём. Делить его по остатку
+    расхода значило бы лезть в панель за расходом посреди операции отзыва.
+    """
+    from src.infrastructure.services import overlay_extra_traffic as extra
+
+    st = await extra.lock_state(session, user_id)
+    grant = next((g for g in st.grants if g.id == grant_id), None)
+    if grant is None:
+        await session.rollback()
+        raise HTTPException(status_code=404, detail="Действующая докупка трафика не найдена")
+
+    from decimal import Decimal
+
+    refunded = None
+    if body.refund:
+        refunded = (
+            await session.execute(
+                text(
+                    "SELECT coalesce(sum(amount), 0) FROM extra_traffic_orders "
+                    "WHERE grant_id = :gid AND status = 'applied'"
+                ),
+                {"gid": grant_id},
+            )
+        ).scalar()
+        refunded = Decimal(str(refunded or 0))
+
+    await session.execute(
+        text(
+            "UPDATE extra_traffic_grants SET status = 'revoked', end_reason = 'admin_revoke', "
+            "ended_at = now() WHERE id = :id AND status = 'active'"
+        ),
+        {"id": grant_id},
+    )
+    if refunded is not None and refunded > 0:
+        await session.execute(
+            text("UPDATE users SET cabinet_balance = cabinet_balance + :a WHERE id = :u"),
+            {"a": refunded, "u": user_id},
+        )
+        # Возврат — отдельной строкой в transactions, а не только прибавкой к балансу.
+        # Без неё деньги «возвращены», а в выручке покупка стоит целиком: отчёты
+        # показывали бы доход, которого уже нет.
+        await transaction_dao.create(
+            TransactionDto(
+                payment_id=uuid4(),
+                user_id=user_id,
+                status=TransactionStatus.REFUNDED,
+                purchase_type=PurchaseType.NEW,
+                gateway_type=_first_rub_gateway_type(st),
+                gateway_display_name="Возврат · трафик",
+                pricing=PriceDetailsDto(
+                    original_amount=refunded, discount_percent=0, final_amount=refunded
+                ),
+                currency=Currency.RUB,
+                plan_snapshot=extra.synthetic_snapshot(grant.gb, 1),
+            )
+        )
+    active_after = sum(
+        g.gb for g in st.grants if g.subscription_id == st.sub_id and g.id != grant_id
+    )
+    target = extra.target_limit(
+        st.traffic_limit, st.plan_traffic_limit, active_after, grant.gb
+    )
+    try:
+        if target != st.traffic_limit:
+            from src.core.utils.converters import gb_to_bytes
+
+            await extra.set_traffic_limit(
+                session, getattr(remnawave, "sdk", None), st, gb_to_bytes(target)
+            )
+    except extra.PanelRejected as exc:
+        await session.rollback()
+        raise HTTPException(status_code=502, detail=f"Панель не приняла лимит: {exc}") from exc
+    # Ручной commit: overlay-ручки живут вне UoW базы (память admin-endpoints-commit).
+    await session.commit()
+    return {
+        "success": True,
+        "traffic_limit_gb": target,
+        "refunded": float(refunded) if refunded is not None else None,
+    }
+
+
 # ─── Смена сквада (internal/external) — тумблер членства ──────────────────────
 
 

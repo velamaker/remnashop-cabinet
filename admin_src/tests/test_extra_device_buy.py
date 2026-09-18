@@ -628,7 +628,13 @@ async def test_bot_button_appears_only_when_the_limit_is_full(monkeypatch):
 
     monkeypatch.setattr(menu, "devices_getter", base_getter)
     raw = getattr(menu.devices_getter_overlay, "__dishka_orig_func__", menu.devices_getter_overlay)
-    data = await raw(session=FakeSession(log), config=FakeAppConfig(), user=SimpleNamespace(id=USER_ID))
+    # Имена параметров под @inject НАРОЧНО с префиксом: одноимённые `session`/`config`
+    # спорят с kwargs самого aiogram_dialog (падение окна «Устройства» 18.09).
+    data = await raw(
+        _extra_session=FakeSession(log),
+        _extra_config=FakeAppConfig(),
+        user=SimpleNamespace(id=USER_ID),
+    )
     assert data["extra_device_button"] is True
     assert data["extra_device_url"] == "https://cabinet.example.test/devices"
     assert data["extra_device_text"] == menu.EXTRA_DEVICE_BUY_TEXT
@@ -643,7 +649,13 @@ async def test_bot_button_is_absent_when_places_are_free(monkeypatch):
 
     monkeypatch.setattr(menu, "devices_getter", base_getter)
     raw = getattr(menu.devices_getter_overlay, "__dishka_orig_func__", menu.devices_getter_overlay)
-    data = await raw(session=FakeSession(log), config=FakeAppConfig(), user=SimpleNamespace(id=USER_ID))
+    # Имена параметров под @inject НАРОЧНО с префиксом: одноимённые `session`/`config`
+    # спорят с kwargs самого aiogram_dialog (падение окна «Устройства» 18.09).
+    data = await raw(
+        _extra_session=FakeSession(log),
+        _extra_config=FakeAppConfig(),
+        user=SimpleNamespace(id=USER_ID),
+    )
     assert data["extra_device_button"] is False
 
 
@@ -663,7 +675,9 @@ async def test_bot_button_never_breaks_the_window(monkeypatch):
 
     monkeypatch.setattr(menu, "devices_getter", base_getter)
     raw = getattr(menu.devices_getter_overlay, "__dishka_orig_func__", menu.devices_getter_overlay)
-    data = await raw(session=Broken(), config=FakeAppConfig(), user=SimpleNamespace(id=USER_ID))
+    data = await raw(
+        _extra_session=Broken(), _extra_config=FakeAppConfig(), user=SimpleNamespace(id=USER_ID)
+    )
     assert data["extra_device_button"] is False
 
 

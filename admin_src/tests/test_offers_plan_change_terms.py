@@ -262,9 +262,10 @@ async def test_offers_use_frozen_remaining():
 async def test_freeze_lookup_failure_keeps_showcase_and_says_unknown():
     session = FakeSession(fail=True)
     resp = await call_offers(session, subscription(days=10.2))
-    # Два независимых вспомогательных чтения (пауза и докупленные устройства), у
-    # каждого свой откат: витрина — единственный путь к покупке и падать не должна.
-    assert session.rollbacks == 2
+    # Три независимых вспомогательных чтения (пауза, докупленные устройства и
+    # докупленный трафик), у каждого свой откат: витрина — единственный путь к
+    # покупке и падать не должна ни из-за одного из них.
+    assert session.rollbacks == 3
     assert resp.current_days_left == 10
     assert resp.current_frozen is None
     # Про докупленные места ничего не знаем — значит и кабинету не обещаем.

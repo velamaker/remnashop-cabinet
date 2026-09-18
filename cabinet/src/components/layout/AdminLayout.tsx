@@ -89,6 +89,7 @@ export const navGroups: { title: string; items: NavItem[] }[] = [
       { to: "/admin/gateways", icon: Wallet, label: "Шлюзы", section: "gateways" },
       { to: "/admin/topup", icon: Coins, label: "Пополнение", section: "settings" },
       { to: "/admin/extra-device", icon: MonitorSmartphone, label: "Докупка устройств", section: "settings" },
+      { to: "/admin/extra-traffic", icon: Gauge, label: "Докупка трафика", section: "settings" },
       { to: "/admin/reserve", icon: Umbrella, label: "Резервный доступ", section: "settings" },
       { to: "/admin/freeze", icon: Snowflake, label: "Заморозка", section: "settings" },
     ],

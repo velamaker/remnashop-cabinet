@@ -95,6 +95,7 @@ export const FEATURE_NEEDS_BOT: Partial<Record<FeatureKey, BotCap>> = {
 export const PAGE_NEEDS_BOT: Readonly<Record<string, BotCap>> = {
   "/admin/renewal-discount": "renewal_discount",
   "/admin/extra-device": "extra_device",
+  "/admin/extra-traffic": "extra_traffic",
 };
 
 /** Что показать на прямом заходе по адресу спрятанной страницы. */

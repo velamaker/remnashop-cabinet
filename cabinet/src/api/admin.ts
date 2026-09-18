@@ -1298,6 +1298,82 @@ export const extraDeviceAdminApi = {
     adminApi.put<{ config: ExtraDeviceConfig; effective_enabled: boolean }>("/extra-device", data),
 };
 
+// ---------- Докупка трафика ----------
+
+/** Докупленный трафик в карточке пользователя: что действует и что уже кончилось. */
+export interface AdminExtraTrafficGrant {
+  id: number;
+  subscription_id: number;
+  status: string;
+  gb: number;
+  strategy: string;
+  granted_at: string | null;
+  /** null — стратегия без обновления трафика: прибавка живёт до продления. */
+  ends_at: string | null;
+  end_reason: string | null;
+}
+
+export interface AdminExtraTrafficOrder {
+  id: number;
+  status: string;
+  source: string;
+  gb: number;
+  /** null — админ только для просмотра: суммы ему замаскированы. */
+  amount: number | null;
+  created_at: string | null;
+  reason: string | null;
+  grant_id: number | null;
+}
+
+export interface ExtraTrafficConfig {
+  enabled: boolean;
+  gb_per_purchase: number;
+  /** null — цена не задана, продажи закрыты даже при включённом тумблере. */
+  price_rub: number | null;
+  min_amount_rub: number;
+  show_from_percent: number;
+  min_hours_left: number;
+  max_gb_per_window: number;
+  notify_users: boolean;
+  notify_admins: boolean;
+  notify_limited: boolean;
+  refund_on_revoke: boolean;
+}
+
+/** Шаг между соседними тарифами за 30 дней: ориентир цены, а не сама цена. */
+export interface ExtraTrafficPriceHint {
+  from_gb: number;
+  to_gb: number;
+  diff_30d_rub: number;
+  device_diff: number;
+}
+
+export interface ExtraTrafficAdminResponse {
+  config: ExtraTrafficConfig;
+  effective_enabled: boolean;
+  hint: ExtraTrafficPriceHint[];
+  /** Какие стратегии обновления трафика вообще встречаются у активных подписок. */
+  strategies: { strategy: string; subscriptions: number }[];
+  /** Есть подписки с ежедневным или еженедельным обновлением — окно короткое. */
+  short_window: boolean;
+  summary: {
+    applied_30d?: number;
+    gb_30d?: number;
+    /** null — админ только для просмотра: суммы ему замаскированы. */
+    amount_30d?: number | null;
+    rejected_30d?: number;
+    credited_open?: number;
+    active_grants?: number;
+    active_gb?: number;
+  };
+}
+
+export const extraTrafficAdminApi = {
+  get: () => adminApi.get<ExtraTrafficAdminResponse>("/extra-traffic"),
+  update: (data: ExtraTrafficConfig) =>
+    adminApi.put<{ config: ExtraTrafficConfig; effective_enabled: boolean }>("/extra-traffic", data),
+};
+
 // ---------- Месячный дайджест пользователю ----------
 
 export interface DigestConfig {
@@ -1698,6 +1774,17 @@ export const subscriptionsAdminApi = {
     adminApi.post<{ success: boolean; device_limit: number; refunded: number | null }>(
       `/subscriptions/user/${userId}/extra-devices/${slotId}/revoke`,
       { refund_unused },
+    ),
+  extraTraffic: (userId: number) =>
+    adminApi.get<{ grants: AdminExtraTrafficGrant[]; orders: AdminExtraTrafficOrder[] }>(
+      `/subscriptions/user/${userId}/extra-traffic`,
+    ),
+  // `refund` спрашивается КАЖДЫЙ раз и по умолчанию выключен (решение владельца):
+  // отзыв прибавки — это его решение о деньгах, а не побочный эффект кнопки.
+  revokeExtraTraffic: (userId: number, grantId: number, refund = false) =>
+    adminApi.post<{ success: boolean; traffic_limit_gb: number; refunded: number | null }>(
+      `/subscriptions/user/${userId}/extra-traffic/${grantId}/revoke`,
+      { refund },
     ),
   squadToggle: (userId: number, squad_id: string, external = false) =>
     adminApi.post<{ success: boolean }>(`/subscriptions/user/${userId}/squad-toggle`, { squad_id, external }),
