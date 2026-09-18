@@ -29,6 +29,7 @@ import { ServerStatusCard } from "@/components/ServerStatusCard";
 import { DeviceUpsellCard } from "@/components/DeviceUpsellCard";
 import { ExtraTrafficOffer } from "@/components/ExtraTrafficOffer";
 import { offerView, shouldAskOffer, DEFAULT_SHOW_FROM_PERCENT } from "@/lib/extraTraffic";
+import { serverShare, serverShareLabel } from "@/lib/serverShare";
 import { useBranding } from "@/contexts/BrandingContext";
 import { formatBytes, formatTrafficLimit, trafficLimitBytes, formatDate, daysUntil } from "@/lib/format";
 import { Flag } from "@/components/Flag";
@@ -59,6 +60,7 @@ export default function HomePage() {
   const [refEarned, setRefEarned] = useState<number | null>(null);
   const [favServer, setFavServer] = useState<{ name: string; country_code: string; total: number } | null>(null);
   const [servers, setServers] = useState<{ name: string; country_code: string; total: number }[]>([]);
+  const serversTotal = servers.reduce((acc, n) => acc + n.total, 0);
   const [trialError, setTrialError] = useState<string | null>(null);
   const [activating, setActivating] = useState(false);
   const [countdown, setCountdown] = useState(REFRESH_SECONDS);
@@ -416,7 +418,7 @@ export default function HomePage() {
                   <span className="truncate">{favServer.name}</span>
                 </p>
                 <p className="tabular mt-0.5 text-xs text-fg-subtle">
-                  {t("home.per30days", { value: formatBytes(favServer.total) })}
+                  {t("home.per30days", { value: serverShareLabel(favServer.total, serversTotal) })}
                 </p>
               </>
             ) : (
@@ -458,15 +460,14 @@ export default function HomePage() {
           </div>
           <div className="flex flex-col gap-3">
             {servers.map((n, i) => {
-              const max = Math.max(...servers.map((s) => s.total), 1);
-              const pct = Math.round((n.total / max) * 100);
+              const pct = serverShare(n.total, serversTotal);
               return (
                 <div key={i} className="flex items-center gap-3">
                   <CountryFlag code={n.country_code} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
                       <span className="truncate text-sm font-medium text-fg">{n.name}</span>
-                      <span className="tabular shrink-0 text-xs text-fg-subtle">{formatBytes(n.total)}</span>
+                      <span className="tabular shrink-0 text-xs text-fg-subtle">{serverShareLabel(n.total, serversTotal)}</span>
                     </div>
                     <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-bg-raised">
                       <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
