@@ -228,6 +228,15 @@ async def call_offers(session: FakeSession, sub: Any, *, loader=None, plans=None
         carry.load_carry_state = original
 
 
+async def test_offers_report_extra_devices_of_current_row():
+    """Докупленные места витрина считает по своей строке подписки — для BillingPage."""
+    session = FakeSession(row=(1, datetime(2026, 10, 1, tzinfo=timezone.utc)))
+    resp = await call_offers(session, subscription(days=20))
+    assert resp.current_extra_devices == 1
+    assert resp.current_extra_until == "2026-10-01T00:00:00+00:00"
+    assert any("extra_device_slots" in q for q in session.sql)
+
+
 async def test_offers_report_days_left_for_active_subscription():
     session = FakeSession(row=None)
     resp = await call_offers(session, subscription(days=29.5))
@@ -253,9 +262,14 @@ async def test_offers_use_frozen_remaining():
 async def test_freeze_lookup_failure_keeps_showcase_and_says_unknown():
     session = FakeSession(fail=True)
     resp = await call_offers(session, subscription(days=10.2))
-    assert session.rollbacks == 1
+    # Два независимых вспомогательных чтения (пауза и докупленные устройства), у
+    # каждого свой откат: витрина — единственный путь к покупке и падать не должна.
+    assert session.rollbacks == 2
     assert resp.current_days_left == 10
     assert resp.current_frozen is None
+    # Про докупленные места ничего не знаем — значит и кабинету не обещаем.
+    assert resp.current_extra_devices is None
+    assert resp.current_extra_until is None
 
 
 async def test_offers_without_subscription_leave_terms_empty():

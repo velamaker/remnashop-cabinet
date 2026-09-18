@@ -468,6 +468,11 @@ async def run_reserve(
                 "  SELECT 1 FROM transactions t "
                 "  WHERE t.user_id = u.id AND t.status = 'COMPLETED' "
                 "    AND t.is_test = false "
+                # Правило владельца — «резерв только после ПОКУПКИ». Пополнение баланса,
+                # подарок и докупка устройства идут синтетическим снимком (id < 0): без
+                # этого фильтра резерв возобновлялся бы по кругу за 40 ₽ и вовсе без
+                # покупки подписки.
+                "    AND (t.plan_snapshot->>'id')::int > 0 "
                 # COALESCE с -infinity: выдач не было — значит годится любая оплата.
                 "    AND t.created_at > COALESCE("
                 "      (SELECT max(r.granted_at) FROM reserve_grants r WHERE r.user_id = u.id),"

@@ -130,7 +130,7 @@ async def unfreeze(
     fr = (
         await session.execute(
             text(
-                "SELECT remna_uuid, remaining_seconds FROM subscription_freezes "
+                "SELECT remna_uuid, remaining_seconds, frozen_at FROM subscription_freezes "
                 "WHERE user_id = :uid AND active = true"
             ),
             {"uid": user.id},
@@ -138,7 +138,9 @@ async def unfreeze(
     ).first()
     if not fr:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Подписка не на паузе")
-    remna_uuid, remaining = fr
+    # frozen_at читаем ЗДЕСЬ же: на нём держится сдвиг конца докупленного места —
+    # срок подписки уезжает вперёд на длину паузы, и слот обязан уехать вместе с ним.
+    remna_uuid, remaining, frozen_at = fr
 
     sdk = getattr(remnawave, "sdk", None)
     if sdk is None:
@@ -158,5 +160,10 @@ async def unfreeze(
         text("UPDATE subscription_freezes SET active = false WHERE user_id = :uid"),
         {"uid": user.id},
     )
+    # В ТОЙ ЖЕ транзакции, что снятие паузы: иначе рестарт между ними оставил бы
+    # докупленное место с концом «как будто паузы не было» — человек потерял бы дни.
+    from src.infrastructure.services.overlay_extra_device import shift_on_unfreeze
+
+    await shift_on_unfreeze(session, user.id, frozen_at)
     await session.commit()
     return {"frozen": False, "expire_at": new_expire.isoformat()}

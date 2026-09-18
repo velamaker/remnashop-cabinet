@@ -78,6 +78,34 @@ run_alembic >/dev/null
 [ "$(q "SELECT to_regclass('plan_change_carryovers')::text")" = "plan_change_carryovers" ] || fail "plan_change_carryovers не создана"
 [ "$(q "SELECT count(*) FROM pg_constraint WHERE conrelid = to_regclass('plan_change_carryovers') AND contype = 'u'")" = "1" ] || fail "у plan_change_carryovers нет UNIQUE по payment_id"
 [ "$(q "SELECT count(*) FROM pg_constraint WHERE conrelid = to_regclass('plan_change_carryovers') AND contype = 'f' AND confrelid = to_regclass('users')")" = "1" ] || fail "у plan_change_carryovers нет FK на users"
+# 0011: докупка +1 устройства. UNIQUE по request_id держит идемпотентность кнопки
+# (двойной клик = один слот), UNIQUE по payment_id — идемпотентность вебхука, а
+# частичные индексы — выборки крона (что кончается и какие заказы ещё открыты).
+[ "$(q "SELECT to_regclass('extra_device_slots')::text")" = "extra_device_slots" ] || fail "extra_device_slots не создана"
+[ "$(q "SELECT to_regclass('extra_device_orders')::text")" = "extra_device_orders" ] || fail "extra_device_orders не создана"
+[ "$(q "SELECT count(*) FROM pg_constraint WHERE conrelid = to_regclass('extra_device_orders') AND contype = 'u'")" = "2" ] || fail "у extra_device_orders нет UNIQUE по request_id и payment_id"
+[ "$(q "SELECT count(*) FROM pg_constraint WHERE conrelid = to_regclass('extra_device_slots') AND contype = 'f' AND confrelid = to_regclass('users')")" = "1" ] || fail "у extra_device_slots нет FK на users"
+[ "$(q "SELECT count(*) FROM pg_constraint WHERE conrelid = to_regclass('extra_device_orders') AND contype = 'f' AND confrelid = to_regclass('users')")" = "1" ] || fail "у extra_device_orders нет FK на users"
+[ "$(q "SELECT count(*) FROM pg_indexes WHERE tablename='extra_device_slots' AND indexname='ix_eds_active_end' AND indexdef LIKE '%status%active%'")" = "1" ] || fail "нет частичного индекса ix_eds_active_end"
+[ "$(q "SELECT count(*) FROM pg_indexes WHERE tablename='extra_device_orders' AND indexname='ix_edo_open' AND indexdef LIKE '%pending%'")" = "1" ] || fail "нет частичного индекса ix_edo_open"
+# Несколько заказов с баланса живут без payment_id-двойников, но NULL'ов может быть много.
+docker exec "$PG" psql -U remnashop -d remnashop -q -c "
+  INSERT INTO users (telegram_id) VALUES (901) ON CONFLICT DO NOTHING;
+  INSERT INTO extra_device_orders (request_id, source, kind, user_id, subscription_id, status,
+    amount, price_per_30d, cov_start, period_end)
+    SELECT gen_random_uuid(), 'balance', 'new', id, 1, 'applied', 10, 100, now(), now() + interval '1 day'
+    FROM users LIMIT 1;
+  INSERT INTO extra_device_orders (request_id, source, kind, user_id, subscription_id, status,
+    amount, price_per_30d, cov_start, period_end)
+    SELECT gen_random_uuid(), 'balance', 'new', id, 1, 'applied', 10, 100, now(), now() + interval '1 day'
+    FROM users LIMIT 1;" >/dev/null 2>&1 || fail "0011: два заказа без payment_id не прошли (UNIQUE ловит NULL?)"
+[ "$(q "SELECT count(*) FROM extra_device_orders")" = "2" ] || fail "0011: заказы без payment_id не записались"
+docker exec "$PG" psql -U remnashop -d remnashop -q -c "
+  INSERT INTO extra_device_orders (request_id, source, kind, user_id, subscription_id, status,
+    amount, price_per_30d, cov_start, period_end)
+    SELECT gen_random_uuid(), 'balance', 'bogus', id, 1, 'applied', 10, 100, now(), now() + interval '1 day'
+    FROM users LIMIT 1;" >/dev/null 2>&1 && fail "0011: CHECK по kind не сработал"
+docker exec "$PG" psql -U remnashop -d remnashop -q -c "TRUNCATE extra_device_orders;" >/dev/null
 [ "$(q "SELECT version_num FROM alembic_version_overlay")" = "$HEAD" ] || fail "версия != $HEAD"
 [ "$(q "SELECT count(*) FROM information_schema.columns WHERE table_name='users' AND column_name='cabinet_balance'")" = "1" ] || fail "users.cabinet_balance нет"
 CREATED="$(q "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")"

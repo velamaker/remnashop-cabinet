@@ -384,6 +384,11 @@ async def compute_metrics(session: AsyncSession) -> dict[str, Any]:
                     WHERE t.status::text = 'COMPLETED' AND t.is_test = false AND t.user_id NOT IN (SELECT su.id FROM users su WHERE su.role::text <> 'USER')
                       AND t.currency::text = 'RUB'
                       AND (t.pricing->>'final_amount')::numeric > 0
+                      -- Только ТАРИФНЫЕ платежи: у пополнения, подарка и докупки
+                      -- устройства снимок синтетический (id < 0), и их сумма, делённая
+                      -- на срок подписки, занижала бы MRR тем сильнее, чем мельче
+                      -- покупка. Топ тарифов и скидка на продление фильтруют так же.
+                      AND (t.plan_snapshot->>'id')::int > 0
                     ORDER BY t.user_id, t.created_at DESC
                 )
                 SELECT coalesce(sum(l.amt * 30.0 / a.dur), 0) AS mrr, count(*) AS n

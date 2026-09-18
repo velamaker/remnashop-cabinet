@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common import Remnawave
+from src.infrastructure.services.overlay_extra_device import shift_on_unfreeze
 from src.infrastructure.services.overlay_freeze import load_config
 from src.infrastructure.services.overlay_push import notify_user_push
 from src.infrastructure.taskiq.broker import broker
@@ -39,7 +40,8 @@ async def run_freeze_autoresume(
     rows = (
         await session.execute(
             text(
-                "SELECT f.user_id, f.remna_uuid, f.remaining_seconds, lower(u.language::text) "
+                "SELECT f.user_id, f.remna_uuid, f.remaining_seconds, lower(u.language::text), "
+                "f.frozen_at "
                 "FROM subscription_freezes f JOIN users u ON u.id = f.user_id "
                 "WHERE f.active = true AND f.frozen_at < now() - make_interval(days => :d)"
             ),
@@ -52,7 +54,7 @@ async def run_freeze_autoresume(
     from remnapy.models import UpdateUserRequestDto
 
     resumed = 0
-    for uid, remna_uuid, remaining, lang in rows:
+    for uid, remna_uuid, remaining, lang, frozen_at in rows:
         new_expire = datetime.now(timezone.utc) + timedelta(seconds=int(remaining))
         try:
             await sdk.users.update_user(UpdateUserRequestDto(uuid=str(remna_uuid), expire_at=new_expire))
@@ -63,6 +65,8 @@ async def run_freeze_autoresume(
         await session.execute(
             text("UPDATE subscription_freezes SET active = false WHERE user_id = :u"), {"u": uid}
         )
+        # Конец докупленного места едет вместе со сроком подписки — в той же транзакции.
+        await shift_on_unfreeze(session, uid, frozen_at)
         await session.commit()
         resumed += 1
         await notify_user_push(

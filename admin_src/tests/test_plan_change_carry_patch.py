@@ -1,5 +1,9 @@
 """Перенос остатка при смене тарифа: оркестровка зачисления на подделках.
 
+ЗДЕСЬ ЖЕ проверяется стык с докупкой устройства: её стоимость приходит слоями
+`extras`, а сами места гасятся в ТОЙ ЖЕ транзакции — перенос, записанный без гашения,
+посчитал бы их второй раз при следующей смене.
+
 ЧТО ЗАПИРАЕМ. Формулу запирает test_plan_change_carry_math.py. Здесь — порядок
 денежного пути в правке `PurchaseSubscription._execute` (plan_change_carryover.py):
 
@@ -70,14 +74,19 @@ class Log(list):
 
 
 class FakeResult:
-    def __init__(self, row: Optional[tuple]) -> None:
+    def __init__(self, row: Optional[tuple], rows: Optional[list] = None) -> None:
         self.row = row
+        self.rows = rows if rows is not None else ([row] if row is not None else [])
 
     def first(self) -> Optional[tuple]:
         return self.row
 
     def scalar(self) -> Any:
         return self.row[0] if self.row else None
+
+    def all(self) -> list:
+        # Докупка устройства читает и гасит слоты пачкой (RETURNING id).
+        return self.rows
 
 
 class FakeNested:

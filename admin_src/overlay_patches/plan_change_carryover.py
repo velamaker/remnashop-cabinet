@@ -9,6 +9,12 @@
 подписки, которая не триал, при включённом выключателе. Всё прочее (NEW, триал,
 выключено) уходит в нетронутую базу.
 
+ДОКУПЛЕННЫЕ УСТРОЙСТВА. Их ёмкость при смене тарифа сгорает — лимит ставит новый
+тариф, — но неиспользованная стоимость не пропадает: она приходит сюда слоями
+`extras` и считается той же чистой функцией, что и дни. Слоты гасим в ТОЙ ЖЕ
+транзакции, что и выдачу: перенос, записанный без гашения, посчитал бы их второй раз
+при следующей смене.
+
 RENEW ЧУЖОГО ТАРИФА. Счёт на продление создан, пока человек был на тарифе A, а оплачен
 после смены на B с переносом. База такой счёт не сверяет: `max(срок, now) + срок A` и
 снимок тарифа A поверх срока, набранного переносом в дни B, — дешёвые дни превращаются
@@ -239,6 +245,7 @@ async def change_with_carryover(
         state = None
         try:
             async with self.session.begin_nested():
+                extras = await _device_extras(self.session, user.id, row.id, now)
                 state = await carry.load_carry_state(
                     self.session,
                     user_id=user.id,
@@ -246,6 +253,7 @@ async def change_with_carryover(
                     now=now,
                     exclude_payment_id=transaction.payment_id,
                     extra_plan_ids=(plan.id,),
+                    extras=extras,
                 )
         except Exception as exc:  # noqa: BLE001
             logger.exception(f"{actor.log} carry: состояние не загрузилось — выдаю без переноса")
@@ -327,7 +335,21 @@ async def change_with_carryover(
             logger.exception(f"{actor.log} carry: запись журнала не удалась — выдача продолжается")
             outcome["record_error"] = f"{type(exc).__name__}: {exc}"
 
-        # 8. Скидка на покупку погашается, как у базы (на этом держатся кроны скидок).
+        # 8. Докупленные устройства старой строки сгорают: лимит уже ставит новый тариф.
+        # В ТОЙ ЖЕ транзакции — иначе перенос записан, а слоты живы, и следующая смена
+        # посчитала бы их стоимость второй раз. SAVEPOINT: таблиц может не быть.
+        try:
+            async with self.session.begin_nested():
+                burned = await _burn_device_slots(self.session, row.id, result)
+                if burned:
+                    logger.info(
+                        f"{actor.log} extra_device: сгорело мест при смене тарифа: {burned}"
+                    )
+        except Exception as exc:  # noqa: BLE001 — выдача уже оплачена
+            logger.exception(f"{actor.log} extra_device: слоты не погашены ({exc})")
+            outcome["device_burn_error"] = f"{type(exc).__name__}: {exc}"
+
+        # 9. Скидка на покупку погашается, как у базы (на этом держатся кроны скидок).
         if user.purchase_discount:
             user.purchase_discount = 0
             await self.user_dao.update(user)
@@ -347,6 +369,56 @@ async def change_with_carryover(
         f"mode={result.mode} left={result.remaining_days} bonus=+{result.added_days} "
         f"lost={result.lost_days}"
     )
+
+
+def _extra() -> Any:
+    """Сервис докупки — лениво, по той же причине, что и сервис переноса (см. _carry)."""
+    from src.infrastructure.services import overlay_extra_device
+
+    return overlay_extra_device
+
+
+# Точка отсчёта «уже прожито» для докупленных мест: на паузе срок стоит, и считать
+# израсходованной надо часть до момента паузы, а не до «сейчас».
+FROZEN_AT_SQL = "SELECT frozen_at FROM subscription_freezes WHERE user_id = :uid AND active = true"
+
+
+async def _device_extras(session: Any, user_id: int, subscription_id: int, now: Any) -> tuple:
+    """Стоимость действующих докупленных мест → слои `extras` расчёта переноса.
+
+    Ошибку не глотаем: вызывающий SAVEPOINT уже ловит сбой загрузки состояния и
+    выдаёт без переноса, сказав об этом владельцу.
+    """
+    extra = _extra()
+    carry = _carry()
+    orders = await extra.load_carry_orders(session, subscription_id)
+    if not orders:
+        return ()
+    frozen = (await session.execute(carry.text(FROZEN_AT_SQL), {"uid": user_id})).scalar()
+    ref = frozen or now
+    return tuple(
+        carry.ParallelLayer(
+            amount=amount,
+            currency=currency,
+            total_seconds=total,
+            remaining_seconds=remaining,
+            ref="device",
+        )
+        for amount, currency, total, remaining in extra.carry_layers(orders, ref)
+    )
+
+
+async def _burn_device_slots(session: Any, old_subscription_id: int, result: Any) -> int:
+    """Погасить слоты старой строки, записав, сколько ₽ ушло в дни."""
+    extra = _extra()
+    carried = None
+    breakdown = getattr(result, "breakdown", ()) or ()
+    moved = [b for b in breakdown if b.get("kind") == "device" and b.get("converted")]
+    if moved:
+        from decimal import Decimal
+
+        carried = sum((Decimal(str(b.get("amount") or 0)) for b in moved), Decimal(0))
+    return await extra.burn_for_change(session, old_subscription_id, carried)
 
 
 async def _pause_and_reserve(carry: Any, session: Any, user_id: int, state: Any) -> tuple[Any, Any]:

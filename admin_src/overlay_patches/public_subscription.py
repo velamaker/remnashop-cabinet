@@ -180,6 +180,13 @@ class SubscriptionOffersOverlayResponse(SubscriptionOffersResponse):
     plan_change_carry: Optional[list[PlanChangeCarryEntry]] = None
     # Перенос включён и состояние загружено — новый кабинет берёт условия из таблицы.
     plan_change_carry_active: Optional[bool] = None
+    # Докупленные места под устройства ТЕКУЩЕЙ подписки: сколько их, каков полный лимит
+    # сейчас и до когда живёт ближайшее. Нужны, чтобы страница оплаты честно сказала,
+    # что при смене тарифа места не переходят, а их стоимость идёт днями. None —
+    # «не знаем» (чужой бэкенд или сбой чтения), и тогда кабинет молчит.
+    current_device_limit: Optional[int] = None
+    current_extra_devices: Optional[int] = None
+    current_extra_until: Optional[str] = None
 
 
 def plan_change_terms(
@@ -960,6 +967,11 @@ async def get_subscription_offers(
         if not frozen_known:
             terms["current_frozen"] = None
 
+    if current_subscription:
+        # Докупленные места — отдельным чтением в SAVEPOINT: витрина единственный путь
+        # к покупке, и отсутствующая таблица (порядок выкатки) не должна её ронять.
+        terms.update(await _extra_device_terms(session, user, current_subscription))
+
     keeps_days = False
     if current_subscription:
         keeps_days, carry_terms = await _carry_terms(
@@ -981,6 +993,31 @@ async def get_subscription_offers(
         plan_change_keeps_days=keeps_days,
         **terms,
     )
+
+
+async def _extra_device_terms(session, user, current_subscription) -> dict:
+    """Сколько мест докуплено к текущей подписке и до когда. Сбой — пустой словарь."""
+    try:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT count(*), min(ends_at) FROM extra_device_slots "
+                    "WHERE user_id = :uid AND subscription_id = :sid AND status = 'active'"
+                ),
+                {"uid": user.id, "sid": current_subscription.id},
+            )
+        ).first()
+        count = int(rows[0] or 0) if rows else 0
+        until = rows[1] if rows else None
+        return {
+            "current_device_limit": int(getattr(current_subscription, "device_limit", 0) or 0),
+            "current_extra_devices": count,
+            "current_extra_until": until.isoformat() if until is not None else None,
+        }
+    except Exception as e:  # noqa: BLE001
+        await session.rollback()
+        logger.warning(f"offers: докупленные устройства user_id={user.id} не прочитаны ({e})")
+        return {}
 
 
 def _unique_currencies(gateways: list) -> list[Currency]:

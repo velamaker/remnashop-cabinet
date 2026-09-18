@@ -34,8 +34,7 @@ CABINET_CAPABILITIES: tuple[str, ...] = (
     "refunds_tile",
     "ad_link_url",
     "plan_change_carry",
-    # Следом — докупка +1 устройства: токен "extra_device" встаёт сюда вместе с
-    # ручками /subscription/extra-device и /admin/extra-device.
+    "extra_device",
 )
 
 # Заметные изменения ТОЛЬКО в боте — кабинета не касаются, но при «только кабинет»

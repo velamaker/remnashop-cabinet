@@ -84,13 +84,16 @@ async def get_user_subscription(
     user_id: int,
     _admin: AdminUser,
     subscription_dao: FromDishka[SubscriptionDao],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     sub = await subscription_dao.get_current(user_id)
     all_subs = await subscription_dao.get_all_by_user(user_id)
-    return {
-        "current": _sub_to_dict(sub) if sub else None,
-        "history": [_sub_to_dict(s) for s in all_subs[:20]],
-    }
+    current = _sub_to_dict(sub) if sub else None
+    if current and sub is not None:
+        # Откуда взялся лимит устройств: сколько даёт тариф и сколько докуплено.
+        # Без этого админ видит «Устройств: 4» и не понимает, что одно из них временное.
+        current.update(await _extra_device_summary(session, user_id, sub))
+    return {"current": current, "history": [_sub_to_dict(s) for s in all_subs[:20]]}
 
 
 # ─── Extend subscription ─────────────────────────────────────────────────────
@@ -520,6 +523,9 @@ class TrafficLimitRequest(BaseModel):
 
 class DeviceLimitRequest(BaseModel):
     device_limit: int  # 0 = безлимит
+    # Ставим значение ниже «тариф + докупленные» только с явного согласия админа:
+    # иначе правка в карточке молча отняла бы у человека оплаченное место.
+    revoke_extras: bool = False
 
 
 @router.post("/user/{user_id}/traffic-limit")
@@ -545,13 +551,211 @@ async def set_device_limit(
     body: DeviceLimitRequest,
     admin: AdminUser,
     update_device_limit: FromDishka[UpdateDeviceLimit],
+    session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
+    value = max(0, body.device_limit)
+    floor, slots = await _extras_floor(session, user_id)
+    if slots and value > 0 and value < floor and not body.revoke_extras:
+        until = min(s["ends_at"] for s in slots)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Докуплено +{len(slots)} устр. до {until.strftime('%d.%m.%Y')}. "
+                f"Отменить докупку и поставить {value}?"
+            ),
+        )
+    if slots and body.revoke_extras and value < floor:
+        await session.execute(
+            text(
+                "UPDATE extra_device_slots SET status = 'revoked', end_reason = 'admin_limit', "
+                "ended_at = now() WHERE id = ANY(:ids)"
+            ),
+            {"ids": [s["id"] for s in slots]},
+        )
+        # Ручной commit: overlay-ручки живут вне UoW базы (память admin-endpoints-commit).
+        await session.commit()
     await _run_user_action(
         update_device_limit._execute(
-            admin, UpdateDeviceLimitDto(user_id=user_id, device_limit=max(0, body.device_limit))
+            admin, UpdateDeviceLimitDto(user_id=user_id, device_limit=value)
         )
     )
     return {"success": True}
+
+
+# ─── Докупленные места под устройства (карточка пользователя) ─────────────────
+
+
+async def _extras_floor(session: AsyncSession, user_id: int) -> tuple[int, list[dict[str, Any]]]:
+    """Ниже какого лимита нельзя опускать, и какие места этому мешают.
+
+    Пол — «тарифный лимит + действующие докупки»: ровно то, что считает крон. Сбой
+    чтения (таблиц ещё нет) — пол 0 и пустой список: правка лимита не должна падать.
+    """
+    try:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT e.id, e.ends_at, (s.plan_snapshot->>'device_limit')::int "
+                    "FROM extra_device_slots e "
+                    "JOIN subscriptions s ON s.id = e.subscription_id "
+                    "JOIN users u ON u.current_subscription_id = s.id "
+                    "WHERE e.user_id = :uid AND u.id = :uid AND e.status = 'active' "
+                    "ORDER BY e.ends_at"
+                ),
+                {"uid": user_id},
+            )
+        ).all()
+    except Exception:  # noqa: BLE001
+        await session.rollback()
+        return 0, []
+    if not rows:
+        return 0, []
+    plan_limit = int(rows[0][2] or 0)
+    slots = [{"id": int(r[0]), "ends_at": r[1]} for r in rows]
+    return plan_limit + len(slots), slots
+
+
+async def _extra_device_summary(
+    session: AsyncSession, user_id: int, sub: SubscriptionDto
+) -> dict[str, Any]:
+    plan_limit = getattr(sub.plan_snapshot, "device_limit", None) if sub.plan_snapshot else None
+    try:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT count(*), min(ends_at) FROM extra_device_slots "
+                    "WHERE user_id = :uid AND subscription_id = :sid AND status = 'active'"
+                ),
+                {"uid": user_id, "sid": sub.id},
+            )
+        ).first()
+    except Exception:  # noqa: BLE001 — карточка важнее подписи под числом
+        await session.rollback()
+        return {"plan_device_limit": plan_limit}
+    return {
+        "plan_device_limit": plan_limit,
+        "extra_devices_active": int(row[0] or 0) if row else 0,
+        "extra_until": row[1].isoformat() if row and row[1] is not None else None,
+    }
+
+
+@router.get("/user/{user_id}/extra-devices")
+@inject
+async def user_extra_devices(
+    user_id: int,
+    admin: AdminUser,
+    session: FromDishka[AsyncSession],
+) -> dict[str, Any]:
+    """Журнал докупок человека: места и заказы. PREVIEW-админу суммы не показываем."""
+    hide_money = is_readonly_admin(admin)
+    slots = [
+        {
+            "id": int(r[0]),
+            "subscription_id": int(r[1]),
+            "status": r[2],
+            "starts_at": r[3].isoformat() if r[3] else None,
+            "ends_at": r[4].isoformat() if r[4] else None,
+            "end_reason": r[5],
+            "devices_removed": int(r[6] or 0),
+        }
+        for r in (
+            await session.execute(
+                text(
+                    "SELECT id, subscription_id, status, starts_at, ends_at, end_reason, "
+                    "devices_removed FROM extra_device_slots WHERE user_id = :uid "
+                    "ORDER BY created_at DESC LIMIT 50"
+                ),
+                {"uid": user_id},
+            )
+        ).all()
+    ]
+    orders = [
+        {
+            "id": int(r[0]),
+            "status": r[1],
+            "kind": r[2],
+            "source": r[3],
+            "amount": None if hide_money else float(r[4]),
+            "created_at": r[5].isoformat() if r[5] else None,
+            "reason": r[6],
+            "slot_id": r[7],
+        }
+        for r in (
+            await session.execute(
+                text(
+                    "SELECT id, status, kind, source, amount, created_at, reason, slot_id "
+                    "FROM extra_device_orders WHERE user_id = :uid ORDER BY created_at DESC LIMIT 50"
+                ),
+                {"uid": user_id},
+            )
+        ).all()
+    ]
+    return {"slots": slots, "orders": orders}
+
+
+class RevokeExtraRequest(BaseModel):
+    refund_unused: bool = False
+
+
+@router.post("/user/{user_id}/extra-devices/{slot_id}/revoke")
+@inject
+async def revoke_extra_device(
+    user_id: int,
+    slot_id: int,
+    body: RevokeExtraRequest,
+    admin: AdminUser,
+    session: FromDishka[AsyncSession],
+    remnawave: FromDishka[Remnawave],
+) -> dict[str, Any]:
+    """Отменить докупку: снять место и (по желанию) вернуть неиспользованную стоимость.
+
+    Лимит считаем тем же правилом, что и крон, — «тариф + оставшиеся места», чтобы
+    ручная щедрость владельца (лимит выше тарифного) не пропала вместе с докупкой.
+    """
+    from src.infrastructure.services import overlay_extra_device as extra
+
+    st = await extra.lock_state(session, user_id)
+    slot = st.slot(slot_id)
+    if slot is None:
+        await session.rollback()
+        raise HTTPException(status_code=404, detail="Действующая докупка не найдена")
+
+    orders = [
+        o
+        for o in await extra.load_carry_orders(session, slot.subscription_id)
+        if o.get("slot_id") == slot_id
+    ]
+    # Возврат — вниз до копейки: округление в пользу магазина здесь неуместно, но и
+    # дарить лишнее незачем. Считается той же функцией, что и перенос при смене тарифа.
+    refunded = extra.unused_value(orders, datetime.now(timezone.utc)) if body.refund_unused else None
+
+    await session.execute(
+        text(
+            "UPDATE extra_device_slots SET status = 'revoked', end_reason = 'admin_revoke', "
+            "ended_at = now() WHERE id = :id AND status = 'active'"
+        ),
+        {"id": slot_id},
+    )
+    if refunded is not None and refunded > 0:
+        await session.execute(
+            text("UPDATE users SET cabinet_balance = cabinet_balance + :a WHERE id = :u"),
+            {"a": refunded, "u": user_id},
+        )
+    active_after = len([s for s in st.slots if s.subscription_id == st.sub_id and s.id != slot_id])
+    target = extra.target_limit(st.device_limit, st.plan_device_limit, active_after, 1, False)
+    try:
+        if target != st.device_limit:
+            await extra.set_limit(session, getattr(remnawave, "sdk", None), st, target)
+    except extra.PanelRejected as exc:
+        await session.rollback()
+        raise HTTPException(status_code=502, detail=f"Панель не приняла лимит: {exc}") from exc
+    # Ручной commit: overlay-ручки живут вне UoW базы (память admin-endpoints-commit).
+    await session.commit()
+    return {
+        "success": True,
+        "device_limit": target,
+        "refunded": float(refunded) if refunded is not None else None,
+    }
 
 
 # ─── Смена сквада (internal/external) — тумблер членства ──────────────────────
