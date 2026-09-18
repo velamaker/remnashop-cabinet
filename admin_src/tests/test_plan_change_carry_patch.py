@@ -760,3 +760,108 @@ async def test_refund_transition_not_matched_no_alert(monkeypatch):
 
 async def test_refund_of_unrelated_payment_no_alert(monkeypatch):
     assert raw_texts(await refund(monkeypatch, TransactionStatus.COMPLETED, [])) == []
+
+
+# ── стык с докупкой устройства ───────────────────────────────────────────────
+
+
+async def test_bought_device_slots_burn_in_the_same_transaction(spies):
+    """Места сгорают ДО commit выдачи.
+
+    Иначе перенос записан, а места живы: следующая смена тарифа посчитала бы их
+    стоимость второй раз — деньги, которые магазин уже отдал днями.
+    """
+    world = World(days_left=29).build()
+    await execute(world)
+    names = world.log.names()
+    burn = [
+        q
+        for n, q in world.log
+        if n == "sql" and "extra_device_slots" in str(q) and "'burned'" in str(q)
+    ]
+    assert burn, "слоты докупки не погашены при смене тарифа"
+    assert "change" in burn[0]
+    assert names.index("sql") < names.index("commit")
+    # Гасим слоты СТАРОЙ строки: новую только что создали, её мест ещё нет.
+    burn_params = [p for n, p in world.log if n == "lock"]
+    assert burn_params, "замок не брался"
+
+
+async def test_device_value_comes_in_as_parallel_layers(monkeypatch):
+    """Стоимость мест приходит слоями `extras` — той же формы, что ждёт расчёт."""
+    extra = importlib.import_module("src.infrastructure.services.overlay_extra_device")
+    orders = [
+        {
+            "amount": Decimal("90"),
+            "currency": "RUB",
+            "cov_start": NOW - timedelta(days=20),
+            "period_end": NOW + timedelta(days=10),
+            "slot_id": 1,
+        }
+    ]
+
+    async def load_orders(session, subscription_id):
+        assert subscription_id == 5
+        return orders
+
+    monkeypatch.setattr(extra, "load_carry_orders", load_orders)
+
+    class Session:
+        log = Log()
+
+        async def execute(self, stmt, params=None):
+            # Пауза: точка отсчёта «уже прожито». Здесь её нет — считаем до «сейчас».
+            return FakeResult(None)
+
+    layers = await patch_mod._device_extras(Session(), 42, 5, NOW)
+    assert len(layers) == 1
+    layer = layers[0]
+    assert isinstance(layer, carry.ParallelLayer)
+    assert layer.currency == "RUB"
+    # 90 ₽ за 30 суток, прожито 20 → остаётся треть.
+    assert Fraction(layer.amount) * layer.remaining_seconds / layer.total_seconds == Fraction(30)
+
+
+async def test_device_value_is_used_from_the_pause_moment(monkeypatch):
+    """На паузе срок стоит: прожитым считаем до момента паузы, а не до «сейчас»."""
+    extra = importlib.import_module("src.infrastructure.services.overlay_extra_device")
+    frozen_at = NOW - timedelta(days=10)
+
+    async def load_orders(session, subscription_id):
+        return [
+            {
+                "amount": Decimal("90"),
+                "currency": "RUB",
+                "cov_start": NOW - timedelta(days=20),
+                "period_end": NOW + timedelta(days=10),
+                "slot_id": 1,
+            }
+        ]
+
+    monkeypatch.setattr(extra, "load_carry_orders", load_orders)
+
+    class Session:
+        log = Log()
+
+        async def execute(self, stmt, params=None):
+            return FakeResult((frozen_at,))
+
+    layers = await patch_mod._device_extras(Session(), 42, 5, NOW)
+    assert Fraction(layers[0].amount) * layers[0].remaining_seconds / layers[0].total_seconds == Fraction(60)
+
+
+def test_extras_are_passed_into_the_calculation():
+    """Загруженные слои обязаны уехать в load_carry_state, иначе стоимость пропадёт."""
+    import ast
+    import inspect
+    import textwrap
+
+    source = textwrap.dedent(inspect.getsource(patch_mod.change_with_carryover))
+    tree = ast.parse(source)
+    calls = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "load_carry_state"
+    ]
+    assert calls, "load_carry_state больше не вызывается"
+    assert any(kw.arg == "extras" for kw in calls[0].keywords), "extras не передаются в расчёт"

@@ -58,6 +58,19 @@ def test_cron_settles_only_orders_with_a_completed_payment():
     assert "o.status IN ('pending', 'credited')" in tick.OPEN_ORDERS_SQL
 
 
+def test_reminder_is_claimed_by_the_database_not_by_the_code():
+    """Захват строки — единственное, что не даёт послать напоминание дважды.
+
+    Подделка сессии в соседнем тесте сама решает, «занял» ли проход строку, и
+    пропажу условия из UPDATE не заметит: вторым проходом крона человек получил бы
+    второе «место скоро кончится», а при двух воркерах — и два разом.
+    """
+    source = inspect.getsource(extra._claim_reminders)
+    assert "SET reminded_at = now()" in source
+    assert "reminded_at IS NULL" in source
+    assert "RETURNING id" in source
+
+
 def test_mrr_counts_only_real_plan_payments():
     """Докупка за 40 ₽ последним платежом обрушила бы MRR человека."""
     source = inspect.getsource(statistics)
