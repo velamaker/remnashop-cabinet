@@ -28,9 +28,12 @@ from dishka import FromDishka
 from dishka.integrations.aiogram_dialog import inject
 from magic_filter import F
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from src.application.common import TranslatorRunner
 
 from src.application.common.policy import Permission
+from src.core.config import AppConfig
 from src.core.constants import INLINE_QUERY_INVITE, PAYMENT_PREFIX
 from src.core.enums import BannerName
 from src.telegram.keyboards import build_buttons_row
@@ -370,6 +373,60 @@ menu = Window(
     getter=menu_getter,
 )
 
+# OVERLAY: кнопка «Докупить устройство» в окне «Устройства».
+#
+# Оплаты в боте намеренно НЕТ (решение владельца): одна кнопка-ссылка в кабинет вместо
+# второго денежного пути со звёздами и отдельным диалогом ради редкой операции. Мини-апп
+# входит по Telegram сам, платить человек будет там же, где уже платит за подписку.
+#
+# Любая ошибка — просто нет кнопки: окно «Устройства» люди открывают, когда у них что-то
+# не подключается, и падать в этот момент нельзя.
+EXTRA_DEVICE_BUY_TEXT = "➕ Докупить устройство"
+EXTRA_DEVICE_EXTEND_TEXT = "🧩 Продлить устройство"
+
+
+@inject
+async def devices_getter_overlay(
+    session: FromDishka[AsyncSession], config: FromDishka[AppConfig], **kwargs
+):
+    data = await devices_getter(**kwargs)
+    data.setdefault("extra_device_button", False)
+    data.setdefault("extra_device_text", EXTRA_DEVICE_BUY_TEXT)
+    data.setdefault("extra_device_url", "")
+    try:
+        from src.infrastructure.services import overlay_extra_device as extra
+
+        base_url = (getattr(config, "web_cabinet_url", "") or "").strip().rstrip("/")
+        cfg = extra.load_config()
+        if not base_url or not extra.effective_enabled(cfg):
+            return data
+        user = kwargs.get("user") or kwargs.get("event_from_user")
+        user_id = getattr(user, "id", None)
+        if user_id is None:
+            return data
+        st = await extra.lock_state(session, int(user_id), lock=False)
+        now = extra.now_utc()
+        can_buy = extra.eligibility(st, cfg, now, "new") is None
+        # Кнопку «Докупить» показываем только при ЗАПОЛНЕННОМ лимите: пока места есть,
+        # предлагать купить ещё одно — навязывание.
+        limit = int(data.get("max_count") or st.device_limit or 0)
+        full = limit > 0 and int(data.get("current_count") or 0) >= limit
+        extendable = next(
+            (s for s in st.slots if extra.eligibility(st, cfg, now, "extend", s.id) is None), None
+        )
+        if extendable is not None:
+            data["extra_device_button"] = True
+            data["extra_device_text"] = EXTRA_DEVICE_EXTEND_TEXT
+        elif can_buy and full:
+            data["extra_device_button"] = True
+            data["extra_device_text"] = EXTRA_DEVICE_BUY_TEXT
+        if data["extra_device_button"]:
+            data["extra_device_url"] = f"{base_url}/devices"
+    except Exception as exc:  # noqa: BLE001 — кнопки нет, окно живо
+        logger.warning(f"extra_device: кнопку в «Устройствах» не показал: {exc}")
+    return data
+
+
 devices = Window(
     Banner(BannerName.DEVICES),
     I18nFormat("msg-menu-devices"),
@@ -418,6 +475,15 @@ devices = Window(
         ),
     ),
     Row(
+        WebApp(
+            text=Format("{extra_device_text}"),
+            url=Format("{extra_device_url}"),
+            id="extra_device",
+            when=F["extra_device_button"],
+            style=Style(ButtonStyle.PRIMARY),
+        ),
+    ),
+    Row(
         SwitchTo(
             text=I18nFormat("btn-back.general"),
             id="back",
@@ -426,7 +492,7 @@ devices = Window(
     ),
     IgnoreUpdate(),
     state=MainMenu.DEVICES,
-    getter=devices_getter,
+    getter=devices_getter_overlay,
 )
 
 device_confirm_delete = Window(

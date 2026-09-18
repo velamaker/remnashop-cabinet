@@ -445,6 +445,10 @@ LOCK_STATE_SQL = (
     "WHERE u.id = :uid FOR UPDATE OF u"
 )
 
+# То же самое без замка — для показа (кнопка в боте, витрина): держать строку под
+# FOR UPDATE ради рисования кнопки незачем.
+READ_STATE_SQL = LOCK_STATE_SQL.replace(" FOR UPDATE OF u", "")
+
 ACTIVE_SLOTS_SQL = (
     "SELECT id, subscription_id, plan_id, starts_at, ends_at, last_applied_at, reminded_at "
     "FROM extra_device_slots WHERE user_id = :uid AND status = 'active' ORDER BY ends_at"
@@ -500,14 +504,18 @@ def _row_slot(row: Any) -> SlotRow:
     )
 
 
-async def lock_state(session: "AsyncSession", user_id: int) -> UserState:
+async def lock_state(session: "AsyncSession", user_id: int, *, lock: bool = True) -> UserState:
     """Замок строки человека + всё состояние сырым SQL.
 
     Сырым, а не через ORM: сессия живёт с `expire_on_commit=False`, и объект из
     identity map под замком оказался бы устаревшим — ровно тем снимком, из-за
     которого мы и не шлём в панель полное тело.
+
+    `lock=False` — только показать (кнопка в боте): менять ничего не будем, и держать
+    строку человека запертой всё время отрисовки не за что.
     """
-    row = (await session.execute(text(LOCK_STATE_SQL), {"uid": user_id})).first()
+    sql = LOCK_STATE_SQL if lock else READ_STATE_SQL
+    row = (await session.execute(text(sql), {"uid": user_id})).first()
     if row is None:
         raise ValueError(f"пользователь id={user_id} не найден")
     balance = Decimal(str(row[0] if row[0] is not None else 0))

@@ -108,8 +108,9 @@ class FakeSession:
 
     async def execute(self, stmt: Any, params: Any = None) -> FakeResult:
         sql = " ".join(str(stmt).split())
-        if "FOR UPDATE OF u" in sql:
-            self.log.append(("lock", dict(params or {})))
+        if "FROM users u LEFT JOIN subscriptions" in sql:
+            # Тот же запрос читает и покупка (под замком), и показ (без замка).
+            self.log.append(("lock" if "FOR UPDATE OF u" in sql else "read", dict(params or {})))
             return FakeResult(
                 (
                     self.balance,
@@ -595,3 +596,62 @@ async def test_offer_shows_price_and_slots():
     assert payload["gateways"][0]["gateway_type"] == PaymentGatewayType.YOOMONEY.value
     # Только чтение: замок сразу отпускаем, ничего не коммитим.
     assert session.commits == 0
+
+
+# ── кнопка в боте ────────────────────────────────────────────────────────────
+
+
+class FakeAppConfig(SimpleNamespace):
+    """Адрес кабинета приходит из конфига приложения (dishka), а не из окружения."""
+
+    def __init__(self) -> None:
+        super().__init__(web_cabinet_url="https://cabinet.example.test")
+
+
+async def test_bot_button_appears_only_when_the_limit_is_full(monkeypatch):
+    """Оплаты в боте нет — только ссылка в кабинет, и только когда мест не осталось."""
+    menu = importlib.import_module("overlay_patches.menu_dialog")
+    log = Log()
+
+    async def base_getter(**kwargs):
+        return {"current_count": 2, "max_count": 2, "devices": []}
+
+    monkeypatch.setattr(menu, "devices_getter", base_getter)
+    raw = getattr(menu.devices_getter_overlay, "__dishka_orig_func__", menu.devices_getter_overlay)
+    data = await raw(session=FakeSession(log), config=FakeAppConfig(), user=SimpleNamespace(id=USER_ID))
+    assert data["extra_device_button"] is True
+    assert data["extra_device_url"] == "https://cabinet.example.test/devices"
+    assert data["extra_device_text"] == menu.EXTRA_DEVICE_BUY_TEXT
+
+
+async def test_bot_button_is_absent_when_places_are_free(monkeypatch):
+    menu = importlib.import_module("overlay_patches.menu_dialog")
+    log = Log()
+
+    async def base_getter(**kwargs):
+        return {"current_count": 0, "max_count": 2, "devices": []}
+
+    monkeypatch.setattr(menu, "devices_getter", base_getter)
+    raw = getattr(menu.devices_getter_overlay, "__dishka_orig_func__", menu.devices_getter_overlay)
+    data = await raw(session=FakeSession(log), config=FakeAppConfig(), user=SimpleNamespace(id=USER_ID))
+    assert data["extra_device_button"] is False
+
+
+async def test_bot_button_never_breaks_the_window(monkeypatch):
+    """Окно «Устройства» открывают, когда что-то не подключается: падать тут нельзя."""
+    menu = importlib.import_module("overlay_patches.menu_dialog")
+
+    async def base_getter(**kwargs):
+        return {"current_count": 2, "max_count": 2, "devices": []}
+
+    class Broken:
+        async def execute(self, *a, **kw):
+            raise RuntimeError("relation extra_device_slots does not exist")
+
+        async def rollback(self):
+            return None
+
+    monkeypatch.setattr(menu, "devices_getter", base_getter)
+    raw = getattr(menu.devices_getter_overlay, "__dishka_orig_func__", menu.devices_getter_overlay)
+    data = await raw(session=Broken(), config=FakeAppConfig(), user=SimpleNamespace(id=USER_ID))
+    assert data["extra_device_button"] is False
