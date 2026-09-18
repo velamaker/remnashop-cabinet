@@ -76,10 +76,13 @@ def test_mrr_counts_only_real_plan_payments():
     source = inspect.getsource(statistics)
     lastpay = source[source.index("lastpay AS ("):]
     lastpay = lastpay[: lastpay.index(")\n                SELECT")]
-    assert "(t.plan_snapshot->>'id')::int > 0" in lastpay
+    # CASE, а не голый ::int: нечисловой id в снимке уронил бы весь дашборд.
+    assert "t.plan_snapshot->>'id' ~ '^-?[0-9]+$'" in lastpay
+    assert "ELSE 0 END) > 0" in lastpay
 
 
 def test_reserve_requires_a_plan_purchase():
     """Правило владельца: резерв только после ПОКУПКИ, а не после пополнения."""
     source = inspect.getsource(reserve)
-    assert "(t.plan_snapshot->>'id')::int > 0" in source
+    assert "t.plan_snapshot->>'id' ~ '^-?[0-9]+$'" in source
+    assert "ELSE 0 END) > 0" in source

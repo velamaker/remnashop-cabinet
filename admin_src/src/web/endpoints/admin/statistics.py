@@ -388,7 +388,9 @@ async def compute_metrics(session: AsyncSession) -> dict[str, Any]:
                       -- устройства снимок синтетический (id < 0), и их сумма, делённая
                       -- на срок подписки, занижала бы MRR тем сильнее, чем мельче
                       -- покупка. Топ тарифов и скидка на продление фильтруют так же.
-                      AND (t.plan_snapshot->>'id')::int > 0
+                      -- CASE, а не голый ::int: снимок пишет кто угодно (импорт, чужая
+                      -- миграция), и один нечисловой id уронил бы ВЕСЬ дашборд.
+                      AND (CASE WHEN t.plan_snapshot->>'id' ~ '^-?[0-9]+$' THEN (t.plan_snapshot->>'id')::int ELSE 0 END) > 0
                     ORDER BY t.user_id, t.created_at DESC
                 )
                 SELECT coalesce(sum(l.amt * 30.0 / a.dur), 0) AS mrr, count(*) AS n

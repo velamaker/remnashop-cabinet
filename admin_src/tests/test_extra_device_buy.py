@@ -277,6 +277,10 @@ USER = SimpleNamespace(
     email=None,
     email_verified=True,
     remna_name="rs_web_7",
+    # Синтетические поля: событие покупки собирает их у обычного платежа.
+    telegram_id=None,
+    name="Тест",
+    username=None,
 )
 
 
@@ -432,13 +436,16 @@ async def test_max_extra_blocks_third_place():
     assert "spend" not in log.names()
 
 
-async def test_expired_place_is_not_offered_again():
-    """Решение владельца: место кончилось — ведём на тариф побольше, не продаём второе."""
+async def test_expired_place_does_not_block_a_new_purchase():
+    """Решение владельца «отключить и предложить снова»: вечного запрета нет.
+
+    Кончившихся мест у человека сколько угодно — в состоянии их нет, и продажа идёт.
+    """
     log = Log()
-    session = FakeSession(log, ended_slots=1)
+    session = FakeSession(log, ended_slots=3)
     result = await call_buy(session, log)
-    assert result["reason"] == "already_used"
-    assert "spend" not in log.names()
+    assert result["result"] == "applied"
+    assert "spend" in log.names()
 
 
 # ── 7. продление места ───────────────────────────────────────────────────────
@@ -655,3 +662,38 @@ async def test_bot_button_never_breaks_the_window(monkeypatch):
     raw = getattr(menu.devices_getter_overlay, "__dishka_orig_func__", menu.devices_getter_overlay)
     data = await raw(session=Broken(), config=FakeAppConfig(), user=SimpleNamespace(id=USER_ID))
     assert data["extra_device_button"] is False
+
+
+# ── проверки после ревью ─────────────────────────────────────────────────────
+
+
+async def test_offer_does_not_hold_the_row_lock():
+    """Витрина только показывает: замок строки человека мешал бы параллельной покупке."""
+    log = Log()
+    session = FakeSession(log)
+    raw = endpoint.get_extra_device.__dishka_orig_func__
+    await raw(user=USER, session=session, payment_gateway_dao=FakeGatewayDao())
+    assert "read" in log.names(), "чтение состояния взяло замок вместо простого SELECT"
+    assert "lock" not in log.names()
+
+
+async def test_offer_tells_whether_devices_will_be_disconnected():
+    """Отключение — настройка владельца, и человек обязан знать о ней ДО оплаты."""
+    log = Log()
+    raw = endpoint.get_extra_device.__dishka_orig_func__
+    payload = await raw(user=USER, session=FakeSession(log), payment_gateway_dao=FakeGatewayDao())
+    assert payload["removes_excess"] is False  # фикстура теста выключает отключение
+
+
+async def test_gateway_outage_is_503_not_500():
+    """Шлюз не ответил — «попробуйте ещё раз», а не «у них всё сломалось»."""
+    log = Log()
+    with pytest.raises(HTTPException) as exc:
+        await call_buy(
+            FakeSession(log),
+            log,
+            pay="gateway",
+            gateway_type=PaymentGatewayType.YOOMONEY,
+            create_payment=FakeCreatePayment(log, fail=True),
+        )
+    assert exc.value.status_code == 503

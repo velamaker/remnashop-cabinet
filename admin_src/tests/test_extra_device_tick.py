@@ -9,8 +9,8 @@
     его уже поставил новый тариф;
   * напоминание за 3 дня шлётся один раз (захват `reminded_at`) и только если подписка
     переживает место;
-  * ОТКЛЮЧЕНИЕ УСТРОЙСТВ по умолчанию ВЫКЛЮЧЕНО (решение владельца), а включённое
-    трогает только подключённые ПОСЛЕ покупки места;
+  * ОТКЛЮЧЕНИЕ УСТРОЙСТВ по умолчанию ВКЛЮЧЕНО (решение владельца «отключить и
+    предложить снова») и трогает только подключённые ПОСЛЕ покупки места;
   * крон работает и при выключенных продажах: оплаченное обязано дожить свой срок;
   * пользователя нет в панели — правим только базу и не застреваем в повторах.
 
@@ -148,11 +148,11 @@ async def reconcile(session, log, *, config=None, panel=None, sdk=None, **kw):
 async def test_expired_slot_lowers_limit_by_one():
     log = Log()
     session = TickSession(log, device_limit=3, slots=(slot_row(ends=NOW - timedelta(minutes=1)),))
-    out = await reconcile(session, log)
+    out = await reconcile(session, log, config=cfg(remove_excess_devices=False))
     assert out["ended"] == [1]
     assert out["limit"] == 2
     assert dict(log[log.index_of("panel_patch")][1])["hwidDeviceLimit"] == 2
-    # По умолчанию устройства НЕ отключаем — решение владельца.
+    # Тумблер выключен — панель за устройствами не спрашиваем вовсе.
     assert "get_devices" not in log.names()
 
 
@@ -324,7 +324,12 @@ async def test_panel_failure_rolls_back_and_counts_the_attempt():
 async def test_missing_panel_user_updates_only_the_database():
     log = Log()
     session = TickSession(log, device_limit=3, slots=(slot_row(ends=NOW - timedelta(days=1)),))
-    out = await reconcile(session, log, sdk=FakeSdk(log, fail="NotFoundError: нет такого"))
+    out = await reconcile(
+        session,
+        log,
+        config=cfg(remove_excess_devices=False),
+        sdk=FakeSdk(log, fail="NotFoundError: нет такого"),
+    )
     assert out.get("panel_missing") is True
     assert out["limit"] == 2
     assert session.commits == 1
@@ -348,13 +353,22 @@ def device(hwid, created):
     return SimpleNamespace(hwid=hwid, created_at=created, updated_at=created, device_model=hwid, platform="ios")
 
 
-async def test_removal_is_off_by_default_and_marks_slot_done():
+async def test_removal_is_on_by_default():
+    """Решение владельца: без отключения место, оплаченное на неделю, работало бы вечно."""
+    assert extra.DEFAULT_CONFIG["remove_excess_devices"] is True
     log = Log()
     session = TickSession(log, device_limit=3, slots=(slot_row(ends=NOW - timedelta(days=1)),))
-    await reconcile(session, log)
-    # Слот закрыт как «убирать нечего»: removal_done = true сразу.
-    ended = log[log.index_of("end")][1]
-    assert ended["done"] is True
+    await reconcile(session, log, config=dict(extra.DEFAULT_CONFIG, enabled=True))
+    # Строка закрывается как «ещё не убрали»: отметим только после фактического снятия.
+    assert log[log.index_of("end")][1]["done"] is False
+    assert "get_devices" in log.names()
+
+
+async def test_removal_disabled_marks_the_slot_done_at_once():
+    log = Log()
+    session = TickSession(log, device_limit=3, slots=(slot_row(ends=NOW - timedelta(days=1)),))
+    await reconcile(session, log, config=cfg(remove_excess_devices=False))
+    assert log[log.index_of("end")][1]["done"] is True
     assert "delete_device" not in log.names()
 
 
@@ -396,3 +410,120 @@ def test_unpaid_pending_orders_are_never_closed():
     """Отменённый счёт оживает опоздавшей оплатой — закрытый заказ потерял бы деньги."""
     assert "JOIN transactions t ON t.payment_id = o.payment_id" in tick.OPEN_ORDERS_SQL
     assert "t.status::text = 'COMPLETED'" in tick.OPEN_ORDERS_SQL
+
+
+# ── проверки после ревью ─────────────────────────────────────────────────────
+
+
+async def test_user_without_slots_is_not_touched_at_all():
+    """Ни одного места — сводить нечего.
+
+    Сюда попадало КАЖДОЕ продление: сверка звалась из денежного пути и на человеке,
+    который в жизни ничего не докупал, дёргала лимит и коммитила сессию посреди
+    выдачи подписки.
+    """
+    log = Log()
+    session = TickSession(log, device_limit=2, slots=())
+    out = await reconcile(session, log, after_renew=True, mode="reapply_only")
+    assert out["ended"] == [] and out["burned"] == []
+    assert "panel_patch" not in log.names()
+    assert session.commits == 0
+
+
+async def test_pure_reapply_failure_counts_and_alerts():
+    """Постоянный сбой панели при восстановлении лимита не должен быть молчаливым.
+
+    Раньше счётчик неудач рос только когда что-то кончалось или сгорало: чистое
+    восстановление после продления падало вечно и без единого алерта.
+    """
+    log = Log()
+    applied = NOW - timedelta(days=5)
+    session = TickSession(
+        log, device_limit=2, plan_device_limit=2, slots=(slot_row(applied=applied),)
+    )
+    out = await reconcile(
+        session, log, after_renew=True, mode="reapply_only", sdk=FakeSdk(log, fail="панель молчит")
+    )
+    assert "error" in out
+    assert "fail_bump" in log.names(), "неудача восстановления не посчитана"
+
+
+async def test_nothing_changed_keeps_last_applied_at():
+    """Отметку «применено» двигаем только при реальном изменении.
+
+    Иначе last_applied_at уезжал вперёд каждые 15 минут и размывал признак сброса:
+    сравнение с updated_at строки подписки переставало что-либо значить.
+    """
+    log = Log()
+    session = TickSession(
+        log,
+        device_limit=3,
+        plan_device_limit=2,
+        expire_at=NOW + timedelta(days=30),
+        slots=(slot_row(ends=NOW + timedelta(days=20)),),
+    )
+    await reconcile(session, log)
+    assert "touch_slots" not in log.names()
+    assert "panel_patch" not in log.names()
+
+
+class Notifier:
+    def __init__(self, log: Log) -> None:
+        self.log = log
+
+    async def notify_admins(self, payload):
+        self.log.append(("notify_admins", payload.i18n_kwargs["content"]))
+
+    async def notify_user(self, user, payload=None, **kw):
+        self.log.append(("notify_user", payload.i18n_kwargs["content"]))
+
+
+class UserDao:
+    async def get_by_id(self, uid):
+        return SimpleNamespace(id=uid, log=f"[USER:{uid}]", language="ru")
+
+
+async def test_burned_by_subscription_change_is_reported_to_the_owner():
+    """Место, сгоревшее вместе со сменой строки подписки, — это деньги человека.
+
+    Раньше про `subscription_replaced` молчали: строку меняют выдача и промокод мимо
+    переноса остатка, и оплаченное место пропадало совсем тихо. Проверяем ОТПРАВКУ,
+    а не только текст: молчала именно ветка отчёта, а не словарь сообщений.
+    """
+    log = Log()
+    session = TickSession(log, device_limit=3, slots=(slot_row(sub_id=SUB_ID + 1),))
+    out = await reconcile(session, log)
+    assert out["burned"] == [(1, "subscription_replaced")]
+
+    report = Log()
+    await tick._report_reconcile(
+        TickSession(report), UserDao(), Notifier(report), cfg(), USER_ID, out
+    )
+    alerts = [t for n, t in report if n == "notify_admins"]
+    assert len(alerts) == 1, "владельцу не сказали про сгоревшее место"
+    assert "сменилась подписка" in alerts[0]
+
+
+async def test_burned_by_plan_change_keeps_its_own_wording():
+    """Смена ТАРИФА в той же строке — другая причина и другой текст."""
+    log = Log()
+    session = TickSession(log, device_limit=3, slots=(slot_row(plan_id=99),))
+    out = await reconcile(session, log)
+    report = Log()
+    await tick._report_reconcile(
+        TickSession(report), UserDao(), Notifier(report), cfg(), USER_ID, out
+    )
+    alerts = [t for n, t in report if n == "notify_admins"]
+    assert len(alerts) == 1 and "замене тарифа" in alerts[0]
+
+
+async def test_removal_retry_knows_when_the_place_was_bought():
+    """Повтор отключения обязан знать момент покупки.
+
+    Без него `pick_excess` не находил НИ ОДНОГО кандидата (все устройства «старые»),
+    зато строка помечалась `removal_done = true` — хвост закрывался, ничего не сняв.
+    """
+    assert "starts_at" in tick.STUCK_REMOVALS_SQL
+    source = importlib.import_module("inspect").getsource(tick._retry_removals)
+    assert "since=starts_at" in source
+    assert "since=None" not in source

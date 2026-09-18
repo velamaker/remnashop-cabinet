@@ -472,7 +472,10 @@ async def run_reserve(
                 # подарок и докупка устройства идут синтетическим снимком (id < 0): без
                 # этого фильтра резерв возобновлялся бы по кругу за 40 ₽ и вовсе без
                 # покупки подписки.
-                "    AND (t.plan_snapshot->>'id')::int > 0 "
+                # CASE, а не голый ::int: нечисловой id в снимке уронил бы весь
+                # проход выдачи резерва, а не одну строку.
+                "    AND (CASE WHEN t.plan_snapshot->>'id' ~ '^-?[0-9]+$' "
+                "         THEN (t.plan_snapshot->>'id')::int ELSE 0 END) > 0 "
                 # COALESCE с -infinity: выдач не было — значит годится любая оплата.
                 "    AND t.created_at > COALESCE("
                 "      (SELECT max(r.granted_at) FROM reserve_grants r WHERE r.user_id = u.id),"

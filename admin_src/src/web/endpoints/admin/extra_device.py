@@ -26,6 +26,7 @@ from src.core.enums import Currency
 from src.infrastructure.services import overlay_extra_device as extra
 
 from ._common import AdminUser
+from ._redact import is_readonly_admin
 
 router = APIRouter(prefix="/extra-device", tags=["Admin - Extra device"])
 
@@ -101,7 +102,7 @@ async def _price_hint(plan_dao: PlanDao) -> list[dict[str, Any]]:
 @router.get("")
 @inject
 async def get_extra_device_config(
-    _admin: AdminUser,
+    admin: AdminUser,
     session: FromDishka[AsyncSession],
     plan_dao: FromDishka[PlanDao],
 ) -> dict[str, Any]:
@@ -110,9 +111,11 @@ async def get_extra_device_config(
     try:
         row = (await session.execute(text(SUMMARY_SQL))).first()
         active = (await session.execute(text(ACTIVE_SLOTS_SQL))).scalar()
+        # Админ только для просмотра денег не видит — как и в соседних ручках.
+        hide_money = is_readonly_admin(admin)
         summary = {
             "applied_30d": int(row[0] or 0) if row else 0,
-            "amount_30d": float(row[1] or 0) if row else 0.0,
+            "amount_30d": None if hide_money else (float(row[1] or 0) if row else 0.0),
             "rejected_30d": int(row[2] or 0) if row else 0,
             "credited_open": int(row[3] or 0) if row else 0,
             "active_slots": int(active or 0),

@@ -10,8 +10,14 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common import Notifier, Remnawave
-from src.application.common.dao import PlanDao, SubscriptionDao, UserDao
-from src.application.dto import MessagePayloadDto, PlanSnapshotDto, SubscriptionDto
+from src.application.common.dao import PlanDao, SubscriptionDao, TransactionDao, UserDao
+from src.application.dto import (
+    MessagePayloadDto,
+    PlanSnapshotDto,
+    PriceDetailsDto,
+    SubscriptionDto,
+    TransactionDto,
+)
 from src.application.use_cases.remnawave import ReissueUserSubscription, ResetUserTraffic
 from src.application.use_cases.subscription import (
     SyncSubscriptionFromRemnashop,
@@ -29,7 +35,13 @@ from src.application.use_cases.subscription.commands.management import (
 )
 from src.application.use_cases.user import ResetUserReferralCode, SendMessageToUser
 from src.application.use_cases.user.commands.messaging import SendMessageToUserDto
-from src.core.enums import SubscriptionStatus
+from src.core.enums import (
+    Currency,
+    PaymentGatewayType,
+    PurchaseType,
+    SubscriptionStatus,
+    TransactionStatus,
+)
 from src.core.exceptions import PermissionDeniedError
 from src.infrastructure.services.overlay_extend import compute_new_expire, push_subscription_expire
 from remnapy.enums.users import TrafficLimitStrategy
@@ -585,6 +597,15 @@ async def set_device_limit(
 # ─── Докупленные места под устройства (карточка пользователя) ─────────────────
 
 
+def _first_rub_gateway_type(_st: Any) -> Any:
+    """Чем подписать строку возврата: колонка gateway_type NOT NULL.
+
+    Возврат делает админ руками, шлюза у него нет — берём тот же тип, каким помечены
+    покупки с баланса, чтобы строка не выпала из отчётов по валюте.
+    """
+    return PaymentGatewayType.YOOMONEY
+
+
 async def _extras_floor(session: AsyncSession, user_id: int) -> tuple[int, list[dict[str, Any]]]:
     """Ниже какого лимита нельзя опускать, и какие места этому мешают.
 
@@ -706,6 +727,7 @@ async def revoke_extra_device(
     admin: AdminUser,
     session: FromDishka[AsyncSession],
     remnawave: FromDishka[Remnawave],
+    transaction_dao: FromDishka[TransactionDao],
 ) -> dict[str, Any]:
     """Отменить докупку: снять место и (по желанию) вернуть неиспользованную стоимость.
 
@@ -740,6 +762,26 @@ async def revoke_extra_device(
         await session.execute(
             text("UPDATE users SET cabinet_balance = cabinet_balance + :a WHERE id = :u"),
             {"a": refunded, "u": user_id},
+        )
+        # Возврат — отдельной строкой в transactions, а не только прибавкой к балансу.
+        # Без неё деньги «возвращены», а в выручке и плитке возвратов покупка стоит
+        # целиком: отчёты показывали бы доход, которого уже нет. Строка ЧАСТИЧНАЯ
+        # (возвращаем только непрожитый остаток), поэтому исходный счёт не трогаем —
+        # пометить его REFUNDED целиком было бы неправдой.
+        await transaction_dao.create(
+            TransactionDto(
+                payment_id=uuid4(),
+                user_id=user_id,
+                status=TransactionStatus.REFUNDED,
+                purchase_type=PurchaseType.NEW,
+                gateway_type=_first_rub_gateway_type(st),
+                gateway_display_name="Возврат · устройство",
+                pricing=PriceDetailsDto(
+                    original_amount=refunded, discount_percent=0, final_amount=refunded
+                ),
+                currency=Currency.RUB,
+                plan_snapshot=extra.synthetic_snapshot(1),
+            )
         )
     active_after = len([s for s in st.slots if s.subscription_id == st.sub_id and s.id != slot_id])
     target = extra.target_limit(st.device_limit, st.plan_device_limit, active_after, 1, False)

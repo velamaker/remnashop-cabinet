@@ -6,9 +6,9 @@
     до трёх рублей больше и не сходилась бы с «осталось N дней» на экране);
   * порядок причин отказа: он определяет, что человек увидит, когда подходят сразу
     две (на паузе и триал — «триал», на резерве и активная — «резерв»);
-  * решения владельца 17.09: цена 100 ₽/30 дн. по умолчанию, второй раз докупку той
-    же подписке не предлагаем, отключение устройств ВЫКЛ и трогает только то, что
-    подключено ПОСЛЕ покупки места;
+  * решения владельца: цена 100 ₽/30 дн. и порог 7 дней по умолчанию, отключение
+    устройств ВКЛЮЧЕНО и трогает только подключённое ПОСЛЕ покупки места, а
+    кончившееся место продажу больше НЕ блокирует («отключить и предложить снова»);
   * пол лимита `тариф + действующие`: он не даёт продлению сбросить оплаченное место
     и не отнимает ручную щедрость админа;
   * стоимость, уходящая днями при смене тарифа, и остаток для возврата админом.
@@ -67,7 +67,6 @@ def state(**over):
         frozen_at=None,
         reserve_expire_at=None,
         slots=(),
-        ended_slots=0,
     )
     data.update(over)
     return extra.UserState(**data)
@@ -91,11 +90,14 @@ def test_price_is_proportional_and_rounds_up():
 
 
 def test_owner_default_price_is_100_and_sales_are_off():
-    """Решение владельца: цена 100 ₽/30 дн. стоит сразу, продажи включает он сам."""
+    """Решения владельца в дефолтах: цена стоит сразу, продажи включает он сам."""
     assert extra.DEFAULT_CONFIG["price_rub_30d"] == 100
     assert extra.DEFAULT_CONFIG["enabled"] is False
     assert extra.DEFAULT_CONFIG["max_extra"] == 2
-    assert extra.DEFAULT_CONFIG["remove_excess_devices"] is False
+    # Порог 7 дней: на остатке короче недели выгоднее продлить саму подписку.
+    assert extra.DEFAULT_CONFIG["min_days_left"] == 7
+    # «Отключить и предложить снова»: без отключения место работало бы вечно.
+    assert extra.DEFAULT_CONFIG["remove_excess_devices"] is True
     assert extra.effective_enabled(dict(extra.DEFAULT_CONFIG)) is False
     assert extra.effective_enabled(cfg()) is True
     # Цены нет — не продаём даже при включённом тумблере.
@@ -140,7 +142,7 @@ def test_extend_counts_from_slot_end_not_now():
         ({"frozen_at": NOW - timedelta(days=1)}, "frozen"),
         ({"sub_status": "LIMITED"}, "not_active"),
         ({"expire_at": NOW - timedelta(days=1)}, "not_active"),
-        ({"expire_at": NOW + timedelta(days=2)}, "too_late"),
+        ({"expire_at": NOW + timedelta(days=6)}, "too_late"),
     ],
 )
 def test_eligibility_table(over, expected):
@@ -170,12 +172,20 @@ def test_disabled_and_max_reached():
     assert extra.eligibility(st, cfg(max_extra=3), NOW, "new") is None
 
 
-def test_second_purchase_not_offered_after_slot_expired():
-    """Решение владельца: место кончилось — второй раз не предлагаем, ведём на тариф."""
-    st = state(ended_slots=1)
-    assert extra.eligibility(st, cfg(), NOW, "new") == "already_used"
-    # Но уже оплаченный заказ этим правилом не отклоняем: деньги взяты.
-    assert extra.eligibility(st, cfg(), NOW, "new", check_used=False) is None
+def test_expired_place_can_be_bought_again():
+    """Решение владельца «отключить и предложить снова»: вечного запрета нет.
+
+    Раньше здесь стоял `already_used` — счётчик кончившихся мест блокировал продажу
+    этой подписке НАВСЕГДА. Ограничение осталось только на ОДНОВРЕМЕННО действующие
+    места: кончившееся освобождает счётчик.
+    """
+    # Два места куплены и оба кончились — в состоянии их уже нет, продаём снова.
+    assert extra.eligibility(state(), cfg(max_extra=2), NOW, "new") is None
+    # А пока они ДЕЙСТВУЮТ — упор в максимум.
+    busy = state(slots=(slot(1), slot(2, ends=NOW + timedelta(days=9))))
+    assert extra.eligibility(busy, cfg(max_extra=2), NOW, "new") == "max_reached"
+    # Кода «уже покупали» в словаре причин больше нет — он ничего не значит.
+    assert "already_used" not in extra._REASON_RU
 
 
 def test_extend_needs_a_live_slot_and_a_day_of_room():
@@ -367,8 +377,15 @@ def test_save_config_writes_normalised(tmp_path, monkeypatch):
 # ── тексты ──────────────────────────────────────────────────────────────────
 
 
-def test_user_text_mentions_bigger_plan_not_a_second_purchase():
-    """После конца места мы предлагаем тариф побольше, а не «докупите ещё раз»."""
+def test_user_text_offers_to_buy_again():
+    """Решение владельца: место кончилось — зовём докупить снова ИЛИ на тариф."""
     message = extra.user_text("ended", limit=2, removed=[])
+    assert "докупите" in message.lower()
     assert "тариф побольше" in message
-    assert "докупить" not in message.lower()
+
+
+def test_user_text_names_disconnected_devices():
+    """Отключили аппарат — человек должен узнать, какой именно и почему."""
+    message = extra.user_text("ended", limit=2, removed=["Pixel"])
+    assert "Pixel" in message
+    assert "после покупки места" in message

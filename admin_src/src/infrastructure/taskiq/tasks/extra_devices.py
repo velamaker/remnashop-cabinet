@@ -56,8 +56,10 @@ ACTIVE_SLOT_USERS_SQL = (
     "WHERE status = 'active' ORDER BY user_id, ends_at LIMIT :lim"
 )
 
+# starts_at обязателен: отключаем только подключённое ПОСЛЕ покупки места, и без
+# этого момента повтор снимал бы ноль устройств, а строку помечал «сделано».
 STUCK_REMOVALS_SQL = (
-    "SELECT id, user_id, ended_at FROM extra_device_slots "
+    "SELECT id, user_id, ended_at, starts_at FROM extra_device_slots "
     "WHERE status = 'ended' AND removal_done = false ORDER BY ended_at LIMIT :lim"
 )
 
@@ -309,13 +311,20 @@ async def _report_reconcile(
     if user is None:
         return
     for _slot_id, reason in out.get("burned") or []:
-        if reason == "plan_replaced" and config.get("notify_admins"):
-            await _tell_admins(
-                notifier,
-                extra.admin_text(
-                    "plan_replaced", user=user.log, slot_id=_slot_id, until=out.get("expire_at")
-                ),
-            )
+        if not config.get("notify_admins"):
+            break
+        # Обе причины — про оплаченное место, которое человек больше не получит.
+        # `subscription_replaced` раньше молчала: строка подписки сменилась мимо
+        # переноса остатка (админская выдача, промокод), и деньги пропадали тихо.
+        await _tell_admins(
+            notifier,
+            extra.admin_text(
+                "plan_replaced" if reason == "plan_replaced" else "subscription_replaced",
+                user=user.log,
+                slot_id=_slot_id,
+                until=out.get("expire_at"),
+            ),
+        )
     expire_at = out.get("expire_at")
     alive = expire_at is not None and expire_at > extra.now_utc()
     if out.get("ended") and config.get("notify_users") and alive:
@@ -352,7 +361,7 @@ async def _retry_removals(
 ) -> None:
     rows = (await session.execute(text(STUCK_REMOVALS_SQL), {"lim": MAX_ORDERS_PER_RUN})).all()
     await session.rollback()
-    for slot_id, user_id, ended_at in rows:
+    for slot_id, user_id, ended_at, starts_at in rows:
         old = ended_at is not None and (now - ended_at).total_seconds() > 24 * 3600
         try:
             st = await extra.lock_state(session, int(user_id))
@@ -364,7 +373,7 @@ async def _retry_removals(
                 remnawave=remnawave,
                 st=st,
                 limit=st.device_limit,
-                since=None,
+                since=starts_at,
                 slot_ids=[int(slot_id)],
             )
         except Exception as exc:  # noqa: BLE001

@@ -91,6 +91,10 @@ def _quote_payload(st: extra.UserState, cfg: dict, now: datetime) -> dict[str, A
         "extra_count": len(active),
         "subscription_expire_at": _iso(st.expire_at),
         "balance": _fmt(st.balance),
+        # Отключатся ли устройства по окончании места. Человек обязан знать это ДО
+        # оплаты: настройка меняется владельцем, и обещание «ничего не отключим»,
+        # вшитое в текст кабинета, однажды стало бы неправдой.
+        "removes_excess": bool(cfg.get("remove_excess_devices")),
     }
     why = extra.eligibility(st, cfg, now, "new")
     if why is None:
@@ -133,8 +137,9 @@ async def get_extra_device(
     if not extra.effective_enabled(cfg):
         return {"enabled": False}
 
-    st = await extra.lock_state(session, user.id)
-    # Замок брать на чтении незачем — сразу отпускаем, чтобы не держать строку.
+    # Только показываем: замок строки человека здесь не нужен и мешал бы покупке,
+    # которая идёт параллельно из другой вкладки.
+    st = await extra.lock_state(session, user.id, lock=False)
     await session.rollback()
     payload = _quote_payload(st, cfg, datetime_now())
     payload["gateways"] = [
@@ -350,17 +355,28 @@ async def _checkout(
             status_code=status.HTTP_404_NOT_FOUND, detail="Платёжный шлюз недоступен"
         )
 
-    payment = await create_payment(
-        user,
-        CreatePaymentDto(
-            plan_snapshot=extra.synthetic_snapshot(q.days),
-            pricing=PriceDetailsDto(
-                original_amount=q.amount, discount_percent=0, final_amount=q.amount
+    try:
+        payment = await create_payment(
+            user,
+            CreatePaymentDto(
+                plan_snapshot=extra.synthetic_snapshot(q.days),
+                pricing=PriceDetailsDto(
+                    original_amount=q.amount, discount_percent=0, final_amount=q.amount
+                ),
+                purchase_type=PurchaseType.NEW,
+                gateway_type=body.gateway_type,
             ),
-            purchase_type=PurchaseType.NEW,
-            gateway_type=body.gateway_type,
-        ),
-    )
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        # Шлюз не ответил — это «попробуйте ещё раз», а не поломка кабинета: 500
+        # выглядел бы для человека как «у них всё сломалось».
+        logger.warning(f"extra_device: шлюз не выставил счёт user_id={user.id}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Платёжный шлюз не ответил, попробуйте ещё раз",
+        ) from exc
 
     try:
         fresh = await extra.record_order(
@@ -402,14 +418,5 @@ async def _checkout(
 
 
 async def _rollback_panel(remnawave: Any, st: extra.UserState, limit: int) -> None:
-    try:
-        from remnapy.models import UpdateUserRequestDto
-
-        sdk = getattr(remnawave, "sdk", None)
-        if sdk is None or not st.remna_uuid:
-            return
-        await sdk.users.update_user(
-            UpdateUserRequestDto(uuid=str(st.remna_uuid), hwid_device_limit=int(limit))
-        )
-    except Exception:  # noqa: BLE001 — уже критическая ветка, хуже не сделаем
-        logger.exception("extra_device: компенсирующий PATCH не прошёл")
+    """Вернуть панели прежний лимит. Реализация одна на все точки — в сервисе."""
+    await extra.compensate_limit(getattr(remnawave, "sdk", None), st, limit)
