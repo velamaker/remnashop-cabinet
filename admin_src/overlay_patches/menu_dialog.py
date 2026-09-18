@@ -16,6 +16,7 @@
 его вызываем, а не переписываем, и дополняем результат своими полями.
 """
 
+from decimal import Decimal
 from urllib.parse import urlsplit
 
 from aiogram.enums import ButtonStyle
@@ -151,6 +152,7 @@ async def menu_getter(
     i18n = _extra_i18n
     data = await _base_menu_getter(**kwargs)
     await _fix_reset_time(data, _extra_session, _extra_panel, kwargs)
+    await _extra_traffic_button(data, _extra_session, _extra_panel, kwargs)
     cfg = load_menu_config()
     for key, value in cfg.items():
         if isinstance(value, bool):
@@ -253,6 +255,86 @@ async def _fix_reset_time(data, session, remnawave, kwargs) -> None:
         logger.warning(f"extra_traffic: дату обновления трафика в меню не поправил: {exc}")
 
 
+# OVERLAY: кнопка «Докупить трафик» в главном меню.
+#
+# ПОЧЕМУ В ГЛАВНОМ ОКНЕ, А НЕ В «УСТРОЙСТВАХ». Трафик человек смотрит там же, где
+# ему написано «осталось N ГБ», — в карточке подписки главного меню. Докупка места
+# живёт в «Устройствах» по той же логике: рядом с тем, что кончилось.
+#
+# ПОЧЕМУ ТОЛЬКО ССЫЛКА В КАБИНЕТ. Как и у места под устройство: оплата в боте — это
+# второй денежный путь (звёзды, свой диалог, свои возвраты) ради редкой операции.
+#
+# КОГДА ПОКАЗЫВАЕМ. Ровно тогда, когда карточка видна в кабинете: продажи включены,
+# продать этому человеку можно, и расход дошёл до порога show_from_percent (или
+# панель уже перевела его в LIMITED). Иначе кнопка «купи ещё» висела бы у того, кто
+# израсходовал 3 ГБ из 200, — это навязывание, а не помощь.
+#
+# В ПАНЕЛЬ ХОДИМ НЕ ВСЕГДА. Сначала дешёвый отбор по своей базе (безлимит, пробник,
+# истёкший, пауза — сразу нет), и только выжившим — один запрос за расходом. На бою
+# это 23 подписки из 63, а не запрос на каждое открытие меню у каждого.
+EXTRA_TRAFFIC_TEXT = "➕ {gb} ГБ к текущему лимиту · {price} ₽"
+
+
+async def _extra_traffic_button(data, session, remnawave, kwargs) -> None:
+    """Показать кнопку докупки трафика, если её показывает и кабинет.
+
+    Любая ошибка — просто нет кнопки: главное меню открывают все и всегда, и падать
+    здесь нельзя (цена ошибки в этом геттере — бот без меню, см. 18.09).
+    """
+    data.setdefault("extra_traffic_button", False)
+    data.setdefault("extra_traffic_text", "")
+    data.setdefault("extra_traffic_url", "")
+    if not data.get("has_subscription"):
+        return
+    try:
+        from src.infrastructure.services import overlay_extra_traffic as extra
+
+        base_url = (data.get("web_cabinet_url") or "").strip().rstrip("/")
+        cfg = extra.load_config()
+        if not base_url or not extra.effective_enabled(cfg):
+            return
+        user = kwargs.get("user") or kwargs.get("event_from_user")
+        user_id = getattr(user, "id", None)
+        if user_id is None:
+            return
+        now = extra.now_utc()
+        st = await extra.lock_state(session, int(user_id), lock=False)
+        # Предфильтр по базе — тот же, что в ручке кабинета: в панель идём только
+        # за тем, кому вообще можно продать.
+        if extra.eligibility(st, cfg, now, window_end=None, window_known=True) not in (
+            None,
+            "reset_too_soon",
+            "window_cap",
+        ):
+            return
+        panel = await extra.read_panel(remnawave, st)
+        if panel is None or panel.limit_bytes <= 0:
+            return
+        window_end = extra.next_traffic_reset(st.strategy, panel.created_at, now)
+        known = not (extra.needs_anchor(st.strategy) and panel.created_at is None)
+        if extra.eligibility(
+            st, cfg, now, window_end=window_end, window_known=known
+        ) is not None:
+            return
+        used_percent = panel.used_bytes * 100 / panel.limit_bytes
+        limited = (panel.status or "").upper() == "LIMITED"
+        if not limited and used_percent < int(cfg["show_from_percent"]):
+            return
+        data["extra_traffic_button"] = True
+        data["extra_traffic_text"] = EXTRA_TRAFFIC_TEXT.format(
+            gb=int(cfg["gb_per_purchase"]), price=_money(cfg["price_rub"])
+        )
+        data["extra_traffic_url"] = base_url
+    except Exception as exc:  # noqa: BLE001 — кнопки нет, меню живо
+        logger.warning(f"extra_traffic: кнопку в меню не показал: {exc}")
+
+
+def _money(value) -> str:
+    """50 вместо 50.00: цену человек читает глазами, а не парсером."""
+    text = f"{Decimal(str(value)).normalize():f}"
+    return text.rstrip(".") if "." in text else text
+
+
 # Динамический цвет кнопки: берём item[color] (задаётся в админке кабинета).
 # Пусто/None → без стиля (дефолтная кнопка).
 class _ItemColorStyle(BaseStyle):
@@ -351,6 +433,16 @@ menu = Window(
             on_click=on_get_trial,
             when=F["trial_available"] & ~F["trial_is_free"],
             style=Style(ButtonStyle.SUCCESS),
+        ),
+    ),
+    # OVERLAY: «Докупить трафик» — видна, только когда расход подошёл к лимиту.
+    Row(
+        WebApp(
+            text=Format("{extra_traffic_text}"),
+            url=Format("{extra_traffic_url}"),
+            id="extra_traffic",
+            when=F["extra_traffic_button"],
+            style=Style(ButtonStyle.PRIMARY),
         ),
     ),
     Row(
