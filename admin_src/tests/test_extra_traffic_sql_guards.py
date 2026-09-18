@@ -90,10 +90,38 @@ def test_panel_answer_is_verified_in_bytes():
     assert "int(got) != int(new_bytes)" in source
 
 
-def test_status_from_the_panel_answer_is_saved():
-    """Панель сама снимает LIMITED — иначе кабинет врал бы до вебхука."""
+def test_status_from_the_panel_answer_is_saved_with_a_cast():
+    """Панель сама снимает LIMITED — иначе кабинет врал бы до вебхука.
+
+    СТРОКОВАЯ ПРОВЕРКА ЗДЕСЬ — ТОЛЬКО ПОДСКАЗКА. Настоящая проверка живёт в
+    test_extra_traffic_pg.py: там покупка идёт на живой схеме с настоящим enum
+    `subscription_status`, и именно она ловит то, чего строка не видит, — один bind,
+    подставленный и как enum, и как text, на что asyncpg отвечает
+    DatatypeMismatchError, роняя покупку ПОСЛЕ успешного PATCH в панель.
+    """
     source = inspect.getsource(extra.buy_from_balance)
     assert "UPDATE subscriptions SET status" in source
+    assert "CAST(:s AS subscription_status)" in source, (
+        "без явного CAST один и тот же bind уходит и как enum, и как text — "
+        "asyncpg отвечает DatatypeMismatchError; проверено test_extra_traffic_pg.py"
+    )
+
+
+def test_real_purchase_is_covered_on_a_live_postgres():
+    """Сторож сторожа: файл с живой базой должен существовать и покрывать покупку."""
+    import pathlib
+
+    pg = pathlib.Path(__file__).with_name("test_extra_traffic_pg.py")
+    assert pg.exists(), "покупку обязан проверять живой Postgres, а не только подделки"
+    text_pg = pg.read_text("utf-8")
+    for needle in (
+        "CREATE TYPE",
+        "subscription_status",
+        "buy_extra_traffic",
+        "handle_paid_order",
+        "reconcile_user",
+    ):
+        assert needle in text_pg, f"живой набор перестал проверять {needle}"
 
 
 def test_synthetic_plan_is_excluded_from_money_reports():
@@ -111,6 +139,18 @@ def test_grants_are_marked_only_while_still_active():
     assert "AND status = 'active'" in inspect.getsource(extra.mark_grants)
     assert "AND status = 'active'" in inspect.getsource(extra.close_due_grants)
     assert "AND status = 'active'" in inspect.getsource(extra.burn_on_renew)
+
+
+def test_purchase_base_has_no_tariff_floor():
+    """Основание покупки — БЕЗ пола «тариф + действующие».
+
+    Пол нужен крону (он возвращает сброшенный лимит), а в покупке он давал два
+    объёма за одну оплату в окне до 17 минут после продления: лимит уже тарифный,
+    прибавка ещё числится, пол поднимает основание до «тариф + прибавка».
+    """
+    source = inspect.getsource(extra.buy_from_balance)
+    assert "max(0, int(panel.limit_bytes) - gb_to_bytes(ended_gb))" in source
+    assert "target_bytes(" not in source
 
 
 def test_rejection_moves_only_forward():

@@ -146,6 +146,15 @@ def _normalize(data: dict[str, Any]) -> dict[str, Any]:
             # Ноль и отрицательная цена — это «продавать нельзя», а не «бесплатно»:
             # счёт на 0 ₽ шлюз не примет, а с баланса это была бы раздача трафика.
             price = None if value <= 0 else min(value, _LIMITS["price_rub"][1])
+    min_amount = _norm_int(
+        data.get("min_amount_rub"), DEFAULT_CONFIG["min_amount_rub"], _LIMITS["min_amount_rub"]
+    )
+    # Минимум счёта НЕ МОЖЕТ БЫТЬ ВЫШЕ ЦЕНЫ. Иначе витрина показывает `price`, а
+    # сервер берёт `max(min, price)` — суммы не сходятся, и человек на каждое
+    # нажатие получает «условия обновились», не понимая, что именно обновилось.
+    # Минимум нужен против копеечных счетов, а не против цены владельца.
+    if price is not None:
+        min_amount = min(min_amount, int(price))
     return {
         "enabled": bool(data.get("enabled", False)),
         "gb_per_purchase": _norm_int(
@@ -154,9 +163,7 @@ def _normalize(data: dict[str, Any]) -> dict[str, Any]:
             _LIMITS["gb_per_purchase"],
         ),
         "price_rub": price,
-        "min_amount_rub": _norm_int(
-            data.get("min_amount_rub"), DEFAULT_CONFIG["min_amount_rub"], _LIMITS["min_amount_rub"]
-        ),
+        "min_amount_rub": min_amount,
         "show_from_percent": _norm_int(
             data.get("show_from_percent"),
             DEFAULT_CONFIG["show_from_percent"],
@@ -291,16 +298,19 @@ def next_traffic_reset(
         # и тогда продажа отказывается (reset_unknown), а крон прибавку не трогает.
         return None
     anchor = panel_created_at.astimezone(timezone.utc)
-    # Порог панели: `created_at + 1 месяц <= CURRENT_DATE`, где CURRENT_DATE
-    # приводится к полуночи. То есть первый сброс возможен только со дня, полночь
-    # которого уже не раньше «дата создания + месяц» ВМЕСТЕ СО ВРЕМЕНЕМ.
-    not_before = _add_month(anchor)
+    # ПОРОГ ПАНЕЛИ СРАВНИВАЕТ ДАТЫ, А НЕ МОМЕНТЫ:
+    #     ("created_at" + interval '1 month')::date <= CURRENT_DATE
+    # Приведение к `::date` отбрасывает время, и это не мелочь. Человек, созданный
+    # 20-го в 15:30, попадает в выборку УЖЕ 20-го числа следующего месяца — а при
+    # сравнении моментов «20-е 00:00 >= 20-е 15:30» ложно, и первый сброс уезжал
+    # на месяц. На бою так выглядит каждый новый клиент в свой первый месяц.
+    not_before = _add_month(anchor).date()
     year, month = today.year, today.month
     for _ in range(0, 26):  # два года запаса — дальше искать нечего
         day_of_reset = min(anchor.day, calendar.monthrange(year, month)[1])
         candidate = date(year, month, day_of_reset)
         moment = _at(candidate, hhmm)
-        if moment > now and datetime.combine(candidate, time.min, tzinfo=timezone.utc) >= not_before:
+        if moment > now and candidate >= not_before:
             return moment
         year, month = (year + 1, 1) if month == 12 else (year, month + 1)
     return None
@@ -977,16 +987,30 @@ async def buy_from_balance(
     # Просроченные прибавки уже закрыты (close_due_grants), поэтому их объём из
     # текущего значения вычитаем здесь же: иначе покупка в окно «сброс прошёл, крон
     # не добежал» подняла бы лимит от завышенного основания.
-    base_bytes = target_bytes(
-        panel.limit_bytes, st.plan_traffic_limit, st.active_gb, ended_gb
-    )
+    #
+    # БЕЗ ПОЛА «тариф + действующие». Пол нужен крону — он возвращает сброшенный
+    # лимит. Здесь он, наоборот, вредит: продление (а равно промокод и админское
+    # «Выдать») ставит ТАРИФНЫЙ лимит и обнуляет расход, а прибавки гаснут не
+    # мгновенно, а проходом крона — до 17 минут. Покупка в это окно с полом
+    # `plan + active` подняла бы лимит от «тариф + ещё не погашенная прибавка»,
+    # то есть дала бы два объёма за одну оплату.
+    base_bytes = max(0, int(panel.limit_bytes) - gb_to_bytes(ended_gb))
     new_bytes = int(base_bytes) + gb_to_bytes(q.gb)
     status = await set_traffic_limit(session, sdk, st, new_bytes)
     if status:
         # Панель сама снимает LIMITED при поднятии лимита. Пишем её статус к себе,
         # чтобы кабинет и бот не показывали «трафик исчерпан» тому, кому уже включили.
+        #
+        # CAST ОБЯЗАТЕЛЕН. `subscriptions.status` — это enum, и один и тот же bind
+        # нельзя подставлять и как enum, и как text: asyncpg отвечает
+        # DatatypeMismatchError, покупка падает — а PATCH в панель к этому моменту
+        # УЖЕ прошёл. Получилось бы: лимит поднят, денег не взяли, записи нет,
+        # крон её не увидит, а повтор кнопки поднимет лимит ещё раз.
         await session.execute(
-            text("UPDATE subscriptions SET status = :s WHERE id = :sid AND status::text <> :s"),
+            text(
+                "UPDATE subscriptions SET status = CAST(:s AS subscription_status) "
+                "WHERE id = :sid AND status::text <> :s"
+            ),
             {"s": status, "sid": st.sub_id},
         )
     await session.execute(
@@ -1276,6 +1300,7 @@ async def reconcile_user(
     user_id: int,
     config: dict[str, Any],
     now: datetime,
+    remnawave: Any = None,
 ) -> dict:
     """Свести лимит трафика с действующими прибавками. Один человек, один commit.
 
@@ -1303,17 +1328,23 @@ async def reconcile_user(
         and st.expire_at is not None
         and st.expire_at <= st.reserve_expire_at + timedelta(hours=1)
     )
-    if frozen or on_reserve:
-        # Человек выключен (пауза) или сидит на страховочном гигабайте (резерв):
-        # трафика он не тратит, лимит трогать незачем, а оставить запись `active`
-        # значило бы однажды опустить ему лимит «за просроченную прибавку».
-        reason = "frozen" if frozen else "reserve"
-        await mark_grants(session, [g.id for g in st.grants], "ended", reason)
+    if on_reserve:
+        # РЕЗЕРВ — единственный случай, где записи гасятся, а панель НЕ трогается.
+        # Резерв ставит там страховочный лимит 1 ГБ, и любой наш PATCH вернул бы
+        # истёкшему человеку полноценный объём — прямое нарушение правила «резерв
+        # только после покупки». Понижать тоже нечего: 1 ГБ уже ниже тарифного.
+        await mark_grants(session, [g.id for g in st.grants], "ended", "reserve")
         await session.commit()
         out["ended"] = [g.id for g in st.grants]
-        out["reason"] = reason
+        out["reason"] = "reserve"
         out["silent"] = True
         return out
+    # ПАУЗА — НЕ резерв, и раньше здесь была дыра. Гасить записи, не опуская лимит,
+    # значит подарить объём: человек ставит паузу на двадцать минут, снимает её — и
+    # прибавка остаётся в панели навсегда, повторяясь каждый месяц. Поэтому пауза
+    # идёт ОБЫЧНОЙ веткой ниже: записи кончаются по своему сроку, а лимит опускается
+    # тем же узким PATCH, что и всегда. Панель при паузе ставит человеку DISABLED,
+    # но лимит трафика она не трогает — наш PATCH ему не мешает.
 
     ended_ids: list[int] = []
     burned: list[tuple[int, str]] = []
@@ -1329,8 +1360,14 @@ async def reconcile_user(
         # якоря: админ мог сменить стратегию тарифа, и вебхук `user.modified` уже
         # положил новую в нашу базу.
         if needs_anchor(st.strategy) and grant.panel_created_at is None:
-            # Якоря нет — считать нечем. Молча опускать лимит по догадке нельзя.
-            alive.append(grant)
+            # Якоря нет — точный момент не вычислить. Но и оставлять запись вечной
+            # нельзя: без неё крон никогда не опустит лимит, и прибавка станет
+            # бессрочной. Закрываем по СОХРАНЁННОМУ сроку — тому самому, который был
+            # назван человеку при покупке.
+            if grant.ends_at is not None and grant.ends_at <= now:
+                ended_ids.append(grant.id)
+            else:
+                alive.append(grant)
             continue
         ends_at = next_traffic_reset(st.strategy, grant.panel_created_at, grant.granted_at)
         if ends_at is not None and ends_at <= now:
@@ -1376,10 +1413,31 @@ async def reconcile_user(
         and not deleted_panel
     )
     if need_panel:
-        from src.core.utils.converters import gb_to_bytes
+        from src.core.utils.converters import bytes_to_gb, gb_to_bytes
 
+        # В БАЙТАХ ОТ ЗНАЧЕНИЯ ПАНЕЛИ, а не `gb_to_bytes(target)`. Наша колонка
+        # хранит округлённые ГБ, и лимит 300,4 ГБ после понижения на 50 стал бы
+        # ровно 300 — человек тихо потерял бы 0,4 ГБ, а на следующей покупке ещё.
+        # Панель читаем только здесь: людей с действующими прибавками единицы, и
+        # запрос идёт лишь когда лимит реально надо менять.
+        new_bytes = gb_to_bytes(target)
+        panel = await read_panel(remnawave, st) if remnawave is not None else None
+        if panel is not None and panel.limit_bytes > 0:
+            new_bytes = target_bytes(panel.limit_bytes, st.plan_traffic_limit, active_gb, ended_gb)
+            target = bytes_to_gb(new_bytes)
+            if new_bytes == panel.limit_bytes:
+                # Панель уже там, где надо (например, лимит правил админ): PATCH не
+                # нужен, но записи всё равно закрыты выше.
+                await session.commit()
+                out["ended"] = ended_ids
+                out["ended_gb"] = ended_gb
+                out["burned"] = burned
+                out["limit"] = target
+                out["panel_called"] = False
+                out["silent"] = expired_long_ago
+                return out
         try:
-            await set_traffic_limit(session, sdk, st, gb_to_bytes(target))
+            await set_traffic_limit(session, sdk, st, new_bytes)
             changed = True
         except PanelRejected as exc:
             if "NotFound" in str(exc):
@@ -1589,6 +1647,8 @@ _REASON_RU = {
     "balance_spent": "деньги уже потрачены",
     "panel_timeout": "сервер не ответил",
     "panel_unavailable": "сервер не ответил",
+    "in_progress": "оплата получена, трафик добавляем",
+    "rejected": "заказ отклонён",
 }
 
 
@@ -1597,11 +1657,22 @@ def reason_ru(code: str) -> str:
 
 
 def _dm(value: Any) -> str:
-    return value.strftime("%d.%m.%Y в %H:%M") if isinstance(value, datetime) else str(value)
+    """Момент обновления трафика ОДНИМ видом на все сообщения бота.
+
+    С годом, с временем и с явным «UTC»: кабинет печатает тот же момент в поясе
+    устройства, и без пометки человек считал бы, что ему называют два разных числа
+    (в MSK «07.10 в 00:10» против «7 октября, 03:10», а западнее UTC разъедутся и
+    дни). Ради этого и делался единый источник правды — врозь печатать его нельзя.
+    """
+    if not isinstance(value, datetime):
+        return str(value)
+    return value.astimezone(timezone.utc).strftime("%d.%m.%Y в %H:%M UTC")
 
 
 def _date(value: Any) -> str:
-    return value.strftime("%d.%m.%Y") if isinstance(value, datetime) else str(value)
+    if not isinstance(value, datetime):
+        return str(value)
+    return value.astimezone(timezone.utc).strftime("%d.%m.%Y")
 
 
 def user_text(key: str, **kw: Any) -> str:
