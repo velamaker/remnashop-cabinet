@@ -39,6 +39,9 @@ const answer = (over: Partial<ExtraTrafficResponse> = {}): ExtraTrafficResponse 
 describe("порог: когда вообще спрашивать предложение", () => {
   it("безлимиту не предлагаем никогда — ни запроса, ни кнопки", () => {
     expect(shouldAskOffer({ traffic_limit: 0, used_traffic_bytes: 0 })).toBe(false);
+    // Именно израсходовавший безлимитчик и ловит мутацию «убрали проверку лимита»:
+    // деление на нулевой лимит даёт бесконечность, и порог «пройден» у всех.
+    expect(shouldAskOffer({ traffic_limit: 0, used_traffic_bytes: 900 * GB })).toBe(false);
   });
 
   it("ниже порога — молчим (запрос стоит похода в панель)", () => {
