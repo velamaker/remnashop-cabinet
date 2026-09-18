@@ -113,6 +113,17 @@ describe("прямой заход по адресу", () => {
     expect(screen.queryByText("СТРАНИЦА РАЗДЕЛА")).toBeNull();
   });
 
+  it("бэкенд прислал список страниц, но не features — вложенный адрес всё равно закрыт", async () => {
+    // Такой бэкенд бывает: адаптер без карты маршрутов возможностей не считает
+    // (features = null), а список страниц шлёт. Вложенный адрес пускается по `pages`
+    // мимо canPage — и мимо проверки бота, если её там не повторить.
+    branding = { appearance: oldBot(), loaded: true, offline: false };
+    who = { ...OWNER, pages: ["/admin", "/admin/renewal-discount"] };
+    open("/admin/renewal-discount/stats");
+    await screen.findByText("Раздела здесь нет");
+    expect(screen.queryByText("СТРАНИЦА РАЗДЕЛА")).toBeNull();
+  });
+
   it("оформление ещё не пришло с сервера — загрузчик, а не «раздела нет»", async () => {
     // Кэш есть (appearance не null), но списка возможностей в кэше не бывает.
     branding = { appearance: oldBot(), loaded: false, offline: false };
