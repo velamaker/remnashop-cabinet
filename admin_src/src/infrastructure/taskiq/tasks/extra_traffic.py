@@ -47,6 +47,15 @@ MAX_USERS_PER_RUN = 500
 # возможно, обрабатывает веб-процесс.
 PENDING_GRACE_MINUTES = 2
 
+
+class TablesMissing(RuntimeError):
+    """Миграция 0012 ещё не накатана — проход нечего делать.
+
+    Своим типом, а не общим `except`: «таблиц нет» — это окно выкатки, о котором
+    писать в лог каждые 17 минут вредно (владелец перестанет читать лог). Любая
+    ДРУГАЯ ошибка обязана остаться видимой.
+    """
+
 OPEN_ORDERS_SQL = (
     "SELECT o.payment_id, o.status, o.created_at "
     "FROM extra_traffic_orders o JOIN transactions t ON t.payment_id = o.payment_id "
@@ -118,11 +127,19 @@ async def _settle_orders(
     notifier: Notifier,
     now: Any,
 ) -> int:
-    rows = (
-        await session.execute(
-            text(OPEN_ORDERS_SQL), {"grace": PENDING_GRACE_MINUTES, "lim": MAX_ORDERS_PER_RUN}
-        )
-    ).all()
+    try:
+        rows = (
+            await session.execute(
+                text(OPEN_ORDERS_SQL), {"grace": PENDING_GRACE_MINUTES, "lim": MAX_ORDERS_PER_RUN}
+            )
+        ).all()
+    except Exception as exc:  # noqa: BLE001
+        # Таблиц ещё нет (порядок выкатки: миграции катает только контейнер бота).
+        # Уходим ТИХО и в debug: иначе шедулер писал бы ошибку каждые 17 минут и
+        # приучил бы владельца не читать свой лог.
+        await session.rollback()
+        logger.debug(f"extra_traffic: таблиц заказов ещё нет — проход пропущен ({exc})")
+        raise TablesMissing from exc
     await session.rollback()
     done = 0
     for payment_id, _status, _created in rows:
@@ -237,21 +254,32 @@ async def _live_grants(
     session: AsyncSession,
     *,
     sdk: Any,
+    remnawave: Remnawave,
     config: dict,
     user_dao: UserDao,
     notifier: Notifier,
     now: Any,
 ) -> int:
-    user_ids = [
-        int(r[0])
-        for r in (await session.execute(text(ACTIVE_GRANT_USERS_SQL), {"lim": MAX_USERS_PER_RUN})).all()
-    ]
+    try:
+        rows = (
+            await session.execute(text(ACTIVE_GRANT_USERS_SQL), {"lim": MAX_USERS_PER_RUN})
+        ).all()
+    except Exception as exc:  # noqa: BLE001 — та же причина, что и у заказов выше
+        await session.rollback()
+        logger.debug(f"extra_traffic: таблицы прибавок ещё нет — проход пропущен ({exc})")
+        raise TablesMissing from exc
+    user_ids = [int(r[0]) for r in rows]
     await session.rollback()
     touched = 0
     for user_id in user_ids:
         try:
             out = await extra.reconcile_user(
-                session, sdk=sdk, user_id=user_id, config=config, now=now
+                session,
+                sdk=sdk,
+                user_id=user_id,
+                config=config,
+                now=now,
+                remnawave=remnawave,
             )
         except Exception as exc:  # noqa: BLE001 — один человек не мешает остальным
             await session.rollback()
@@ -357,17 +385,28 @@ async def run_extra_traffic_tick(
         return
     now = extra.now_utc()
 
-    settled = await _settle_orders(
-        session,
-        sdk=sdk,
-        remnawave=remnawave,
-        config=config,
-        user_dao=user_dao,
-        notifier=notifier,
-        now=now,
-    )
-    touched = await _live_grants(
-        session, sdk=sdk, config=config, user_dao=user_dao, notifier=notifier, now=now
-    )
+    try:
+        settled = await _settle_orders(
+            session,
+            sdk=sdk,
+            remnawave=remnawave,
+            config=config,
+            user_dao=user_dao,
+            notifier=notifier,
+            now=now,
+        )
+        touched = await _live_grants(
+            session,
+            sdk=sdk,
+            remnawave=remnawave,
+            config=config,
+            user_dao=user_dao,
+            notifier=notifier,
+            now=now,
+        )
+    except TablesMissing:
+        # Воркер пересоздали раньше, чем контейнер бота накатил 0012. Это штатное
+        # окно выкатки, а не поломка: молчим до следующего прохода.
+        return
     if settled or touched:
         logger.info(f"extra_traffic: заказов доведено {settled}, людей сведено {touched}")

@@ -16,8 +16,10 @@
 """
 
 import importlib
+import inspect
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -84,9 +86,16 @@ def a_grant(gb=50, grant_id=1, sub_id=SUB_ID, plan_id=7, strategy="MONTH_ROLLING
     )
 
 
-async def reconcile(session, remnawave, now):
+async def reconcile(session, remnawave, now, *, panel_gb=None):
+    """Свести прибавки. `remnawave` — и SDK для PATCH, и источник чтения лимита.
+
+    Крон считает новый лимит в БАЙТАХ от значения панели (иначе теряется дробная
+    часть, 300,4 → 300). По умолчанию панель «согласна» с нашей строкой — это и есть
+    обычное состояние; расхождение задаётся `panel_gb` там, где оно и проверяется.
+    """
+    remnawave.limit_bytes = gb_to_bytes(panel_gb if panel_gb is not None else session.traffic_limit)
     return await extra.reconcile_user(
-        session, sdk=remnawave.sdk, user_id=USER_ID, config=CFG, now=now
+        session, sdk=remnawave.sdk, user_id=USER_ID, config=CFG, now=now, remnawave=remnawave
     )
 
 
@@ -202,7 +211,33 @@ async def test_reserve_never_calls_the_panel():
     assert "panel_patch" not in log.names(), "лимит резерва (1 ГБ) трогать нельзя"
 
 
-async def test_pause_closes_grants_without_the_panel():
+async def test_pause_does_not_give_away_the_volume():
+    """ПАУЗА — НЕ РЕЗЕРВ, и это ровно та разница, на которой раньше терялись деньги.
+
+    Прежняя ветка гасила записи и НЕ трогала панель. Значит: поставил паузу на
+    двадцать минут, снял — и докупленные ГБ остались в лимите панели навсегда,
+    повторяясь каждый месяц бесплатно. Пауза обязана идти обычной веткой: срок
+    прибавки кончается сам, а лимит опускается тем же узким PATCH.
+    """
+    log = Log()
+    session = TickSession(
+        log,
+        traffic_limit=PLAN_GB + 50,
+        grants=(a_grant(),),
+        frozen_at=GRANTED - timedelta(days=1),
+    )
+    remnawave = FakeRemnawave(log)
+
+    # Срок прибавки уже вышел — на паузе это ничего не меняет.
+    out = await reconcile(session, remnawave, AFTER_RESET)
+
+    assert out["ended"] == [1]
+    assert out.get("reason") != "frozen", "пауза не должна быть отдельной причиной"
+    assert log[log.index_of("panel_patch")][1]["trafficLimitBytes"] == gb_to_bytes(PLAN_GB)
+
+
+async def test_pause_before_the_window_ends_changes_nothing():
+    """Пока срок прибавки не вышел, пауза её не гасит — человек за неё заплатил."""
     log = Log()
     session = TickSession(
         log,
@@ -214,7 +249,7 @@ async def test_pause_closes_grants_without_the_panel():
 
     out = await reconcile(session, remnawave, GRANTED + timedelta(days=1))
 
-    assert out["ended"] == [1] and out["reason"] == "frozen"
+    assert out["ended"] == []
     assert "panel_patch" not in log.names()
 
 
@@ -233,13 +268,30 @@ async def test_strategy_changed_after_purchase_is_recomputed_every_pass():
     assert log[log.index_of("panel_patch")][1]["trafficLimitBytes"] == gb_to_bytes(PLAN_GB)
 
 
-async def test_missing_anchor_keeps_the_grant_instead_of_guessing():
-    """Без панельной даты опускать лимит по догадке нельзя."""
+async def test_missing_anchor_closes_by_the_promised_date_not_forever():
+    """Якоря нет — считать момент нечем, но вечной прибавка быть не может.
+
+    Раньше такая запись оставалась `active` НАВСЕГДА: крон её не закрывал, и лимит
+    в панели оставался поднятым до следующего продления. Закрываем по сроку, который
+    был НАЗВАН человеку при покупке и лежит в самой строке.
+    """
     log = Log()
     session = TickSession(log, traffic_limit=PLAN_GB + 50, grants=(a_grant(created=None),))
     remnawave = FakeRemnawave(log)
 
     out = await reconcile(session, remnawave, AFTER_RESET)
+
+    assert out["ended"] == [1]
+    assert log[log.index_of("panel_patch")][1]["trafficLimitBytes"] == gb_to_bytes(PLAN_GB)
+
+
+async def test_missing_anchor_before_the_promised_date_waits():
+    """До обещанного срока прибавка живёт: платили именно за него."""
+    log = Log()
+    session = TickSession(log, traffic_limit=PLAN_GB + 50, grants=(a_grant(created=None),))
+    remnawave = FakeRemnawave(log)
+
+    out = await reconcile(session, remnawave, GRANTED + timedelta(days=1))
 
     assert out["ended"] == []
     assert "panel_patch" not in log.names()
@@ -293,3 +345,63 @@ def test_cron_runs_apart_from_the_device_cron():
 
     source = inspect.getsource(tick)
     assert '"cron": "*/17 * * * *"' in source
+
+
+# ── окно выкатки: таблиц ещё нет ────────────────────────────────────────────
+
+
+class NoTablesSession:
+    """Любой запрос — «таблицы нет»: так выглядит воркер до накатки 0012."""
+
+    def __init__(self) -> None:
+        self.queries = 0
+
+    async def execute(self, *a, **kw):
+        self.queries += 1
+        raise RuntimeError('relation "extra_traffic_orders" does not exist')
+
+    async def commit(self):
+        raise AssertionError("без таблиц коммитить нечего")
+
+    async def rollback(self):
+        return None
+
+
+async def test_cron_is_silent_until_the_migration_lands(caplog):
+    """Миграции катает ТОЛЬКО контейнер бота, а крон живёт в воркере.
+
+    В окне выкатки воркер уже новый, таблиц ещё нет. Раньше первый же запрос
+    поднимал ошибку наружу, и шедулер писал её в лог КАЖДЫЕ 17 МИНУТ — верный способ
+    приучить владельца не читать свой лог. Молчим до следующего прохода.
+    """
+    import logging
+
+    session = NoTablesSession()
+    remnawave = FakeRemnawave(Log())
+
+    raw = tick.run_extra_traffic_tick
+    raw = getattr(raw, "__dishka_orig_func__", getattr(raw, "original_func", raw))
+    with caplog.at_level(logging.WARNING):
+        await raw(
+            session=session,
+            remnawave=remnawave,
+            user_dao=SimpleNamespace(get_by_id=lambda _uid: None),
+            notifier=SimpleNamespace(),
+        )
+
+    assert session.queries >= 1, "крон обязан попробовать — он не знает заранее"
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_missing_tables_have_their_own_error_type():
+    """«Таблиц нет» — отдельный тип, чтобы молчать ТОЛЬКО о нём.
+
+    Общий `except Exception` заодно проглотил бы настоящие поломки: сломанный SQL,
+    отвалившуюся базу, ошибку в нашем же запросе — и крон молчал бы о них тоже.
+    """
+    assert issubclass(tick.TablesMissing, RuntimeError)
+    # `@inject` dishka прячет нашу функцию — читаем исходную.
+    raw = getattr(tick.run_extra_traffic_tick, "__dishka_orig_func__", tick.run_extra_traffic_tick)
+    source = inspect.getsource(raw)
+    assert "except TablesMissing" in source
+    assert "except Exception" not in source
