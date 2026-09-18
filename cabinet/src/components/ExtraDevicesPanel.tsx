@@ -1,38 +1,55 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { MonitorSmartphone } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import { ArrowRight, MonitorSmartphone } from "lucide-react";
 import { subscriptionApi } from "@/api/subscription";
 import { useBranding } from "@/contexts/BrandingContext";
 import { useT } from "@/i18n/I18nContext";
-import { formatDate } from "@/lib/format";
-import { endsBefore, newOffer, payOptions, slotViews } from "@/lib/extraDevice";
-import { paymentsBlocked } from "@/lib/planChange";
-import type { ExtraDeviceResponse } from "@/types/api";
+import { daysUntil, formatDate } from "@/lib/format";
+import { endsBefore, endingSoon, newOffer, payOptions, slotViews } from "@/lib/extraDevice";
+import { pickDeviceUpgrade } from "@/lib/deviceUpsell";
+import { billingHref, paymentsBlocked } from "@/lib/planChange";
+import type {
+  DevicesResponse,
+  ExtraDeviceResponse,
+  SubscriptionInfoResponse,
+  SubscriptionOffersResponse,
+} from "@/types/api";
 import { ExtraDeviceOffer } from "./ExtraDeviceOffer";
 
 /**
- * Страница «Устройства»: докупленные места и «Продлить».
+ * Страница «Устройства»: оплаченные места и что с ними делать дальше.
+ *
+ * ПОРЯДОК ДЕЙСТВИЙ ПЕРЕД КОНЦОМ МЕСТА — решение владельца: сначала «перейти на тариф
+ * побольше» (там, кроме места, ещё и трафик, и оно остаётся навсегда), и только потом
+ * «продлить место ещё на 30 дней». Тот же порядок — в напоминании за 3 дня.
  *
  * ПОЧЕМУ ЭТА ПАНЕЛЬ НЕ СЛУШАЕТ ТУМБЛЕР АПСЕЛЛА. Тумблер «Нужно больше устройств?»
  * выключает РЕКЛАМУ тарифа побольше. Продление уже оплаченного места — не реклама:
  * человек за него заплатил и должен видеть, до какой даты оно живёт и чем продлить.
  * Панель подчиняется только возможности `extra_device` и остановке платежей.
  *
- * Строку «Докупить устройство» панель показывает ТОЛЬКО когда её не показывает
- * карточка апселла (лимит ещё не заполнен или тумблер выключен) — иначе на одной
- * странице оказались бы две одинаковые кнопки.
+ * Строку «купить место» панель показывает ТОЛЬКО когда её не показывает карточка
+ * апселла (лимит ещё не заполнен или тумблер выключен) — иначе на одной странице
+ * оказались бы две одинаковые кнопки.
  */
 export function ExtraDevicesPanel({
+  subscription,
+  devices,
   cardShowsOffer,
   onChanged,
 }: {
-  /** Карточка «Нужно больше устройств?» уже предлагает докупку — не дублируем. */
+  subscription: SubscriptionInfoResponse | null;
+  devices: DevicesResponse | null;
+  /** Карточка «Нужно больше устройств?» уже предлагает покупку — не дублируем. */
   cardShowsOffer: boolean;
   onChanged?: () => void;
 }) {
   const t = useT();
   const { appearance, can } = useBranding();
   const [data, setData] = useState<ExtraDeviceResponse | null>(null);
+  const [offers, setOffers] = useState<SubscriptionOffersResponse | null>(null);
   const asked = useRef(false);
+  const offersAsked = useRef(false);
 
   // Без оформления не знаем, что за бэкенд: `can` на пустом оформлении отвечает «да»,
   // и первый заход поверх «Бедолаги» сходил бы за несуществующей ручкой.
@@ -55,15 +72,44 @@ export function ExtraDevicesPanel({
     load();
   }, [allowed, load]);
 
+  const slots = useMemo(() => slotViews(data), [data]);
+  // Витрину спрашиваем ТОЛЬКО когда место вот-вот кончится: тариф побольше нужен
+  // именно в этот момент, а в остальное время это лишний запрос на каждом заходе.
+  const wantUpgrade =
+    slots.some(({ slot }) => endingSoon(slot)) && can("device_upsell") && subscription != null;
+
+  useEffect(() => {
+    if (!wantUpgrade || offersAsked.current) return;
+    offersAsked.current = true;
+    subscriptionApi
+      .offers()
+      .then(setOffers)
+      .catch(() => {
+        /* тихо: без витрины просто не покажем строку про тариф */
+      });
+  }, [wantUpgrade]);
+
+  const upgrade = useMemo(
+    () =>
+      offers && subscription && devices
+        ? pickDeviceUpgrade(offers, {
+            maxDevices: devices.max_count,
+            trafficLimit: subscription.traffic_limit,
+            durationDays: subscription.plan_duration_days,
+          })
+        : null,
+    [offers, subscription, devices],
+  );
+
   const reload = () => {
     load();
     onChanged?.();
   };
 
   if (!data?.enabled) return null;
-  const slots = slotViews(data);
   const offer = newOffer(data);
-  const canOfferHere = offer != null && !cardShowsOffer && payOptions(data, offer.amount).options.length > 0;
+  const canOfferHere =
+    offer != null && !cardShowsOffer && payOptions(data, offer.amount).options.length > 0;
   if (slots.length === 0 && !canOfferHere) return null;
 
   return (
@@ -85,6 +131,24 @@ export function ExtraDevicesPanel({
                   limit: data.plan_device_limit ?? "",
                 })}
               </p>
+            )}
+            {endingSoon(slot) && (
+              <p className="mt-1 text-xs text-fg">
+                {t("extraDevice.endsSoon", {
+                  date: formatDate(slot.ends_at),
+                  days: Math.max(0, daysUntil(slot.ends_at)),
+                })}
+              </p>
+            )}
+            {/* Сначала тариф побольше, потом продление — решение владельца. */}
+            {endingSoon(slot) && upgrade && (
+              <Link
+                to={billingHref(upgrade.plan.public_code, upgrade.days)}
+                className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-accent transition-opacity hover:opacity-80"
+              >
+                {t("extraDevice.upgradeCta", { plan: upgrade.plan.name })}
+                <ArrowRight className="h-4 w-4" />
+              </Link>
             )}
             {extend && (
               <ExtraDeviceOffer data={data} offer={extend} onChanged={reload} compact />

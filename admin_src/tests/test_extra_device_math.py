@@ -330,8 +330,11 @@ def test_price_invariants_on_random_periods():
     for _ in range(500):
         secs = rnd.randint(1, 400 * DAY)
         st = state(expire_at=NOW + timedelta(seconds=secs))
-        amount = int(extra.quote(st, config, NOW, "new").amount)
-        exact = Fraction(100 * secs, extra.SEC30)
+        q = extra.quote(st, config, NOW, "new")
+        amount = int(q.amount)
+        # Платим за ПЕРИОД места, а он не длиннее 30 суток и не длиннее остатка.
+        covered = min(secs, extra.SEC30)
+        exact = Fraction(100 * covered, extra.SEC30)
         assert amount >= exact  # округляем только вверх
         if amount > config["min_amount_rub"]:
             assert amount - exact < 1  # и меньше чем на рубль
@@ -378,14 +381,130 @@ def test_save_config_writes_normalised(tmp_path, monkeypatch):
 
 
 def test_user_text_offers_to_buy_again():
-    """Решение владельца: место кончилось — зовём докупить снова ИЛИ на тариф."""
+    """Решение владельца: место кончилось — зовём на тариф побольше ИЛИ купить снова."""
     message = extra.user_text("ended", limit=2, removed=[])
-    assert "докупите" in message.lower()
     assert "тариф побольше" in message
+    assert "30 дней" in message
 
 
 def test_user_text_names_disconnected_devices():
     """Отключили аппарат — человек должен узнать, какой именно и почему."""
     message = extra.user_text("ended", limit=2, removed=["Pixel"])
     assert "Pixel" in message
-    assert "после покупки места" in message
+    assert "последнее добавленное" in message
+
+
+# ── решение владельца: место продаётся ПЕРИОДОМ 30 дней ──────────────────────
+
+
+def test_slot_is_sold_as_a_thirty_day_period():
+    """Длина места = min(30 дней, остаток подписки), и платёж не больше цены за 30 дн.
+
+    Раньше место продавалось «до конца срока»: у годовой подписки одна покупка стоила
+    бы больше тысячи рублей. Владелец решил продавать периодом.
+    """
+    config = cfg(price_rub_30d=100)
+    # Подписка живёт ещё год — период всё равно 30 дней и цена ровно 100 ₽.
+    st = state(expire_at=NOW + timedelta(days=365))
+    q = extra.quote(st, config, NOW, "new")
+    assert q.period_end == NOW + timedelta(days=30)
+    assert q.amount == Decimal(100)
+    assert q.days == 30
+    # Остаток короче периода — платим только за него.
+    st = state(expire_at=NOW + timedelta(days=9))
+    q = extra.quote(st, config, NOW, "new")
+    assert q.period_end == NOW + timedelta(days=9)
+    assert q.amount == Decimal(30)
+
+
+def test_single_payment_never_exceeds_the_thirty_day_price():
+    """Инвариант владельца: одна покупка не дороже цены за 30 дней — на любом остатке."""
+    rnd = random.Random(20260919)
+    config = cfg(price_rub_30d=100, min_amount_rub=10)
+    for _ in range(300):
+        days = rnd.randint(7, 900)
+        q = extra.quote(state(expire_at=NOW + timedelta(days=days)), config, NOW, "new")
+        assert q.amount <= Decimal(100), days
+        assert q.amount >= Decimal(10), days
+        assert (q.period_end - NOW).total_seconds() <= extra.SEC30 + 1
+
+
+def test_extend_adds_another_period_from_the_end_of_the_current_one():
+    """Продление начинается с конца текущего места, а не «с сейчас».
+
+    Иначе человек платил бы второй раз за дни, которые уже оплатил.
+    """
+    config = cfg(price_rub_30d=100)
+    ends = NOW + timedelta(days=5)
+    st = state(expire_at=NOW + timedelta(days=365), slots=(slot(ends=ends),))
+    q = extra.quote(st, config, NOW, "extend", 1)
+    assert q.cov_start == ends
+    assert q.period_end == ends + timedelta(days=30)
+    assert q.amount == Decimal(100)
+    # Подписка кончается раньше, чем истечёт новый период — платим только за остаток.
+    st = state(expire_at=ends + timedelta(days=6), slots=(slot(ends=ends),))
+    q = extra.quote(st, config, NOW, "extend", 1)
+    assert q.period_end == ends + timedelta(days=6)
+    assert q.amount == Decimal(20)
+
+
+def test_period_never_outlives_the_subscription():
+    """Место не переживает подписку: за дни, которых у человека нет, денег не берём."""
+    expire = NOW + timedelta(days=3)
+    assert extra.period_end_for(NOW, expire) == expire
+    assert extra.period_end_for(NOW, NOW + timedelta(days=90)) == NOW + timedelta(days=30)
+
+
+def test_two_simultaneous_places_is_still_the_maximum():
+    """Период сменился, ограничение — нет: одновременно действующих мест не больше двух."""
+    st = state(slots=(slot(1), slot(2, ends=NOW + timedelta(days=9))))
+    assert extra.eligibility(st, cfg(max_extra=2), NOW, "new") == "max_reached"
+    assert extra.eligibility(state(slots=(slot(1),)), cfg(max_extra=2), NOW, "new") is None
+
+
+# ── решение владельца: что предлагаем перед концом места ─────────────────────
+
+
+def test_reminder_offers_the_bigger_plan_before_the_extension():
+    """Порядок действий — решение владельца: сначала тариф, потом продление."""
+    message = extra.user_text(
+        "reminder", ends_at=NOW + timedelta(days=3), until=NOW + timedelta(days=40), limit=2
+    )
+    plan_at = message.index("тариф побольше")
+    extend_at = message.index("Продлить место")
+    assert plan_at < extend_at, "продление предложено раньше тарифа"
+    # И честно сказано, что будет, если ничего не делать.
+    assert "последнее добавленное устройство отключится" in message
+
+
+def test_ended_text_names_the_last_added_device():
+    message = extra.user_text("ended", limit=2, removed=["Pixel"])
+    assert "последнее добавленное" in message
+    assert "тариф побольше" in message
+
+
+# ── решение владельца: снимаем ПОСЛЕДНЕЕ добавленное ─────────────────────────
+
+
+def test_removal_takes_the_newest_device_first():
+    """Снимаем последнее добавленное — ровно столько, сколько сверх лимита."""
+    since = NOW - timedelta(days=30)
+    devices = [
+        dev("до-покупки", since - timedelta(days=5)),
+        dev("первое-после", since + timedelta(days=1)),
+        dev("последнее", since + timedelta(days=9)),
+    ]
+    assert [d.hwid for d in extra.pick_excess(devices, 2, since)] == ["последнее"]
+    assert [d.hwid for d in extra.pick_excess(devices, 1, since)] == ["последнее", "первое-после"]
+
+
+def test_bigger_plan_raised_the_limit_so_nothing_is_removed():
+    """Перешёл на тариф побольше — лимит вырос, снимать нечего.
+
+    Проверка отдельная: именно ради неё владелец и ставит тариф первым действием.
+    """
+    since = NOW - timedelta(days=30)
+    devices = [dev("a", since + timedelta(days=1)), dev("b", since + timedelta(days=2))]
+    # Лимит стал 3 при двух устройствах — ни одного кандидата.
+    assert extra.pick_excess(devices, 3, since) == []
+    assert extra.pick_excess(devices, 2, since) == []

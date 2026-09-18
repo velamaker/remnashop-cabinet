@@ -45,7 +45,7 @@ afterEach(cleanup);
 describe("AdminExtraDevicePage", () => {
   it("цена владельца видна, продажи по умолчанию выключены", async () => {
     render(<AdminExtraDevicePage />);
-    const price = (await screen.findByLabelText(/Цена за 1 устройство/)) as HTMLInputElement;
+    const price = (await screen.findByLabelText(/Цена места под устройство/)) as HTMLInputElement;
     expect(price.value).toBe("100");
     const toggle = screen.getByLabelText(/Продавать докупку/) as HTMLInputElement;
     expect(toggle.checked).toBe(false);
@@ -62,7 +62,7 @@ describe("AdminExtraDevicePage", () => {
   it("сохранение шлёт числа, а пустая цена уходит как null", async () => {
     updateMock.mockResolvedValue({ config: config({ price_rub_30d: null }), effective_enabled: false });
     render(<AdminExtraDevicePage />);
-    const price = (await screen.findByLabelText(/Цена за 1 устройство/)) as HTMLInputElement;
+    const price = (await screen.findByLabelText(/Цена места под устройство/)) as HTMLInputElement;
     fireEvent.change(price, { target: { value: "" } });
     fireEvent.change(screen.getByLabelText(/Максимум ОДНОВРЕМЕННО докупленных мест/), { target: { value: "3" } });
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));

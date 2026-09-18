@@ -281,7 +281,12 @@ export default function DevicesPage() {
             {/* Панель докупленных мест тумблеру апселла не подчиняется: продление уже
                 оплаченного места — не реклама. Кнопку «Докупить» она показывает только
                 когда карточка выше её не показала. */}
-            <ExtraDevicesPanel cardShowsOffer={cardShowsExtra} onChanged={load} />
+            <ExtraDevicesPanel
+              subscription={sub}
+              devices={data}
+              cardShowsOffer={cardShowsExtra}
+              onChanged={load}
+            />
             <SameDeviceHint devices={data.devices} />
             {data.devices.map((device) => (
               <DeviceRow

@@ -597,8 +597,11 @@ async def test_offer_shows_price_and_slots():
     raw = endpoint.get_extra_device.__dishka_orig_func__
     payload = await raw(user=USER, session=session, payment_gateway_dao=FakeGatewayDao())
     assert payload["new"]["available"] is True
-    assert payload["new"]["amount"] == "105"  # 90 × 35/30
+    # Место продаётся периодом 30 дней: цена = полная, а не «за остаток 35 дней».
+    assert payload["new"]["amount"] == "90"
+    assert payload["new"]["days"] == 30
     assert payload["extra_count"] == 1
+    # Продление: с конца места (+5 дн.) до конца подписки (+35 дн.) — ровно 30 суток.
     assert payload["slots"][0]["extend"]["amount"] == "90"
     assert payload["gateways"][0]["gateway_type"] == PaymentGatewayType.YOOMONEY.value
     # Только чтение: замок сразу отпускаем, ничего не коммитим.

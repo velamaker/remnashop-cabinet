@@ -97,6 +97,19 @@ export function payOptions(
   return { options, balanceLow: !enough && gateway !== null, gateway };
 }
 
+/**
+ * За сколько дней до конца места показываем, что делать дальше. Совпадает с
+ * напоминанием бота (REMIND_DAYS на бэкенде): человек не должен видеть в кабинете
+ * одно окно, а в Telegram — другое.
+ */
+export const ENDING_SOON_DAYS = 3;
+
+/** Место кончается на днях — пора предложить тариф побольше и продление. */
+export function endingSoon(slot: { ends_at: string }, now = Date.now()): boolean {
+  const left = new Date(slot.ends_at).getTime() - now;
+  return left > 0 && left <= ENDING_SOON_DAYS * 86_400_000;
+}
+
 /** Показывать ли «после этой даты лимит вернётся к N»: только если подписка длиннее. */
 export function endsBefore(
   data: ExtraDeviceResponse | null,
