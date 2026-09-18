@@ -138,12 +138,17 @@ def _is_telegram_link(url: str | None) -> bool:
 @inject
 async def menu_getter(
     i18n: FromDishka[TranslatorRunner],
-    session: FromDishka[AsyncSession],
-    remnawave: FromDishka[Remnawave],
+    # Имена НАРОЧНО с префиксом: aiogram_dialog зовёт геттер окна со своими kwargs,
+    # и одноимённый параметр под @inject даёт «got multiple values for keyword
+    # argument» — на этом 18.09 легло окно «Устройства» у всех. Правило и его цена
+    # записаны в tests/test_menu_getter_kwargs.py; `i18n` здесь остаётся как был —
+    # он в kwargs диалога не приходит (проверено боем, окно работает годами).
+    _extra_session: FromDishka[AsyncSession],
+    _extra_panel: FromDishka[Remnawave],
     **kwargs,
 ):
     data = await _base_menu_getter(**kwargs)
-    await _fix_reset_time(data, session, remnawave, kwargs)
+    await _fix_reset_time(data, _extra_session, _extra_panel, kwargs)
     cfg = load_menu_config()
     for key, value in cfg.items():
         if isinstance(value, bool):
@@ -426,8 +431,15 @@ EXTRA_DEVICE_EXTEND_TEXT = "🧩 Продлить место под устрой
 
 @inject
 async def devices_getter_overlay(
-    session: FromDishka[AsyncSession], config: FromDishka[AppConfig], **kwargs
+    # Имена НАРОЧНО не `session`/`config`: aiogram_dialog зовёт геттер окна со своими
+    # kwargs, и там уже есть `config` — одноимённый параметр под @inject дал бы
+    # «got multiple values for keyword argument 'config'» и окно «Устройства»
+    # падало бы у всех (так и случилось на бою 18.09).
+    _extra_session: FromDishka[AsyncSession],
+    _extra_config: FromDishka[AppConfig],
+    **kwargs,
 ):
+    session, config = _extra_session, _extra_config
     data = await devices_getter(**kwargs)
     data.setdefault("extra_device_button", False)
     data.setdefault("extra_device_text", EXTRA_DEVICE_BUY_TEXT)
