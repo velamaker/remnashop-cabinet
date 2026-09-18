@@ -83,9 +83,16 @@ def test_no_reset_still_means_zero_not_now():
 
 
 def test_without_the_panel_anchor_we_fall_back_to_the_old_one():
-    """Вне вебхука якоря нет: считаем по нашей дате, но по ПРАВИЛЬНЫМ часам."""
+    """Вне вебхука якоря нет: считаем по нашей дате, но по ПРАВИЛЬНЫМ часам и порогу.
+
+    Наша строка создана 21 августа 09:00, «сейчас» — 18 сентября. Порог панели
+    сравнивает ДАТЫ (`(created_at + 1 месяц)::date <= CURRENT_DATE`), поэтому 21
+    сентября уже подходит: сравнение моментов («21-е 00:00 >= 21-е 09:00» ложно)
+    увело бы дату на месяц вперёд — та самая ошибка, из-за которой у новых клиентов
+    весь первый месяц называлось чужое число.
+    """
     delta = service.get_traffic_reset_delta("MONTH_ROLLING", OUR_CREATED)
-    assert NOW + delta == datetime(2026, 10, 21, 0, 10, tzinfo=timezone.utc)
+    assert NOW + delta == datetime(2026, 9, 21, 0, 10, tzinfo=timezone.utc)
 
 
 async def test_wrapper_puts_the_panel_date_into_context_and_always_clears_it():

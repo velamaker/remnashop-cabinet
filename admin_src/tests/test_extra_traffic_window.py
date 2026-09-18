@@ -108,20 +108,84 @@ def test_month_rolling_clamps_day_to_short_month():
 
 
 def test_month_rolling_not_earlier_than_a_month_after_creation():
-    """Первый сброс не раньше «создан + месяц»: так фильтрует крон панели.
+    """Первый сброс не раньше «создан + месяц», И ПОРОГ СРАВНИВАЕТ ДАТЫ.
 
-    Создан 15 марта в 12:00 — 15 апреля крон сравнивает `created_at + 1 месяц`
-    (15 апреля 12:00) с полуночью текущей даты и человека НЕ берёт. Значит первый
-    сброс — 15 мая.
+    Панель фильтрует так: `("created_at" + interval '1 month')::date <= CURRENT_DATE`.
+    Приведение к `::date` отбрасывает ВРЕМЯ, и это не мелочь: человек, созданный
+    20-го в 15:30, попадает в выборку УЖЕ 20-го числа следующего месяца. Сравнение
+    моментов («20-е 00:00 >= 20-е 15:30» ложно) уводило первый сброс на месяц — то
+    есть у каждого нового клиента весь его первый месяц дата была чужая.
     """
-    created = dt(2026, 3, 15, 12, 0)
-    assert extra.next_traffic_reset("MONTH_ROLLING", created, dt(2026, 3, 20, 10)) == dt(
-        2026, 5, 15, 0, 10
+    created = dt(2026, 3, 20, 15, 30)
+    assert extra.next_traffic_reset("MONTH_ROLLING", created, dt(2026, 3, 25, 10)) == dt(
+        2026, 4, 20, 0, 10
     )
-    # Создан в полночь — порог выполняется ровно в день «плюс месяц».
-    midnight = dt(2026, 3, 15, 0, 0)
-    assert extra.next_traffic_reset("MONTH_ROLLING", midnight, dt(2026, 3, 20, 10)) == dt(
-        2026, 4, 15, 0, 10
+    # Тот же человек в день сброса до 00:10 — сброс сегодня, а не через месяц.
+    assert extra.next_traffic_reset("MONTH_ROLLING", created, dt(2026, 4, 20, 0, 1)) == dt(
+        2026, 4, 20, 0, 10
+    )
+    # Создан в полночь — ничего не меняется: порог и так по дате.
+    midnight = dt(2026, 3, 20, 0, 0)
+    assert extra.next_traffic_reset("MONTH_ROLLING", midnight, dt(2026, 3, 25, 10)) == dt(
+        2026, 4, 20, 0, 10
+    )
+    # А вот ДО «плюс месяца» сброса нет вовсе: создан 20 марта — 19 апреля рано.
+    assert extra.next_traffic_reset("MONTH_ROLLING", created, dt(2026, 4, 18, 10)) == dt(
+        2026, 4, 20, 0, 10
+    )
+
+
+def _panel_sql_next_reset(created, now):
+    """Что сделала бы САМА панель: её SQL, переписанный на python один в один.
+
+    Крон идёт ежедневно в 00:10 и берёт тех, у кого
+        LEAST(day(created_at), последний день месяца) = day(CURRENT_DATE)
+      И ("created_at" + interval '1 month')::date <= CURRENT_DATE
+    Ищем ближайший день, в который эта выборка сработает.
+    """
+    import calendar
+    from datetime import date as _date, datetime as _dt, time as _time, timedelta as _td, timezone as _tz
+
+    def add_month(value):
+        year = value.year + (1 if value.month == 12 else 0)
+        month = 1 if value.month == 12 else value.month + 1
+        day = min(value.day, calendar.monthrange(year, month)[1])
+        return value.replace(year=year, month=month, day=day)
+
+    threshold = add_month(created).date()
+    day = now.astimezone(_tz.utc).date()
+    for _ in range(0, 800):  # чуть больше двух лет по дням
+        run_at = _dt.combine(day, _time(0, 10), tzinfo=_tz.utc)
+        if run_at > now:
+            last_day = calendar.monthrange(day.year, day.month)[1]
+            if min(created.day, last_day) == day.day and threshold <= day:
+                return run_at
+        day = day + _td(days=1)
+    return None
+
+
+@pytest.mark.parametrize(
+    "created, now",
+    [
+        (dt(2026, 3, 20, 15, 30), dt(2026, 3, 25, 10)),   # первый месяц, порог не пройден
+        (dt(2026, 3, 20, 15, 30), dt(2026, 4, 20, 0, 1)),  # день сброса, до 00:10
+        (dt(2026, 3, 20, 15, 30), dt(2026, 4, 20, 0, 11)),  # день сброса, после 00:10
+        (dt(2026, 1, 31, 9, 0), dt(2026, 2, 1, 12)),        # 31-е в коротком месяце
+        (dt(2028, 1, 31, 9, 0), dt(2028, 2, 1, 12)),        # 29 февраля високосного
+        (dt(2025, 12, 31, 23, 59), dt(2026, 1, 15, 12)),    # переход года
+        (dt(2026, 5, 7, 14, 30), dt(2026, 9, 18, 12)),      # обычный давний клиент
+        (dt(2026, 9, 18, 0, 0), dt(2026, 9, 18, 12)),       # создан сегодня в полночь
+        (dt(2026, 9, 18, 23, 59), dt(2026, 9, 19, 12)),     # создан вчера поздно вечером
+    ],
+)
+def test_our_formula_matches_the_panel_sql(created, now):
+    """Таблица случаев против формулы панели, переписанной на python.
+
+    Это и есть главный сторож §2.2: расходиться с панелью нельзя ни на час, ни на
+    день — она обнуляет расход, а мы обещаем срок и снимаем лимит.
+    """
+    assert extra.next_traffic_reset("MONTH_ROLLING", created, now) == _panel_sql_next_reset(
+        created, now
     )
 
 
