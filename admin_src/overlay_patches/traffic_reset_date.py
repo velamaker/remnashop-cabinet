@@ -32,6 +32,14 @@
 в теле, при сборке события, ДО `event_bus.publish` — то есть в той же задаче, где
 контекст установлен. `finally: reset(token)` обязателен.
 
+ЗАОДНО ОТСЮДА УХОДИТ ПРЕДЛОЖЕНИЕ ДОКУПИТЬ. Обёртка над `_process_status` — это
+единственное место, где мы узнаём о «трафик закончился» МГНОВЕННО и с панельными
+данными на руках. Базовое уведомление бота мы не подавляем и не заменяем: оно
+говорит «продлите», наше — что можно сделать прямо сейчас, и с правильной датой.
+Шлём только тем, кто реально может купить, и один раз на окно трафика (дедуп в
+Redis: то же сообщение рождается ещё и в кроне ДРУГОГО процесса). Продажи выключены
+— не шлём ничего, и установка без докупки ведёт себя ровно как раньше.
+
 ТРЕТЬЕ МЕСТО — карточка подписки в меню бота (`menu/getters.py`) — чинится в
 `menu_dialog.py`: там уже стоит обёртка над геттером, и ей есть куда сходить за
 панельной датой. Остаётся неисправленным алерт «подключение недоступно»
@@ -85,6 +93,27 @@ def traffic_reset_delta(strategy: Any, subscription_created_at: Optional[datetim
     return moment - now
 
 
+async def _offer_extra_traffic(self, user, remna_user) -> None:
+    """«Трафик закончился — можно докупить». Всё, что нужно, уже на руках.
+
+    Сессию берём у UoW (`uow.session`), а не меняем конструктор сервиса: замена
+    `__init__` ради одного атрибута — это копия чужого тела в денежном соседстве.
+    Redis у сервиса свой, и дедуп живёт именно в нём: сообщение рождается ещё и в
+    кроне ДРУГОГО процесса, а файловое состояние они затирали бы друг другу.
+    """
+    session = getattr(getattr(self, "uow", None), "session", None)
+    if session is None:
+        return
+    await etraffic.offer_when_limited(
+        session,
+        getattr(self, "redis", None),
+        getattr(self, "config", None),
+        user,
+        etraffic.panel_view(remna_user),
+        etraffic.now_utc(),
+    )
+
+
 def apply() -> str:
     """Обёртка над `_process_status` + подстановка имени в модуле вебхуков."""
     import src.application.services.remnawave as target
@@ -104,10 +133,21 @@ def apply() -> str:
             # Тело базы НЕ трогаем — только кладём правильный якорь на время вызова.
             token = _PANEL_CREATED.set(getattr(remna_user, "created_at", None))
             try:
-                return await base_process_status(self, user, current_subscription, event, remna_user)
+                result = await base_process_status(
+                    self, user, current_subscription, event, remna_user
+                )
             finally:
                 # Без reset контекст утёк бы в соседний вебхук той же задачи.
                 _PANEL_CREATED.reset(token)
+            # ПОСЛЕ базы и только для LIMITED: своё предложение докупить трафик.
+            # Человек, оставшийся без интернета, не должен ждать крона — но и второе
+            # сообщение получить не должен, если купить всё равно не может.
+            if str(event) == str(getattr(target.RemnaUserEvent, "LIMITED", "limited")):
+                try:
+                    await _offer_extra_traffic(self, user, remna_user)
+                except Exception:  # noqa: BLE001 — уведомление не срывает обработку вебхука
+                    logger.exception("extra_traffic: предложение после LIMITED не ушло")
+            return result
 
         cls._process_status = _process_status
         cls._overlay_traffic_reset = True

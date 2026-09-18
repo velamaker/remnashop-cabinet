@@ -9,10 +9,21 @@
 
 Конфиг assets/traffic_alert.json (админка). Дефолт ВЫКЛ. Данные — из Remnawave
 (клиент как node_health._fetch_nodes). Best-effort.
+
+ДОКУПКА ТРАФИКА добавляет сюда две вещи, и обе — без единого лишнего запроса к
+панели: ответ /users уже содержит и `createdAt`, и `trafficLimitStrategy`.
+  * к сообщению «заканчивается» дописывается строка «можно докупить N ГБ за X ₽ —
+    прибавка действует до обновления трафика DD.MM», если продажи включены и человек
+    проходит те же проверки, что и покупка;
+  * появляется ДОГОНЯЮЩАЯ ветка для pct >= 100: вебхук `user.limited` шлёт такое
+    предложение мгновенно, но панель повторяет вебхуки не бесконечно, и этот проход
+    подбирает тех, до кого оно не дошло. Дедуп — общий, в Redis (файл нельзя: вебхук
+    исполняет процесс бота, крон — воркер, и JSON они затирали бы друг другу).
 """
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -21,10 +32,12 @@ from aiogram import Bot
 from dishka.integrations.taskiq import FromDishka, inject
 from httpx import AsyncClient, Timeout
 from loguru import logger
+from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import AppConfig
+from src.infrastructure.services import overlay_extra_traffic as extra
 from src.infrastructure.services.overlay_push import _fill, notify_user_push
 from src.infrastructure.services.overlay_traffic_alert import load_config
 from src.infrastructure.taskiq.broker import broker
@@ -98,14 +111,84 @@ async def _fetch_all_users(config: AppConfig) -> list[dict[str, Any]]:
     return users
 
 
+def _panel_view(u: dict[str, Any]) -> Any:
+    """Строка /users → то, что нужно расчёту докупки. Второй раз в панель не идём."""
+    return SimpleNamespace(
+        uuid=u.get("uuid"),
+        traffic_limit_bytes=int(u.get("trafficLimitBytes") or 0),
+        status=u.get("status"),
+        created_at=_parse_dt(u.get("createdAt")),
+        user_traffic=SimpleNamespace(
+            used_traffic_bytes=int((u.get("userTraffic") or {}).get("usedTrafficBytes") or 0)
+        ),
+    )
+
+
+def _parse_dt(raw: Any) -> Any:
+    if not raw:
+        return None
+    try:
+        value = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+async def _extra_traffic_line(
+    session: AsyncSession, cfg: dict[str, Any], user_id: int, u: dict[str, Any], now: Any
+) -> str:
+    """Строка «можно докупить» к сообщению о 80 %. Пусто — предлагать нечего."""
+    if not extra.effective_enabled(cfg):
+        return ""
+    allowed, window_end = await extra.can_offer_now(
+        session, cfg, user_id, extra.panel_view(_panel_view(u)), now
+    )
+    if not allowed:
+        return ""
+    return extra.user_text(
+        "almost_out",
+        gb=int(cfg["gb_per_purchase"]),
+        price=int(cfg["price_rub"]),
+        until=window_end,
+    )
+
+
+async def _catch_up_limited(
+    session: AsyncSession,
+    redis: Redis,
+    config: AppConfig,
+    user_id: int,
+    telegram_id: Any,
+    u: dict[str, Any],
+    now: Any,
+) -> bool:
+    """Тем, у кого трафик уже кончился, а вебхук с предложением не дошёл.
+
+    Дедуп общий с вебхуком (ключ Redis по человеку и окну трафика), поэтому второго
+    сообщения этот проход не даёт даже сразу после вебхука.
+    """
+    return await extra.offer_when_limited(
+        session,
+        redis,
+        config,
+        SimpleNamespace(id=user_id, telegram_id=telegram_id),
+        extra.panel_view(_panel_view(u)),
+        now,
+    )
+
+
 @broker.task(schedule=[{"cron": "47 */3 * * *"}], retry_on_error=False)
 @inject(patch_module=True)
 async def run_traffic_alert(
     session: FromDishka[AsyncSession],
     config: FromDishka[AppConfig],
+    redis: FromDishka[Redis],
 ) -> None:
     cfg = load_config()
-    if not cfg["enabled"]:
+    extra_cfg = extra.load_config()
+    now = extra.now_utc()
+    if not cfg["enabled"] and not extra.effective_enabled(extra_cfg):
+        # Ни предупреждений о трафике, ни докупки — ходить в панель незачем.
         return
     threshold = cfg["threshold_percent"]
 
@@ -138,9 +221,13 @@ async def run_traffic_alert(
         logger.warning(f"traffic_alert: не смог создать Bot ({e}) — TG пропущены")
 
     sent = 0
+    offered = 0
     for u in users:
         limit = int(u.get("trafficLimitBytes") or 0)
-        if limit <= 0 or u.get("status") != "ACTIVE":
+        # LIMITED пропускаем дальше намеренно: это ровно те, у кого трафик кончился,
+        # и единственные адресаты догоняющего предложения докупить.
+        status = str(u.get("status") or "")
+        if limit <= 0 or status not in ("ACTIVE", "LIMITED"):
             continue
         ut = u.get("userTraffic") or {}
         used = int(ut.get("usedTrafficBytes") or 0)
@@ -150,9 +237,20 @@ async def run_traffic_alert(
             continue
         uid, lang, tg_id = target
 
-        if pct < threshold or pct >= 100:
-            # ниже порога (или уже 100% = LIMITED) — не держим в стейте, чтобы при
-            # новом заходе за порог уведомить снова.
+        if status == "LIMITED" or pct >= 100:
+            # Трафик кончился: предупреждать поздно, но можно предложить докупить —
+            # если продажи включены и человек реально может купить. Дедуп в Redis
+            # общий с вебхуком, поэтому дубля не будет. В стейте не держим: при
+            # обновлении трафика человек должен снова попасть под предупреждение.
+            try:
+                if await _catch_up_limited(session, redis, config, uid, tg_id, u, now):
+                    offered += 1
+            except Exception as e:  # noqa: BLE001 — один человек не рушит проход
+                logger.warning(f"extra_traffic: догоняющее предложение user_id={uid}: {e}")
+            continue
+        if pct < threshold or not cfg["enabled"]:
+            # ниже порога — не держим в стейте, чтобы при новом заходе за порог
+            # уведомить снова. Выключенные предупреждения не мешают докупке выше.
             continue
 
         key = str(uid)
@@ -171,6 +269,15 @@ async def run_traffic_alert(
         # уронило бы ВЕСЬ проход, и все, кто в очереди после, остались бы без
         # предупреждения о трафике до следующего кроном. Текст в норме тот же.
         body = _fill(body_tpl, {"pct": pct, "used": gb_used, "limit": gb_limit})
+        # Докупка — отдельной строкой и только для русского текста: остальные языки
+        # берут переводы из кабинета, а здесь у нас Python-строки.
+        try:
+            offer = await _extra_traffic_line(session, extra_cfg, uid, u, now) if l == "ru" else ""
+        except Exception as e:  # noqa: BLE001 — предупреждение важнее приписки
+            logger.warning(f"extra_traffic: строка докупки для user_id={uid}: {e}")
+            offer = ""
+        if offer:
+            body = f"{body}\n\n{offer}"
 
         await notify_user_push(
             session, SimpleNamespace(id=uid, language=lang),
@@ -185,7 +292,10 @@ async def run_traffic_alert(
         new_state[key] = used
         sent += 1
 
-    _save_state(new_state)
+    if cfg["enabled"]:
+        # Стейт принадлежит предупреждениям о трафике. Если они выключены, а крон
+        # всё равно прошёл ради докупки, чужое состояние затирать нельзя.
+        _save_state(new_state)
     if bot is not None:
         try:
             await bot.session.close()
@@ -193,3 +303,5 @@ async def run_traffic_alert(
             pass
     if sent:
         logger.info(f"traffic_alert: предупреждено о трафике {sent} юзеров (порог {threshold}%)")
+    if offered:
+        logger.info(f"extra_traffic: догоняющее предложение докупить ушло {offered} юзерам")

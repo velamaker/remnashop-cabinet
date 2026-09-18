@@ -1465,6 +1465,83 @@ async def claim_limited(redis: Any, user_id: int, window_end: Optional[datetime]
     return bool(got)
 
 
+def cabinet_offer_url(config: Any) -> str:
+    """Ссылка в кабинет на докупку. Пусто — кабинета нет, звать некуда."""
+    base = (getattr(config, "web_cabinet_url", "") or "").strip().rstrip("/")
+    return f"{base}/billing?extra_traffic=1" if base else ""
+
+
+async def can_offer_now(
+    session: "AsyncSession",
+    cfg: dict[str, Any],
+    user_id: int,
+    panel: PanelView,
+    now: datetime,
+) -> tuple[bool, Optional[datetime]]:
+    """Можно ли предлагать докупку ЭТОМУ человеку. (можно, момент обнуления).
+
+    Считает ровно ту же `eligibility`, что и покупка: предложение, на которое нельзя
+    нажать, хуже молчания. Только чтение — замок здесь не нужен.
+    """
+    try:
+        st = await lock_state(session, user_id, lock=False)
+        await session.rollback()
+    except Exception as exc:  # noqa: BLE001 — уведомление не важнее целости сессии
+        logger.warning(f"extra_traffic: состояние user_id={user_id} не прочитано: {exc}")
+        try:
+            await session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return False, None
+    anchor = panel.created_at or cached_created_at(st.remna_uuid)
+    window_end = next_traffic_reset(st.strategy, anchor, now)
+    known = not (needs_anchor(st.strategy) and anchor is None)
+    why = eligibility(st, cfg, now, window_end=window_end, window_known=known)
+    return why is None, window_end
+
+
+async def offer_when_limited(
+    session: "AsyncSession",
+    redis: Any,
+    config: Any,
+    user: Any,
+    panel: PanelView,
+    now: datetime,
+) -> bool:
+    """«Трафик закончился — можно докупить». Своё сообщение РЯДОМ с базовым.
+
+    Базовое уведомление бота про LIMITED мы не подавляем и не заменяем: оно говорит
+    «продлите», а наше — что делать прямо сейчас, и с правильной датой обновления.
+    Но шлём его ТОЛЬКО тем, кто реально может купить, и ОДИН РАЗ на окно трафика:
+    два сообщения подряд об одном и том же — это спам, а не забота.
+
+    Установка без докупки от этого не меняется ни на байт: выключенные продажи
+    (а это состояние по умолчанию) означают, что мы не шлём ничего.
+    """
+    cfg = load_config()
+    if not effective_enabled(cfg) or not cfg.get("notify_limited"):
+        return False
+    url = cabinet_offer_url(config)
+    if not url:
+        return False
+    allowed, window_end = await can_offer_now(session, cfg, int(user.id), panel, now)
+    if not allowed:
+        return False
+    if not await claim_limited(redis, int(user.id), window_end, now):
+        return False
+    return await send_raw_telegram(
+        config,
+        getattr(user, "telegram_id", None),
+        user_text(
+            "limited_offer",
+            gb=int(cfg["gb_per_purchase"]),
+            price=int(cfg["price_rub"]),
+            until=window_end,
+            url=url,
+        ),
+    )
+
+
 async def send_raw_telegram(config: Any, telegram_id: Optional[int], text_html: str) -> bool:
     """Отправить своё сообщение человеку. Best-effort, свой Bot, приём из traffic_alert.
 
