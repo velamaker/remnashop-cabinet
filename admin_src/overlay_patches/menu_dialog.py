@@ -387,8 +387,15 @@ EXTRA_DEVICE_EXTEND_TEXT = "🧩 Продлить место под устрой
 
 @inject
 async def devices_getter_overlay(
-    session: FromDishka[AsyncSession], config: FromDishka[AppConfig], **kwargs
+    # Имена НАРОЧНО не `session`/`config`: aiogram_dialog зовёт геттер окна со своими
+    # kwargs, и там уже есть `config` — одноимённый параметр под @inject дал бы
+    # «got multiple values for keyword argument 'config'» и окно «Устройства»
+    # падало бы у всех (так и случилось на бою 18.09).
+    _extra_session: FromDishka[AsyncSession],
+    _extra_config: FromDishka[AppConfig],
+    **kwargs,
 ):
+    session, config = _extra_session, _extra_config
     data = await devices_getter(**kwargs)
     data.setdefault("extra_device_button", False)
     data.setdefault("extra_device_text", EXTRA_DEVICE_BUY_TEXT)
