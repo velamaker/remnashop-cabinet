@@ -33,7 +33,9 @@ import os
 
 import pytest
 
-DSN = os.environ.get("RS_PG_DSN")
+from _pg_dsn import sqlalchemy_dsn  # noqa: E402 — соседний модуль тестов
+
+DSN = sqlalchemy_dsn()
 pytestmark = pytest.mark.skipif(not DSN, reason="RS_PG_DSN не задан — нет связи с Postgres")
 
 statistics = importlib.import_module("src.web.endpoints.admin.statistics")

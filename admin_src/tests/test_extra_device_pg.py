@@ -28,7 +28,9 @@ import pytest
 
 extra = importlib.import_module("src.infrastructure.services.overlay_extra_device")
 
-DSN = os.environ.get("RS_PG_DSN")
+from _pg_dsn import sqlalchemy_dsn  # noqa: E402 — соседний модуль тестов
+
+DSN = sqlalchemy_dsn()
 pytestmark = pytest.mark.skipif(not DSN, reason="нужен RS_PG_DSN (одноразовый Postgres)")
 
 NOW = datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc)

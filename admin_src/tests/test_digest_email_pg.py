@@ -29,7 +29,9 @@ import pytest
 
 asyncpg = pytest.importorskip("asyncpg")
 
-DSN = os.environ.get("RS_PG_DSN")
+from _pg_dsn import asyncpg_dsn  # noqa: E402 — соседний модуль тестов
+
+DSN = asyncpg_dsn()
 pytestmark = pytest.mark.skipif(not DSN, reason="RS_PG_DSN не задан — нет связи с Postgres")
 
 de = importlib.import_module("src.infrastructure.services.overlay_digest_email")

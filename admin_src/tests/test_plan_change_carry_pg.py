@@ -34,7 +34,10 @@ import pytest
 
 asyncpg = pytest.importorskip("asyncpg")
 
-DSN = os.environ.get("RS_PG_DSN")
+from _pg_dsn import asyncpg_dsn  # noqa: E402 — соседний модуль тестов
+
+# Строку под SQLAlchemy этот файл делает сам (_asyncpg_url ниже) — здесь нужен asyncpg.
+DSN = asyncpg_dsn()
 pytestmark = pytest.mark.skipif(not DSN, reason="RS_PG_DSN не задан — нет связи с Postgres")
 
 carry = importlib.import_module("src.infrastructure.services.overlay_plan_change")
