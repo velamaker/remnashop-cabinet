@@ -76,6 +76,13 @@ class OrderSession(FakeSession):
                     o["created_at"], o["payment_id"], o.get("price_per_30d", 90),
                 )
             )
+        if "FROM extra_device_orders o WHERE o.payment_id" in sql:
+            # Чтение без замка — им пользуются алерт возврата и счётчик попыток.
+            self.log.append(("order_read", None))
+            if self.order is None:
+                return _Row(None)
+            o = self.order
+            return _Row((o["id"], o["status"], o["amount"], o.get("slot_id"), o["period_end"], o["user_id"]))
         if "cabinet_balance = cabinet_balance + :a" in sql:
             self.credited += Decimal(str(params["a"]))
             self.log.append(("credit", str(params["a"])))
@@ -421,3 +428,66 @@ async def test_refund_alert_only_on_real_transition(monkeypatch):
 
 async def _async(value):
     return value
+
+
+async def test_panel_failure_on_webhook_does_not_grant_a_subscription(monkeypatch):
+    """Панель молчит — заказ ждёт крона, но подписку по этому счёту НЕ выдаём.
+
+    Пустить исключение наружу нельзя вдвойне: обычная ветка обработчика выдала бы по
+    счёту докупки подписку синтетического тарифа, а шлюз получил бы 500 и начал
+    повторять вебхук по уже зачисленным деньгам.
+    """
+    log = Log()
+    o = order("credited")
+    session = OrderSession(log, o)
+    live = dict(extra.DEFAULT_CONFIG, enabled=True, price_rub_30d=90)
+    monkeypatch.setattr(extra, "load_config", lambda: live)
+    me = SimpleNamespace(
+        session=session,
+        remnawave=FakeRemnawave(log, fail=True),
+        notifier=FakeNotifier(log),
+        subscription_dao=Boom(),
+        purchase_subscription=Boom(),
+        event_publisher=Boom(),
+        assign_referral_rewards=Boom(),
+        redirect=Boom(),
+        user_dao=Boom(),
+        uow=Boom(),
+        transaction_dao=Boom(),
+    )
+    # Ни исключения наружу, ни обращения к подписке — обработчик просто выходит
+    # (любое поле Boom бросило бы AssertionError).
+    await payment.ProcessPayment._handle_success(me, USER, fake_transaction(o["payment_id"]))
+    names = log.names()
+    # Применение не закоммичено — в базе заказ остаётся `credited` для крона.
+    assert "commit" not in names[: names.index("panel_patch")]
+    assert "rollback" in names, "сессию после сбоя не откатили — следующий шаг упал бы"
+    assert "attempt" in names, "неудачная попытка не отмечена — крон не поймёт, когда сдаваться"
+
+
+async def test_renew_reapply_failure_leaves_the_session_usable(monkeypatch):
+    """Сбой восстановления лимита не должен завалить следующий шаг обработчика.
+
+    После него по ТОЙ ЖЕ сессии читает отчёт о переносе остатка: оборванная
+    транзакция превратила бы одну незаметную проблему в две.
+    """
+    log = Log()
+    session = OrderSession(log, None)
+    calls: list[str] = []
+
+    async def boom(*a, **kw):
+        calls.append("reconcile")
+        raise RuntimeError("панель недоступна")
+
+    monkeypatch.setattr(extra, "reconcile_user", boom)
+    me = SimpleNamespace(session=session, remnawave=FakeRemnawave(log))
+    try:
+        await extra.reconcile_user(session, sdk=None, remnawave=None, user_id=1, config={}, now=NOW)
+    except RuntimeError:
+        pass
+    assert calls == ["reconcile"]
+    # Сам откат заперт разбором исходника: подделка сессии его не почувствует.
+    source = textwrap.dedent(inspect.getsource(gateway_mod.apply))
+    tail = source[source.index("PurchaseType.RENEW:") :]
+    tail = tail[: tail.index("# OVERLAY: отчёт о переносе остатка")]
+    assert "rollback" in tail, "после сбоя восстановления сессию не откатывают"

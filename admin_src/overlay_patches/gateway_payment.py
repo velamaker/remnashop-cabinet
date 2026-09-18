@@ -257,9 +257,19 @@ async def _handle_extra_device(self, user: UserDto, transaction: TransactionDto)
     Зачисление и применение внутри сервиса и со своими commit: получение денег не
     зависит от того, ответит ли панель. Сообщения — только после commit и в try.
     """
-    result = await extra.handle_paid_order(
-        self.session, getattr(self.remnawave, "sdk", None), transaction.payment_id
-    )
+    try:
+        result = await extra.handle_paid_order(
+            self.session, getattr(self.remnawave, "sdk", None), transaction.payment_id
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Деньги уже на балансе, заказ остался `credited` — доведёт крон. Наружу
+        # исключение не пускаем: обычная ветка выдала бы по этому счёту ПОДПИСКУ,
+        # а шлюз получил бы 500 и начал повторять вебхук.
+        logger.exception(
+            f"extra_device: счёт '{transaction.payment_id}' не применён — доведёт крон"
+        )
+        await _note_extra_failure(self, transaction.payment_id, exc)
+        return {"result": "deferred"}
     if result is None:
         return None
     if result.get("repeat"):
@@ -325,6 +335,22 @@ async def _handle_extra_device(self, user: UserDto, transaction: TransactionDto)
     except Exception:  # noqa: BLE001 — сообщение не отменяет уже применённую покупку
         logger.exception(f"extra_device: не сообщил о счёте '{transaction.payment_id}'")
     return result
+
+
+async def _note_extra_failure(self, payment_id, exc: Exception) -> None:
+    """Отметить неудачную попытку применения и вернуть сессию в рабочее состояние."""
+    try:
+        await self.session.rollback()
+        order = await extra.order_by_payment(self.session, payment_id)
+        await self.session.rollback()
+        if order is not None:
+            await extra.note_attempt(self.session, order["id"], f"{type(exc).__name__}: {exc}")
+    except Exception:  # noqa: BLE001 — счётчик попыток не важнее самой оплаты
+        logger.warning(f"extra_device: попытку по счёту '{payment_id}' не отметил")
+        try:
+            await self.session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 async def _alert_refunded_device(self, data, before: "str | None") -> None:
@@ -568,6 +594,12 @@ def apply() -> str:
                 logger.exception(
                     f"extra_device: лимит после продления не восстановлен (user {user.log})"
                 )
+                # Откат обязателен: дальше по этой же сессии читает отчёт о переносе
+                # остатка, а оборванная транзакция завалила бы и его.
+                try:
+                    await self.session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
 
         # OVERLAY: отчёт о переносе остатка (best-effort). ПОСЛЕ выдачи и события покупки:
         # уведомление владельцу не задерживает и не срывает то, за что заплачено.
