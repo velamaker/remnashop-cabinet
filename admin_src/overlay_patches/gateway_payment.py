@@ -254,21 +254,40 @@ async def _alert_refunded_carry(self, data, before: "str | None") -> None:
 async def _handle_extra_device(self, user: UserDto, transaction: TransactionDto):
     """Ветка докупки устройства. None — счёт не наш, дальше идёт обычный путь базы.
 
+    ПЕРВЫМ ДЕЛОМ — ПРЕДФИЛЬТР ПО СНИМКУ ТАРИФА, и это не оптимизация. Эта функция
+    стоит в пути КАЖДОГО платежа, а её таблицы появляются миграцией, которую
+    накатывает только контейнер бота: taskiq-воркер в окне выкатки может исполнять
+    вебхук, когда `extra_device_orders` ещё нет. Любое обращение к новым таблицам
+    раньше проверки означало бы «оплата принята, подписка не выдана, никто не
+    уведомлён» у обычного покупателя. Счёт докупки узнаётся по снимку тарифа (−4) —
+    он приходит в самой транзакции и в базу ходить не надо.
+
     Зачисление и применение внутри сервиса и со своими commit: получение денег не
     зависит от того, ответит ли панель. Сообщения — только после commit и в try.
     """
+    if getattr(transaction.plan_snapshot, "id", 0) != extra.SYNTHETIC_PLAN_ID:
+        return None
     try:
         result = await extra.handle_paid_order(
             self.session, getattr(self.remnawave, "sdk", None), transaction.payment_id
         )
     except Exception as exc:  # noqa: BLE001
-        # Деньги уже на балансе, заказ остался `credited` — доведёт крон. Наружу
-        # исключение не пускаем: обычная ветка выдала бы по этому счёту ПОДПИСКУ,
-        # а шлюз получил бы 500 и начал повторять вебхук.
+        # Дальше — только НАШИ счета. Деньги уже на балансе, заказ остался `credited`,
+        # доведёт крон. Наружу исключение не пускаем: шлюз получил бы 500 и начал
+        # повторять вебхук по уже зачисленным деньгам.
         logger.exception(
             f"extra_device: счёт '{transaction.payment_id}' не применён — доведёт крон"
         )
         await _note_extra_failure(self, transaction.payment_id, exc)
+        try:
+            await _notify_admins_raw(
+                self,
+                extra.admin_text(
+                    "deferred", user=user.log, payment_id=transaction.payment_id, error=str(exc)
+                ),
+            )
+        except Exception:  # noqa: BLE001 — алерт не важнее самой оплаты
+            logger.warning("extra_device: алерт об отложенном применении не ушёл")
         return {"result": "deferred"}
     if result is None:
         return None

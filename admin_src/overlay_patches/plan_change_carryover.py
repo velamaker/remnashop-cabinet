@@ -242,10 +242,20 @@ async def change_with_carryover(
             return
 
         # 3. Состояние и расчёт. Сбой загрузки или расчёта не срывает оплаченную выдачу.
-        state = None
+        # Докупки — СВОЙ SAVEPOINT: перенос остатка на бою включён, и сбой чтения
+        # вспомогательных таблиц (их может не быть в окне выкатки) не имеет права
+        # обнулить перенос ДНЕЙ, который человеку обещала витрина.
+        extras: tuple = ()
         try:
             async with self.session.begin_nested():
                 extras = await _device_extras(self.session, user.id, row.id, now)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"{actor.log} extra_device: стоимость мест не прочитана ({exc})")
+            outcome["device_read_error"] = f"{type(exc).__name__}: {exc}"
+
+        state = None
+        try:
+            async with self.session.begin_nested():
                 state = await carry.load_carry_state(
                     self.session,
                     user_id=user.id,

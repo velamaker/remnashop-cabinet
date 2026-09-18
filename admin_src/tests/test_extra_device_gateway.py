@@ -260,13 +260,17 @@ async def test_disabled_switch_does_not_stop_a_paid_order():
     assert result["result"] == "applied"
 
 
-async def test_already_used_rule_does_not_reject_a_paid_order():
-    """Правило «второй раз не предлагаем» относится к витрине, а не к оплаченному счёту."""
+async def test_late_order_whose_window_already_closed_is_rejected_not_crashed():
+    """Оплаченный период кончился, пока счёт лежал: слот с концом раньше начала не
+    создать (ck_eds_period). Честный `rejected`, деньги на балансе — а не исключение
+    и вечные повторы крона."""
     log = Log()
-    o = order("credited")
-    session = OrderSession(log, o, ended_slots=1)
+    o = order("credited", period_end=NOW - timedelta(minutes=1))
+    session = OrderSession(log, o, expire_at=NOW + timedelta(days=30))
     result = await extra.handle_paid_order(session, FakeRemnawave(log).sdk, o["payment_id"], NOW)
-    assert result["result"] == "applied"
+    assert result["result"] == "rejected"
+    assert result["reason"] == "window_closed"
+    assert "insert_slot" not in log.names()
 
 
 async def test_panel_failure_keeps_order_credited_for_retry():
@@ -491,3 +495,143 @@ async def test_renew_reapply_failure_leaves_the_session_usable(monkeypatch):
     tail = source[source.index("PurchaseType.RENEW:") :]
     tail = tail[: tail.index("# OVERLAY: отчёт о переносе остатка")]
     assert "rollback" in tail, "после сбоя восстановления сессию не откатывают"
+
+
+# ── проверка после ревью: ветка докупки стоит в пути КАЖДОГО платежа ─────────
+
+
+def test_our_branch_is_filtered_by_plan_snapshot_before_any_sql():
+    """Предфильтр по снимку тарифа — ДО первого обращения к новым таблицам.
+
+    Порядок здесь важнее читаемости: таблицы докупки создаёт миграция, которую
+    накатывает только контейнер бота, а вебхук исполняет taskiq-воркер. В окне
+    выкатки чтение `extra_device_orders` у воркера падало бы на КАЖДОМ платеже.
+    """
+    source = textwrap.dedent(inspect.getsource(gateway_mod._handle_extra_device))
+    body = source[source.index('"""', source.index('"""') + 3) + 3 :]
+    assert body.index("SYNTHETIC_PLAN_ID") < body.index("handle_paid_order")
+
+
+async def test_ordinary_payment_is_granted_even_if_extra_tables_are_broken(monkeypatch):
+    """Обычная покупка доходит до выдачи, даже когда докупка полностью сломана.
+
+    Раньше первым делом читались новые таблицы: одно исключение (их ещё нет) —
+    и `_handle_success` выходил ДО выдачи. Деньги приняты, подписки нет, никто не
+    уведомлён. Самый дорогой из возможных отказов, поэтому проверка отдельная.
+    """
+    log = Log()
+
+    async def boom(*a, **kw):
+        raise RuntimeError("relation extra_device_orders does not exist")
+
+    monkeypatch.setattr(extra, "handle_paid_order", boom)
+
+    granted: list = []
+
+    class Purchase:
+        async def system(self, dto):
+            granted.append(dto)
+
+    class Publisher:
+        async def publish(self, event):
+            log.append(("event", None))
+
+    class Subs:
+        async def get_current(self, uid):
+            return None
+
+    plan = SimpleNamespace(
+        id=10, name="Тариф", type="BASE", traffic_limit=100, device_limit=2,
+        duration=30, is_trial=False,
+    )
+    tx = fake_transaction(uuid_lib.uuid4())
+    tx.plan_snapshot = plan
+    me = SimpleNamespace(
+        session=OrderSession(log),
+        remnawave=FakeRemnawave(log),
+        notifier=FakeNotifier(log),
+        subscription_dao=Subs(),
+        purchase_subscription=Purchase(),
+        event_publisher=Publisher(),
+        assign_referral_rewards=SimpleNamespace(system=lambda dto: _async(None)),
+        redirect=SimpleNamespace(to_success_payment=lambda *a: _async(None)),
+        user_dao=SimpleNamespace(get_by_id=lambda uid: _async(USER)),
+        uow=Boom(),
+        transaction_dao=Boom(),
+    )
+    await payment.ProcessPayment._handle_success(me, USER, tx)
+    assert len(granted) == 1, "обычная покупка не выдана — оплата принята впустую"
+
+
+async def test_deferred_extra_order_alerts_the_owner(monkeypatch):
+    """Место не выдалось сразу — владелец узнаёт об этом, а не только лог."""
+    log = Log()
+    o = order("credited")
+    session = OrderSession(log, o)
+    live = dict(extra.DEFAULT_CONFIG, enabled=True, price_rub_30d=90)
+    monkeypatch.setattr(extra, "load_config", lambda: live)
+    me = SimpleNamespace(
+        session=session,
+        remnawave=FakeRemnawave(log, fail=True),
+        notifier=FakeNotifier(log),
+        subscription_dao=Boom(),
+        purchase_subscription=Boom(),
+        event_publisher=Boom(),
+        assign_referral_rewards=Boom(),
+        redirect=Boom(),
+        user_dao=Boom(),
+        uow=Boom(),
+        transaction_dao=Boom(),
+    )
+    await payment.ProcessPayment._handle_success(me, USER, fake_transaction(o["payment_id"]))
+    alerts = [t for n, t in log if n == "notify_admins"]
+    assert any("не выдано сразу" in a for a in alerts)
+
+
+# ── компенсация лимита в панели ──────────────────────────────────────────────
+
+
+async def test_commit_failure_after_panel_returns_the_limit_back():
+    """Панель приняла лимит, база — нет: без компенсации повтор дал бы +2 за одну оплату.
+
+    Вебхук панели поднимает `device_limit` в нашей базе, а цель считается «+1 к
+    текущему» — второй заход того же заказа прибавил бы ещё одно место.
+    """
+    log = Log()
+    o = order("credited")
+    session = OrderSession(log, o, commit_fails=True)
+    with pytest.raises(Exception):
+        await extra.handle_paid_order(session, FakeRemnawave(log).sdk, o["payment_id"], NOW)
+    patches = [dict(p) for n, p in log if n == "panel_patch"]
+    assert len(patches) == 2, "компенсирующего PATCH нет"
+    assert patches[0]["hwidDeviceLimit"] == 3
+    assert patches[1]["hwidDeviceLimit"] == 2, "лимит в панели не вернули на прежний"
+
+
+async def test_panel_mismatch_after_apply_is_compensated():
+    """Панель ответила не тем лимитом — но могла применить его до того (таймаут).
+
+    Слота у нас не останется, значит крон такой +1 никогда не увидит: возвращаем сами.
+    """
+    log = Log()
+    o = order("credited")
+    session = OrderSession(log, o)
+    with pytest.raises(Exception):
+        await extra.handle_paid_order(
+            session, FakeRemnawave(log, returns=99).sdk, o["payment_id"], NOW
+        )
+    patches = [dict(p) for n, p in log if n == "panel_patch"]
+    assert patches[-1]["hwidDeviceLimit"] == 2, "прежний лимит в панель не вернули"
+
+
+async def test_compensation_never_raises():
+    """Компенсация — аварийная ветка: её собственный сбой не должен ничего ломать."""
+    log = Log()
+    st = extra.UserState(
+        user_id=USER_ID, balance=Decimal(0), sub_id=SUB_ID, sub_status="ACTIVE", is_trial=False,
+        expire_at=EXPIRE, device_limit=3, plan_id=7, plan_device_limit=2, remna_uuid=PANEL_UUID,
+        sub_updated_at=NOW, frozen_at=None, reserve_expire_at=None, slots=(),
+    )
+    assert await extra.compensate_limit(FakeRemnawave(log, fail=True).sdk, st, 2) is False
+    assert await extra.compensate_limit(None, st, 2) is False
+    assert await extra.compensate_limit(FakeRemnawave(log).sdk, st, 2) is True

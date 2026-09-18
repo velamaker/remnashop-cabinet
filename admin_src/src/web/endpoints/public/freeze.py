@@ -12,6 +12,7 @@ from typing import Any
 from dishka import FromDishka
 from dishka.integrations.fastapi import inject
 from fastapi import APIRouter, HTTPException, status
+from loguru import logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -160,10 +161,15 @@ async def unfreeze(
         text("UPDATE subscription_freezes SET active = false WHERE user_id = :uid"),
         {"uid": user.id},
     )
-    # В ТОЙ ЖЕ транзакции, что снятие паузы: иначе рестарт между ними оставил бы
-    # докупленное место с концом «как будто паузы не было» — человек потерял бы дни.
+    # В ТОЙ ЖЕ транзакции, что снятие паузы, но в SAVEPOINT: пауза в панели УЖЕ
+    # снята, и сбой вспомогательной таблицы (её может не быть в окне выкатки) не
+    # имеет права оставить человека «на паузе» в нашей базе.
     from src.infrastructure.services.overlay_extra_device import shift_on_unfreeze
 
-    await shift_on_unfreeze(session, user.id, frozen_at)
+    try:
+        async with session.begin_nested():
+            await shift_on_unfreeze(session, user.id, frozen_at)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"extra_device: конец места не сдвинут после паузы user_id={user.id}: {exc}")
     await session.commit()
     return {"frozen": False, "expire_at": new_expire.isoformat()}

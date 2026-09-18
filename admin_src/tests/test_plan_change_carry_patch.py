@@ -865,3 +865,50 @@ def test_extras_are_passed_into_the_calculation():
     ]
     assert calls, "load_carry_state больше не вызывается"
     assert any(kw.arg == "extras" for kw in calls[0].keywords), "extras не передаются в расчёт"
+
+
+async def test_broken_device_tables_do_not_kill_the_whole_carryover(spies, monkeypatch):
+    """Сбой чтения докупок не имеет права обнулить перенос ДНЕЙ.
+
+    Перенос остатка на бою включён, и витрина уже пообещала человеку дни. Раньше
+    чтение докупок стояло в ОДНОМ SAVEPOINT с загрузкой состояния: отсутствующая
+    таблица (окно выкатки) роняла обе загрузки, и смена тарифа выдавалась с бонусом 0.
+    """
+    extra = importlib.import_module("src.infrastructure.services.overlay_extra_device")
+
+    async def boom(session, subscription_id):
+        raise RuntimeError("relation extra_device_orders does not exist")
+
+    monkeypatch.setattr(extra, "load_carry_orders", boom)
+
+    world = World(days_left=29).build()
+    await execute(world)
+
+    panel = [d for n, d in world.log if n == "update_user"][0]
+    # 29 дн. по 4/день = 116; новый 240/30 = 8/день → +14 дн. Бонус на месте.
+    assert panel["subscription"].expire_at == NOW + timedelta(days=30 + 14)
+    outcome = getattr(world.interactor, patch_mod.OUTCOME_ATTR)
+    assert outcome["applied"] is True
+    assert "device_read_error" in outcome, "о сбое чтения докупок никто не узнал"
+
+
+def test_device_read_has_its_own_savepoint():
+    """Отдельный SAVEPOINT — это и есть вся защита переноса от чужого сбоя."""
+    import ast
+    import inspect
+    import textwrap
+
+    source = textwrap.dedent(inspect.getsource(patch_mod.change_with_carryover))
+    tree = ast.parse(source)
+    # Только SAVEPOINT'ы: внешний `async with self.uow` содержит вообще всё.
+    withs = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.AsyncWith)
+        and any("begin_nested" in ast.unparse(item.context_expr) for item in n.items)
+    ]
+    bodies = ["".join(ast.unparse(stmt) for stmt in n.body) for n in withs]
+    device = [b for b in bodies if "_device_extras" in b]
+    state = [b for b in bodies if "load_carry_state" in b]
+    assert device and state, "не нашли оба SAVEPOINT"
+    assert not any("load_carry_state" in b for b in device), "докупки и состояние в одном SAVEPOINT"

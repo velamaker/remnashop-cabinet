@@ -17,13 +17,14 @@
 «деньги уже на балансе»: отдельного возврата в шлюз, второй идемпотентности и состояния
 «оплачено, но не выдано и не возвращено» в коде нет.
 
-РЕШЕНИЯ ВЛАДЕЛЬЦА (17.09), они же — отличия от первой редакции плана:
-  * цена по умолчанию 100 ₽ за устройство на 30 дней;
-  * по окончании слота устройства НЕ отключаем, а повторную докупку ЭТОЙ подписке
-    больше не предлагаем (`already_used`) — кабинет ведёт на тариф побольше;
-  * отключение лишних устройств осталось настройкой, ПО УМОЛЧАНИЮ ВЫКЛЮЧЕННОЙ, и
-    отключает только то, что подключено ПОСЛЕ покупки места (см. pick_excess);
-  * максимум 2 слота на подписку.
+РЕШЕНИЯ ВЛАДЕЛЬЦА, они же — отличия от первой редакции плана:
+  * цена по умолчанию 100 ₽ за устройство на 30 дней, минимум остатка 7 дней;
+  * «отключить и предложить снова»: по окончании места лишние устройства отключаются
+    (настройка ВКЛЮЧЕНА по умолчанию, предупреждение за 3 дня), а докупку человеку
+    предлагаем СНОВА — вечного запрета «уже покупали» нет;
+  * отключаем только то, что подключено ПОСЛЕ покупки места, новейшие первыми и ровно
+    столько, сколько сверх лимита (см. pick_excess);
+  * максимум 2 ОДНОВРЕМЕННО действующих места на подписку.
 
 Конфиг — assets/extra_device.json, читается на каждый вызов (админка правит на лету).
 Выключатель гасит продажи и кнопки, но НЕ крон: действующие слоты обязаны дожить свой
@@ -79,12 +80,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Решение владельца: 100 ₽ за одно устройство на 30 дней.
     "price_rub_30d": 100,
     "min_amount_rub": 10,
-    "min_days_left": 3,
+    # Решение владельца: на остатке короче недели выгоднее продлить саму подписку.
+    "min_days_left": 7,
     "max_extra": 2,
-    # ВЫКЛЮЧЕНО по решению владельца: конец слота снижает лимит, но подключённое
-    # устройство панель пускает дальше. Взамен повторная докупка этой подписке не
-    # предлагается (see eligibility → already_used).
-    "remove_excess_devices": False,
+    # ВКЛЮЧЕНО по решению владельца («отключить и предложить снова»): без отключения
+    # панель пускает уже подключённый HWID без сверки с лимитом, и место, оплаченное
+    # на неделю, работало бы вечно. Трогаем только подключённое ПОСЛЕ покупки.
+    "remove_excess_devices": True,
     "notify_users": True,
     "notify_admins": True,
 }
@@ -134,7 +136,7 @@ def _normalize(data: dict[str, Any]) -> dict[str, Any]:
             data.get("min_days_left"), DEFAULT_CONFIG["min_days_left"], _LIMITS["min_days_left"]
         ),
         "max_extra": _norm_int(data.get("max_extra"), DEFAULT_CONFIG["max_extra"], _LIMITS["max_extra"]),
-        "remove_excess_devices": bool(data.get("remove_excess_devices", False)),
+        "remove_excess_devices": bool(data.get("remove_excess_devices", True)),
         "notify_users": bool(data.get("notify_users", True)),
         "notify_admins": bool(data.get("notify_admins", True)),
     }
@@ -195,9 +197,6 @@ class UserState:
     frozen_at: Optional[datetime]
     reserve_expire_at: Optional[datetime]
     slots: tuple[SlotRow, ...] = ()
-    # Сколько слотов ЭТОЙ подписки уже отработали свой срок. Решение владельца:
-    # второй раз докупку такой подписке не предлагаем — ведём на тариф побольше.
-    ended_slots: int = 0
 
     @property
     def is_unlimited(self) -> bool:
@@ -231,14 +230,14 @@ def eligibility(
     slot_id: Optional[int] = None,
     *,
     check_enabled: bool = True,
-    check_used: bool = True,
 ) -> Optional[str]:
     """Почему НЕЛЬЗЯ (код причины) или None. Порядок проверок — часть смысла.
 
     `check_enabled=False` — для уже оплаченного заказа: деньги взяты, и выключенный
     в этот момент тумблер не повод их не отработать.
-    `check_used=False` — там же: правило «второй раз не предлагаем» относится к
-    витрине, а не к счёту, выставленному, когда предложение было.
+
+    Ограничение только на ОДНОВРЕМЕННО действующие места (`max_extra`): решение
+    владельца — после окончания места докупку предлагаем снова, вечного запрета нет.
     """
     if check_enabled and not effective_enabled(config):
         return "disabled"
@@ -273,8 +272,6 @@ def eligibility(
 
     if (st.expire_at - now).total_seconds() < int(config["min_days_left"]) * DAY:
         return "too_late"
-    if check_used and st.ended_slots > 0:
-        return "already_used"
     if len(active) >= int(config["max_extra"]):
         return "max_reached"
     return None
@@ -461,11 +458,6 @@ PAUSE_RESERVE_SQL = (
     " WHERE user_id = :uid AND ended = false AND reserve_expire_at > now())"
 )
 
-ENDED_SLOTS_SQL = (
-    "SELECT count(*) FROM extra_device_slots "
-    "WHERE user_id = :uid AND subscription_id = :sid AND status = 'ended'"
-)
-
 # Стоимость действующих слотов подписки — то, что перенос остатка превращает в дни.
 CARRY_ORDERS_SQL = (
     "SELECT o.amount, o.currency, o.cov_start, o.period_end, o.slot_id "
@@ -524,11 +516,6 @@ async def lock_state(session: "AsyncSession", user_id: int, *, lock: bool = True
         _row_slot(r) for r in (await session.execute(text(ACTIVE_SLOTS_SQL), {"uid": user_id})).all()
     ]
     pause = (await session.execute(text(PAUSE_RESERVE_SQL), {"uid": user_id})).first()
-    ended = 0
-    if sub_id is not None:
-        ended = int(
-            (await session.execute(text(ENDED_SLOTS_SQL), {"uid": user_id, "sid": sub_id})).scalar() or 0
-        )
     return UserState(
         user_id=user_id,
         balance=balance,
@@ -544,7 +531,6 @@ async def lock_state(session: "AsyncSession", user_id: int, *, lock: bool = True
         frozen_at=pause[0] if pause else None,
         reserve_expire_at=pause[1] if pause else None,
         slots=tuple(slots),
-        ended_slots=ended,
     )
 
 
@@ -637,6 +623,31 @@ async def set_limit(session: "AsyncSession", sdk: Any, st: UserState, new_limit:
     got = getattr(updated, "hwid_device_limit", None)
     if got is None or int(got) != int(new_limit):
         raise PanelRejected(f"панель вернула лимит {got}, ожидали {new_limit}")
+
+
+async def compensate_limit(sdk: Any, st: UserState, limit_before: int) -> bool:
+    """Вернуть панели прежний лимит. Best-effort, наружу ничего не бросает.
+
+    ЗАЧЕМ БЕЗУСЛОВНО, А НЕ «СНАЧАЛА ПРОВЕРИМ». После неудачи мы не знаем, применился
+    ли наш PATCH: таймаут и разорванное соединение выглядят одинаково с «не дошло» и
+    с «дошло, ответ потерялся». Повторная установка ПРЕЖНЕГО значения безвредна, если
+    ничего не менялось, и чинит панель, если менялось. Проверка же требует лишнего
+    запроса и всё равно оставляет гонку.
+    """
+    if sdk is None or not st.remna_uuid:
+        return False
+    try:
+        from remnapy.models import UpdateUserRequestDto
+
+        await sdk.users.update_user(
+            UpdateUserRequestDto(uuid=str(st.remna_uuid), hwid_device_limit=int(limit_before))
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 — это уже аварийная ветка, хуже не сделаем
+        logger.critical(
+            f"extra_device: НЕ вернул лимит {limit_before} в панель user_id={st.user_id}: {exc}"
+        )
+        return False
 
 
 # ── покупка ─────────────────────────────────────────────────────────────────
@@ -895,7 +906,7 @@ async def apply_order(
     """
     st = await lock_state(session, order["user_id"])
     why = eligibility(
-        st, config, now, order["kind"], order["slot_id"], check_enabled=False, check_used=False
+        st, config, now, order["kind"], order["slot_id"], check_enabled=False
     )
     if why is None:
         created = _as_dt(order["created_at"])
@@ -909,6 +920,11 @@ async def apply_order(
             slot = st.slot(order["slot_id"])
             if slot is None or slot.ends_at != order["cov_start"]:
                 why = "slot_changed"
+    if why is None and order["kind"] == "new" and now >= order["period_end"]:
+        # Опоздавший платёж: оплаченный период кончился, пока счёт лежал неоплаченным.
+        # Слот с концом раньше начала не создать (ck_eds_period), повторять нечего —
+        # отказываем честно, деньги остаются на балансе.
+        why = "window_closed"
     if why is not None:
         await session.rollback()
         await reject_order(session, order["id"], why)
@@ -926,6 +942,7 @@ async def apply_order(
         days=max(1, -(-int((order["period_end"] - cov_start).total_seconds()) // DAY)),
         slot_id=order["slot_id"],
     )
+    limit_before = st.device_limit
     try:
         result = await buy_from_balance(
             session,
@@ -944,12 +961,31 @@ async def apply_order(
         await session.rollback()
         await reject_order(session, order["id"], "slot_changed")
         return {"result": "rejected", "reason": "slot_changed"}
+    except PanelRejected:
+        # Панель ответила ошибкой ИЛИ не тем лимитом — но могла применить его до того
+        # (таймаут, потерянный ответ). Слота у нас не останется, значит крон такой +1
+        # никогда не увидит: возвращаем прежнее значение сами.
+        await session.rollback()
+        await compensate_limit(sdk, st, limit_before)
+        raise
     if result.get("result") == "insufficient_balance":
         # Деньги зачислены, но человек успел потратить их сам (продление, автоплатёж).
         await session.rollback()
         await reject_order(session, order["id"], "balance_spent")
         return {"result": "rejected", "reason": "balance_spent"}
-    await session.commit()
+    try:
+        await session.commit()
+    except Exception:
+        # Панель приняла лимит, база — нет. Без компенсации вебхук панели поднял бы
+        # device_limit в нашей базе, и ПОВТОР этого же заказа дал бы +2 места за одну
+        # оплату: «+1 к текущему» считается от значения, которое мы сами и подняли.
+        await session.rollback()
+        await compensate_limit(sdk, st, limit_before)
+        logger.critical(
+            f"extra_device: commit после панели упал (счёт '{order['payment_id']}'), "
+            f"лимит в панели возвращён на {limit_before}"
+        )
+        raise
     return result
 
 
@@ -1058,7 +1094,9 @@ async def reconcile_user(
     """
     st = await lock_state(session, user_id)
     out: dict[str, Any] = {"ended": [], "burned": [], "limit": st.device_limit, "reminded": []}
-    if st.sub_id is None:
+    if st.sub_id is None or not st.slots:
+        # Сводить нечего: действующих мест нет. Раньше сюда попадало КАЖДОЕ продление
+        # и зря дёргало лимит с коммитом на человеке, который ничего не докупал.
         await session.rollback()
         return out
 
@@ -1105,6 +1143,7 @@ async def reconcile_user(
         )
 
     changed = False
+    limit_failed = False
     deleted_panel = (st.sub_status or "").upper() == "DELETED"
     if target != st.device_limit and not deleted_panel:
         try:
@@ -1123,11 +1162,17 @@ async def reconcile_user(
                 changed = True
             else:
                 await session.rollback()
-                if ended_ids or burned:
-                    await _bump_fail(session, ended_ids or [s for s, _ in burned])
+                # Считаем неудачу и при ЧИСТОМ восстановлении лимита (после продления
+                # никто ещё не кончался): без этого постоянный сбой панели повторялся
+                # бы вечно и молча, без единого алерта владельцу.
+                failing = ended_ids or [s for s, _ in burned] or [s.id for s in active_after]
+                await _bump_fail(session, failing)
+                limit_failed = True
                 out["error"] = str(exc)
                 return out
-    if changed or active_after:
+    # Отметку «применено» ставим, только если что-то ДЕЙСТВИТЕЛЬНО менялось: иначе
+    # last_applied_at уезжал вперёд на каждом проходе и размывал признак сброса.
+    if changed:
         await session.execute(
             text(
                 "UPDATE extra_device_slots SET last_applied_at = now(), fail_count = 0 "
@@ -1139,6 +1184,7 @@ async def reconcile_user(
 
     out["ended"] = ended_ids
     out["burned"] = burned
+    out["fail_alert"] = False
     out["limit"] = target
     out["limit_before"] = st.device_limit
     out["ended_since"] = ended_since
@@ -1251,7 +1297,7 @@ _REASON_RU = {
     "unlimited_term": "у подписки нет срока",
     "unlimited_devices": "у подписки нет лимита устройств",
     "max_reached": "докуплено максимум устройств",
-    "already_used": "докупка к этой подписке уже была",
+    "window_closed": "оплаченный период уже закончился",
     "slot_changed": "докупка уже закончилась",
     "nothing_to_extend": "продлевать нечего",
     "too_late": "до конца срока слишком мало времени",
@@ -1300,7 +1346,8 @@ def user_text(key: str, **kw: Any) -> str:
             removed = f"Отключили {names} — они подключены после покупки места. "
         return (
             f"Срок докупленного устройства закончился — теперь можно подключить "
-            f"{kw['limit']} устр. {removed}Если мест не хватает, в кабинете есть тариф побольше."
+            f"{kw['limit']} устр. {removed}Нужно место снова — докупите его в кабинете "
+            "→ «Устройства» или выберите тариф побольше."
         )
     raise KeyError(key)
 
@@ -1336,6 +1383,19 @@ def admin_text(key: str, **kw: Any) -> str:
         return (
             f"⚠️ <b>Докупка: не удалось {what}</b>\n{kw['user']}\n"
             f"Слот #{kw['slot_id']}: {kw['error']}."
+        )
+    if key == "deferred":
+        return (
+            "⚠️ <b>Докупка: место не выдано сразу</b>\n"
+            f"{kw['user']}\nСчёт <code>{kw['payment_id']}</code>: {kw['error']}.\n"
+            "Деньги на балансе, заказ доведёт крон в ближайшие 15 минут — "
+            "если через два часа не вышло, придёт «Докупка не применена»."
+        )
+    if key == "subscription_replaced":
+        return (
+            "⚠️ <b>Докупка сгорела: сменилась подписка</b>\n"
+            f"{kw['user']}\nМесто #{kw['slot_id']} привязано к прежней строке подписки. "
+            "Если смену делали вручную (выдача, промокод), докупку стоит возместить."
         )
     if key == "plan_replaced":
         return (

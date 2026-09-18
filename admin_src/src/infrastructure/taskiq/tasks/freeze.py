@@ -65,8 +65,14 @@ async def run_freeze_autoresume(
         await session.execute(
             text("UPDATE subscription_freezes SET active = false WHERE user_id = :u"), {"u": uid}
         )
-        # Конец докупленного места едет вместе со сроком подписки — в той же транзакции.
-        await shift_on_unfreeze(session, uid, frozen_at)
+        # Конец места едет вместе со сроком подписки — в той же транзакции, но в
+        # SAVEPOINT: сбой на одном человеке не должен ронять весь проход крона,
+        # оставляя остальных «на паузе» уже после включения в панели.
+        try:
+            async with session.begin_nested():
+                await shift_on_unfreeze(session, uid, frozen_at)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"extra_device: конец места не сдвинут user_id={uid}: {e}")
         await session.commit()
         resumed += 1
         await notify_user_push(
