@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import uuid as uuid_lib
+from dataclasses import replace as dc_replace
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Optional
@@ -85,7 +86,7 @@ async def _balance_gateway_type(payment_gateway_dao: PaymentGatewayDao) -> Optio
 
 
 def _window(st: extra.UserState, panel: Optional[extra.PanelView], now: datetime):
-    """(момент обнуления, известен ли он). Якорь — дата из панели или из прибавки."""
+    """(момент обнуления, известен ли он, якорь). Якорь — дата из панели или из кеша."""
     anchor = None
     if panel is not None:
         anchor = panel.created_at
@@ -94,14 +95,14 @@ def _window(st: extra.UserState, panel: Optional[extra.PanelView], now: datetime
     if anchor is None:
         anchor = next((g.panel_created_at for g in st.grants if g.panel_created_at), None)
     known = not (extra.needs_anchor(st.strategy) and anchor is None)
-    return extra.next_traffic_reset(st.strategy, anchor, now), known
+    return extra.next_traffic_reset(st.strategy, anchor, now), known, anchor
 
 
 def _payload(
     st: extra.UserState, panel: Optional[extra.PanelView], cfg: dict, now: datetime
 ) -> dict[str, Any]:
     """Предложение: сколько и за сколько можно докупить сейчас. Без записи."""
-    window_end, known = _window(st, panel, now)
+    window_end, known, _anchor = _window(st, panel, now)
     limit_gb = bytes_to_gb(panel.limit_bytes) if panel is not None else st.traffic_limit
     payload: dict[str, Any] = {
         "enabled": True,
@@ -199,11 +200,16 @@ async def buy_extra_traffic(
     create_payment: FromDishka[CreatePayment],
     notifier: FromDishka[Notifier],
 ) -> dict[str, Any]:
-    # Тот же почтовый гейт, что у покупки подписки: это тоже покупка за деньги.
-    _assert_email_verified(user)
-
     cfg = extra.load_config()
     now = datetime_now()
+    # ПЕРВОЙ СТРОКОЙ, ДО ВСЕГО. Выключенные продажи — это состояние по умолчанию на
+    # каждой установке, и запрос по закрытой ручке не должен ни брать замок строки
+    # человека, ни ходить в панель: так чужой POST превращался в нагрузку на панель.
+    if not extra.effective_enabled(cfg):
+        return {"result": "not_available", "reason": "disabled"}
+
+    # Тот же почтовый гейт, что у покупки подписки: это тоже покупка за деньги.
+    _assert_email_verified(user)
 
     saved = await extra.order_by_request(session, body.request_id)
     if saved is not None:
@@ -227,7 +233,11 @@ async def buy_extra_traffic(
     await extra.close_due_grants(session, st, now)
     st = extra.state_after_due(st, now)
 
-    window_end, known = _window(st, panel, now)
+    window_end, known, anchor = _window(st, panel, now)
+    # Якорь мог прийти из кеша процесса, а не из ответа панели. В строку прибавки
+    # пишем именно его: с пустым `panel_created_at` крон не смог бы посчитать момент
+    # обнуления, и прибавка осталась бы в панели навсегда.
+    panel = dc_replace(panel, created_at=anchor)
     why = extra.eligibility(st, cfg, now, window_end=window_end, window_known=known)
     if why is not None:
         await session.rollback()
@@ -278,6 +288,12 @@ async def buy_extra_traffic(
         )
     except extra.PanelRejected as exc:
         await session.rollback()
+        # КОМПЕНСАЦИЯ ОБЯЗАТЕЛЬНА И БЕЗУСЛОВНА. После отказа неизвестно, применился
+        # PATCH или нет: таймаут и потерянный ответ неотличимы от «не дошло». Записи
+        # о прибавке в базе не осталось — значит крон поднятый лимит никогда не
+        # увидит и не опустит. Возврат прежнего значения безвреден, если ничего не
+        # менялось, и чинит панель, если менялось.
+        await extra.compensate_limit(getattr(remnawave, "sdk", None), st, limit_before)
         logger.warning(f"extra_traffic: панель отказала user_id={user.id}: {exc}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -373,7 +389,14 @@ def _replay(saved: dict, user_id: int) -> dict[str, Any]:
             "amount": _fmt(saved["amount"]),
             "repeat": True,
         }
-    return {"result": "not_available", "reason": saved.get("status") or "unknown", "repeat": True}
+    if saved["status"] == "credited":
+        # Деньги уже на балансе, применение идёт (или его доведёт крон). Это НЕ отказ
+        # и не «деньги не списаны»: наружу отдаём свой код, а не внутренний статус
+        # заказа — кабинету его переводить нечем, и человек увидел бы слово «credited».
+        return {"result": "not_available", "reason": "in_progress", "repeat": True}
+    # Отклонённый заказ: причину отказа наружу не раскрываем (она про нашу кухню),
+    # но код отдаём тот, который кабинет умеет показать человеком.
+    return {"result": "not_available", "reason": "rejected", "repeat": True}
 
 
 async def _checkout(

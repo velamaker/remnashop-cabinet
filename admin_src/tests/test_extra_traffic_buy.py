@@ -497,7 +497,14 @@ async def test_second_active_grant_adds_up():
 # ── отказы панели и базы ────────────────────────────────────────────────────
 
 
-async def test_panel_failure_rolls_everything_back():
+async def test_panel_failure_rolls_everything_back_and_compensates():
+    """Панель отказала — откат И ВОЗВРАТ ПРЕЖНЕГО ЛИМИТА.
+
+    Компенсация здесь не «на всякий случай»: после отказа неизвестно, применился
+    PATCH или нет (таймаут неотличим от «не дошло»). Записи о прибавке не осталось,
+    значит крон поднятый лимит никогда не увидит и не опустит — вернуть прежнее
+    значение обязаны мы сами, ровно как в ветке с оплатой картой.
+    """
     log = Log()
     session = FakeSession(log)
     remnawave = FakeRemnawave(log, fail=True)
@@ -508,6 +515,42 @@ async def test_panel_failure_rolls_everything_back():
     assert exc.value.status_code == 502
     assert "не списаны" in exc.value.detail
     assert session.commits == 0 and session.rollbacks >= 1
+    patches = [body for name, body in log if name == "panel_patch"]
+    assert len(patches) == 2, "второй PATCH — компенсация прежнего лимита"
+    assert patches[1]["trafficLimitBytes"] == gb_to_bytes(PLAN_GB)
+
+
+async def test_wrong_limit_from_panel_is_also_compensated():
+    """«Принял, но применил другое» — тот же случай: лимит возвращаем."""
+    log = Log()
+    session = FakeSession(log)
+    remnawave = FakeRemnawave(log, returns=gb_to_bytes(PLAN_GB + 10))
+
+    with pytest.raises(HTTPException):
+        await call_buy(session, remnawave, log)
+
+    patches = [body for name, body in log if name == "panel_patch"]
+    assert len(patches) == 2
+    assert patches[1]["trafficLimitBytes"] == gb_to_bytes(PLAN_GB)
+
+
+async def test_purchase_right_after_renewal_does_not_give_two_volumes():
+    """Окно до 17 минут после продления: лимит уже тарифный, прибавка ещё числится.
+
+    Продление ставит ТАРИФНЫЙ лимит и обнуляет расход, а прибавки гасит проход крона.
+    Купив в это окно, человек должен получить ровно один объём. Пол «тариф +
+    действующие» в основании давал два: 300 (панель) → пол 350 → +50 = 400.
+    """
+    log = Log()
+    alive = grant_row(gb=50, ends_at=WINDOW)
+    # Лимит уже сброшен продлением до тарифного, запись ещё активна.
+    session = FakeSession(log, traffic_limit=PLAN_GB, grants=(alive,))
+    remnawave = FakeRemnawave(log, limit_bytes=gb_to_bytes(PLAN_GB))
+
+    result = await call_buy(session, remnawave, log)
+
+    assert result["traffic_limit_gb"] == PLAN_GB + 50
+    assert log[log.index_of("panel_patch")][1]["trafficLimitBytes"] == gb_to_bytes(PLAN_GB + 50)
 
 
 async def test_panel_that_confirms_a_different_limit_is_a_failure():
@@ -520,6 +563,25 @@ async def test_panel_that_confirms_a_different_limit_is_a_failure():
         await call_buy(session, remnawave, log)
     assert exc.value.status_code == 502
     assert session.commits == 0
+
+
+async def test_disabled_sales_do_not_take_the_lock_or_call_the_panel():
+    """Выключенные продажи отсекаются ПЕРВОЙ строкой — до замка и до панели.
+
+    Это состояние по умолчанию на каждой установке: POST по закрытой ручке не должен
+    ни запирать строку человека, ни превращаться в нагрузку на панель.
+    """
+    log = Log()
+    session = FakeSession(log)
+    saved = extra.load_config
+    extra.load_config = lambda: dict(extra.DEFAULT_CONFIG, enabled=False)
+    try:
+        result = await call_buy(session, FakeRemnawave(log), log)
+    finally:
+        extra.load_config = saved
+
+    assert result == {"result": "not_available", "reason": "disabled"}
+    assert log.names() == [], "ни одного запроса в базу и ни одного в панель"
 
 
 async def test_commit_failure_compensates_the_panel_and_alerts_owner():
@@ -569,6 +631,35 @@ async def test_same_request_id_twice_buys_once():
 
     assert result["result"] == "applied" and result["repeat"] is True
     assert "spend" not in log.names() and "panel_patch" not in log.names()
+
+
+@pytest.mark.parametrize(
+    "status, expected",
+    [
+        ("credited", "in_progress"),
+        ("rejected", "rejected"),
+        # `pending` БЕЗ ссылки — мёртвый заказ: счёт не выставился, платить не по чему,
+        # и крон базы такой счёт отменит. Человеку это «не вышло», а не «идёт».
+        ("pending", "rejected"),
+    ],
+)
+async def test_replay_never_leaks_internal_order_statuses(status, expected):
+    """Наружу уходит КОД, который кабинет умеет показать человеком.
+
+    Внутренние статусы заказа (`credited`, `pending` без ссылки) кабинету переводить
+    нечем: в словаре их нет, и человек увидел бы английское слово из нашей кухни.
+    Отдельно важно, что «деньги получены, применяем» — это НЕ «не получилось»:
+    сказать «деньги не списаны» там, где они как раз списаны, хуже, чем промолчать.
+    """
+    log = Log()
+    saved = (1, USER_ID, status, 50, Decimal(40), uuid_lib.uuid4(), None, 55, WINDOW)
+    session = FakeSession(log, saved_order=saved)
+
+    result = await call_buy(session, FakeRemnawave(log), log)
+
+    assert result["result"] == "not_available"
+    assert result["reason"] == expected
+    assert result["reason"] in extra._REASON_RU, "код без перевода — это код на экране"
 
 
 async def test_foreign_request_id_says_nothing_about_the_order():

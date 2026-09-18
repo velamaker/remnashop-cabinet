@@ -94,6 +94,20 @@ def test_floor_lifts_back_after_renewal_reset_the_limit():
     assert extra.target_limit(300, 300, 50, 0) == 350
 
 
+def test_purchase_base_drops_the_tariff_floor():
+    """Крону пол нужен, покупке — вреден: иначе два объёма за одну оплату.
+
+    Окно до 17 минут после продления: лимит панели уже тарифный (300), прибавка ещё
+    числится активной. Пол «тариф + действующие» поднял бы основание до 350 и дал бы
+    в панель 400 вместо 350.
+    """
+    plan, extra_gb = 300, 50
+    with_floor = extra.target_bytes(gb_to_bytes(plan), plan, extra_gb, 0)
+    assert with_floor == gb_to_bytes(plan + extra_gb), "так считает КРОН — и это верно для него"
+    # А покупка считает без пола: основание = то, что реально в панели.
+    assert max(0, gb_to_bytes(plan) - gb_to_bytes(0)) == gb_to_bytes(plan)
+
+
 def test_unlimited_is_never_touched():
     assert extra.target_limit(0, 300, 50, 50) == 0
     assert extra.target_limit(350, 0, 50, 50) == 350
@@ -195,9 +209,19 @@ def test_invoice_duration_is_never_zero_and_tells_the_real_term():
     assert extra.quote(CFG, NOW, None, EXPIRE).days == 40
 
 
-def test_minimum_invoice_amount_wins_over_a_tiny_price():
-    q = extra.quote(dict(CFG, price_rub=3, min_amount_rub=10), NOW, WINDOW, EXPIRE)
-    assert q.amount == Decimal(10)
+def test_minimum_invoice_amount_never_exceeds_the_price():
+    """Минимум счёта выше цены = вечное «условия обновились» и ни одной покупки.
+
+    Витрина показывает `price`, а сервер считал `max(min, price)`: суммы не сходились,
+    и каждое нажатие возвращало `price_changed`. Минимум нужен против копеечных
+    счетов, а не против цены владельца, поэтому он зажимается ценой при сохранении.
+    """
+    saved = extra._normalize({"enabled": True, "price_rub": 3, "min_amount_rub": 10})
+    assert saved["min_amount_rub"] == 3
+    q = extra.quote(dict(CFG, **saved), NOW, WINDOW, EXPIRE)
+    assert q.amount == Decimal(3)
+    # Цены нет вовсе — минимум остаётся своим: продавать всё равно нечего.
+    assert extra._normalize({"price_rub": None, "min_amount_rub": 10})["min_amount_rub"] == 10
 
 
 def test_snapshot_is_synthetic_minus_five_and_carries_the_volume():
