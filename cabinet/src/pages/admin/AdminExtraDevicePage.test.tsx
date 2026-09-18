@@ -21,7 +21,7 @@ const config = (over: Record<string, unknown> = {}) => ({
   min_amount_rub: 10,
   min_days_left: 3,
   max_extra: 2,
-  remove_excess_devices: false,
+  remove_excess_devices: true,
   notify_users: true,
   notify_admins: true,
   ...over,
@@ -64,7 +64,7 @@ describe("AdminExtraDevicePage", () => {
     render(<AdminExtraDevicePage />);
     const price = (await screen.findByLabelText(/Цена за 1 устройство/)) as HTMLInputElement;
     fireEvent.change(price, { target: { value: "" } });
-    fireEvent.change(screen.getByLabelText(/Максимум докупленных мест/), { target: { value: "3" } });
+    fireEvent.change(screen.getByLabelText(/Максимум ОДНОВРЕМЕННО докупленных мест/), { target: { value: "3" } });
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
     await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
     const body = updateMock.mock.calls[0]![0] as Record<string, unknown>;
@@ -73,10 +73,10 @@ describe("AdminExtraDevicePage", () => {
     await waitFor(() => expect(document.body.textContent).toContain("Докупка закрыта"));
   });
 
-  it("отключение устройств — отдельный тумблер и по умолчанию выключен", async () => {
+  it("отключение устройств включено (решение владельца «отключить и предложить снова»)", async () => {
     render(<AdminExtraDevicePage />);
     const toggle = (await screen.findByLabelText(/Отключать устройства/)) as HTMLInputElement;
-    expect(toggle.checked).toBe(false);
+    expect(toggle.checked).toBe(true);
   });
 
   it("подсказка о шаге тарифов показывает и трафик — цену ставит человек, не формула", async () => {

@@ -4,6 +4,7 @@ import { subscriptionApi } from "@/api/subscription";
 import { Button } from "@/components/ui/Button";
 import { useT } from "@/i18n/I18nContext";
 import { formatDate } from "@/lib/format";
+import { newRequestId } from "@/lib/bulkJobs";
 import { payOptions, type ExtraDeviceOfferView } from "@/lib/extraDevice";
 import type { ExtraDeviceResponse } from "@/types/api";
 
@@ -47,7 +48,9 @@ export function ExtraDeviceOffer({
 
   const ensureRequestId = () => {
     if (requestId) return requestId;
-    const fresh = crypto.randomUUID();
+    // newRequestId, а не crypto.randomUUID: последнего нет в незащищённом контексте
+    // (превью по http, локальная сборка), и кнопка оплаты там просто не работала.
+    const fresh = newRequestId();
     setRequestId(fresh);
     return fresh;
   };
@@ -135,6 +138,9 @@ export function ExtraDeviceOffer({
             {t("extraDevice.confirm", { date: until, price: priceText })}
           </p>
           <p className="mt-1 text-xs text-fg-muted">{t("extraDevice.note")}</p>
+          {data.removes_excess && (
+            <p className="mt-1 text-xs text-fg-muted">{t("extraDevice.endsNote")}</p>
+          )}
           {pay.balanceLow && (
             <p className="mt-2 text-xs text-fg-subtle">
               {t("extraDevice.balanceLow", { balance: `${data.balance ?? ""} ${offer.symbol}`.trim() })}

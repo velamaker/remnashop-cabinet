@@ -226,6 +226,8 @@ export interface ExtraDeviceResponse {
   extra_count?: number;
   subscription_expire_at?: string | null;
   balance?: string;
+  /** Отключатся ли устройства, подключённые после покупки, когда место кончится. */
+  removes_excess?: boolean;
   gateways?: { gateway_type: string; currency_symbol: string }[];
   new?: {
     available: boolean;

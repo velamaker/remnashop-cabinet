@@ -109,11 +109,10 @@ export function endsBefore(
 
 /** Причина отказа, при которой уместно предложить тариф побольше, а не молчать. */
 export function suggestsBiggerPlan(data: ExtraDeviceResponse | null): boolean {
-  const reason = data?.new?.reason;
-  // `already_used` — решение владельца: место уже покупали и оно кончилось, второй раз
-  // не предлагаем. `max_reached` — мест куплено сколько можно. И там и там дальше
-  // выгоднее тариф, в котором ещё и трафик.
-  return reason === "max_reached" || reason === "already_used";
+  // Мест куплено столько, сколько можно ОДНОВРЕМЕННО. Кончившееся место продажу не
+  // блокирует (решение владельца: после окончания предлагаем докупить снова), так что
+  // единственная причина звать на тариф — упор в максимум.
+  return data?.new?.reason === "max_reached";
 }
 
 export type ChangeExtraNote =

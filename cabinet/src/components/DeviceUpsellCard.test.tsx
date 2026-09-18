@@ -416,3 +416,44 @@ describe("DeviceUpsellCard: докупка +1 устройства", () => {
     expect(container.textContent).toBe("");
   });
 });
+
+
+describe("DeviceUpsellCard: покупка без crypto.randomUUID (превью по http)", () => {
+  const UNTIL = new Date(Date.now() + 20 * DAY).toISOString();
+
+  it("кнопка оплаты работает и ключ идемпотентности всё равно валидный", async () => {
+    // В незащищённом контексте (http-превью, локальная сборка) randomUUID нет вовсе.
+    // Раньше обработчик падал на нём молча, и кнопка оплаты была мёртвой.
+    const original = Object.getOwnPropertyDescriptor(globalThis.crypto, "randomUUID");
+    Object.defineProperty(globalThis.crypto, "randomUUID", {
+      configurable: true,
+      value: undefined,
+    });
+    try {
+      extraMock.mockResolvedValue({
+        enabled: true,
+        currency_symbol: "₽",
+        balance: "500",
+        device_limit: 1,
+        plan_device_limit: 1,
+        subscription_expire_at: UNTIL,
+        gateways: [{ gateway_type: "YOOMONEY", currency_symbol: "₽" }],
+        new: { available: true, reason: null, amount: "60", until: UNTIL, days: 20 },
+        slots: [],
+      });
+      buyMock.mockResolvedValue({ result: "applied", device_limit: 2, until: UNTIL, spent: "60" });
+      view("devices", soloSub(), soloFull());
+      fireEvent.click(
+        await screen.findByRole("button", { name: new RegExp(say("extraDevice.buy", { price: "60 ₽" })) }),
+      );
+      fireEvent.click(await screen.findByRole("button", { name: say("extraDevice.payBalance") }));
+      await waitFor(() => expect(buyMock).toHaveBeenCalledTimes(1));
+      const body = buyMock.mock.calls[0]![0] as Record<string, unknown>;
+      expect(String(body.request_id)).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
+    } finally {
+      if (original) Object.defineProperty(globalThis.crypto, "randomUUID", original);
+    }
+  });
+});

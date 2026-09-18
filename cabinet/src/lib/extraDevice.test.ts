@@ -100,12 +100,19 @@ describe("подписи", () => {
     expect(endsBefore(data({ subscription_expire_at: null }), slot)).toBe(false);
   });
 
-  it("тариф побольше предлагаем, когда мест больше нельзя или место уже покупали", () => {
+  it("тариф побольше предлагаем только при упоре в максимум мест", () => {
     expect(suggestsBiggerPlan(data({ new: { available: false, reason: "max_reached" } }))).toBe(true);
-    // Решение владельца: место кончилось — второй раз не предлагаем, ведём на тариф.
-    expect(suggestsBiggerPlan(data({ new: { available: false, reason: "already_used" } }))).toBe(true);
+    // Решение владельца «отключить и предложить снова»: кончившееся место продажу не
+    // блокирует, поэтому и звать на тариф из-за него не нужно.
+    expect(suggestsBiggerPlan(data({ new: { available: false, reason: "already_used" } }))).toBe(false);
     expect(suggestsBiggerPlan(data({ new: { available: false, reason: "too_late" } }))).toBe(false);
     expect(suggestsBiggerPlan(null)).toBe(false);
+  });
+
+  it("предупреждение об отключении показываем только когда оно включено", () => {
+    // Настройку меняет владелец, поэтому обещание берём из ответа, а не из текста.
+    expect(data({ removes_excess: true }).removes_excess).toBe(true);
+    expect(data().removes_excess).toBeUndefined();
   });
 });
 
