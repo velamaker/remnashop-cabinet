@@ -151,4 +151,45 @@ describe("ExtraTrafficOffer", () => {
     );
     expect(container.textContent).toBe("");
   });
+  it("вторая покупка подряд идёт НОВЫМ ключом, а не повторяет первую", async () => {
+    // Ключ держит идемпотентность ОДНОЙ покупки: с ним сервер отвечает сохранённым
+    // результатом. Не сбросив его, кабинет на второе нажатие писал бы «Трафик
+    // добавлен», не добавив ничего.
+    show();
+    fireEvent.click(screen.getByText(ru("extraTraffic.offer", { gb: 50, price: "50 ₽" })));
+    fireEvent.click(screen.getByText(ru("extraTraffic.payBalance")));
+    await waitFor(() => expect(buy).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByText(ru("extraTraffic.offer", { gb: 50, price: "50 ₽" })));
+    fireEvent.click(screen.getByText(ru("extraTraffic.payBalance")));
+    await waitFor(() => expect(buy).toHaveBeenCalledTimes(2));
+
+    const ids = buy.mock.calls.map((c) => (c[0] as { request_id: string }).request_id);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it("после ухода на оплату картой ключ тоже новый", async () => {
+    buy.mockResolvedValue({ result: "pending", payment_url: "https://pay.example.test/1" });
+    const href = { value: "" };
+    Object.defineProperty(window, "location", { value: href, writable: true });
+    show();
+    fireEvent.click(screen.getByText(ru("extraTraffic.offer", { gb: 50, price: "50 ₽" })));
+    fireEvent.click(screen.getByText(ru("extraTraffic.payGateway", { price: "50 ₽" })));
+    await waitFor(() => expect(buy).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByText(ru("extraTraffic.payGateway", { price: "50 ₽" })));
+    await waitFor(() => expect(buy).toHaveBeenCalledTimes(2));
+    const ids = buy.mock.calls.map((c) => (c[0] as { request_id: string }).request_id);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it("оплата получена, применение идёт — говорим это, а не «не получилось»", async () => {
+    buy.mockResolvedValue({ result: "not_available", reason: "in_progress", repeat: true });
+    show();
+    fireEvent.click(screen.getByText(ru("extraTraffic.offer", { gb: 50, price: "50 ₽" })));
+    fireEvent.click(screen.getByText(ru("extraTraffic.payBalance")));
+    await waitFor(() => expect(screen.getByText(/Оплата получена/)).toBeTruthy());
+    // Про «деньги не списаны» тут говорить нельзя — они как раз списаны.
+    expect(screen.queryByText(/Деньги не списаны/)).toBeNull();
+  });
 });

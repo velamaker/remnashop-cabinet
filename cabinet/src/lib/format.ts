@@ -58,8 +58,13 @@ export function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString(locale(), {
     day: "numeric",
     month: "long",
+    year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    // Пояс НАЗЫВАЕМ. Бот печатает тот же момент в UTC, и без подписи человек читал
+    // бы два разных числа как два разных срока: в MSK это «03:10» против «00:10», а
+    // западнее UTC расходятся и дни. Единый источник правды обязан быть видимым.
+    timeZoneName: "short",
   });
 }
 

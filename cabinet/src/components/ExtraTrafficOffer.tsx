@@ -80,6 +80,11 @@ export function ExtraTrafficOffer({
       });
       if (result.result === "applied") {
         setConfirming(false);
+        // КЛЮЧ СБРАСЫВАЕМ. Он держит идемпотентность ОДНОЙ покупки: с ним сервер
+        // отвечает сохранённым результатом. Оставить его значило бы, что вторая
+        // покупка подряд молча повторит первую и напишет «Трафик добавлен», не
+        // добавив ничего, — человек заплатил бы вниманием, а получил обман.
+        setRequestId(null);
         const limit = result.traffic_limit_gb ?? "";
         const date = result.until ? formatDateTime(result.until) : until;
         setNote(
@@ -91,7 +96,18 @@ export function ExtraTrafficOffer({
         return;
       }
       if (result.result === "pending" && result.payment_url) {
+        // Ключ отработал: по нему уже выставлен счёт. Возврат на страницу после
+        // оплаты должен начинать новую покупку, а не повторять эту.
+        setRequestId(null);
         window.location.href = result.payment_url;
+        return;
+      }
+      if (result.result === "not_available" && result.reason === "in_progress") {
+        // Деньги уже получены, применение идёт: это не «не получилось».
+        setConfirming(false);
+        setRequestId(null);
+        setNote(t("extraTraffic.inProgress"));
+        onChanged?.();
         return;
       }
       if (result.result === "price_changed") {

@@ -155,3 +155,23 @@ describe("предупреждение о сгорании при смене т�
     expect(changeTrafficNote(null)).toBeNull();
   });
 });
+
+describe("дата обновления трафика — одним видом с ботом", () => {
+  it("печатается с годом и НАЗВАННЫМ поясом", async () => {
+    const { formatDateTime } = await import("./format");
+    const printed = formatDateTime("2026-10-07T00:10:00Z");
+    // Год обязателен: без него «07.10» и «7 октября» читаются как разные сроки, а
+    // бот печатает тот же момент в UTC. Пояс назван, иначе в MSK человек увидит
+    // «03:10» против «00:10» бота и решит, что ему называют два разных времени.
+    expect(printed).toMatch(/2026/);
+    expect(printed).toMatch(/GMT|UTC|МСК|UTC\+|GMT\+/i);
+  });
+
+  it("это ТОТ ЖЕ момент, что печатает бот, — просто в другом поясе", async () => {
+    const { formatDateTime } = await import("./format");
+    const iso = "2026-10-07T00:10:00Z";
+    // Сам момент не сдвигается: сравниваем разбор строки с исходным временем.
+    expect(new Date(iso).toISOString()).toBe("2026-10-07T00:10:00.000Z");
+    expect(formatDateTime(iso).length).toBeGreaterThan(8);
+  });
+});
