@@ -1234,6 +1234,70 @@ export const renewalDiscountAdminApi = {
   revokeActive: () => adminApi.post<{ revoked: number }>("/renewal-discount/revoke-active", { confirm: true }),
 };
 
+// ---------- Докупка +1 устройства к подписке ----------
+
+/** Место под устройство в карточке пользователя. */
+export interface AdminExtraSlot {
+  id: number;
+  subscription_id: number;
+  status: "active" | "ended" | "burned" | "revoked" | string;
+  starts_at: string | null;
+  ends_at: string | null;
+  end_reason: string | null;
+  devices_removed: number;
+}
+
+export interface AdminExtraOrder {
+  id: number;
+  status: "pending" | "credited" | "applied" | "rejected" | string;
+  kind: "new" | "extend" | string;
+  source: "balance" | "gateway" | string;
+  /** null — админ только для просмотра: суммы ему замаскированы. */
+  amount: number | null;
+  created_at: string | null;
+  reason: string | null;
+  slot_id: number | null;
+}
+
+export interface ExtraDeviceConfig {
+  enabled: boolean;
+  /** null — цена не задана, продажи закрыты даже при включённом тумблере. */
+  price_rub_30d: number | null;
+  min_amount_rub: number;
+  min_days_left: number;
+  max_extra: number;
+  remove_excess_devices: boolean;
+  notify_users: boolean;
+  notify_admins: boolean;
+}
+
+/** Подсказка о цене: шаг между соседними тарифами за 30 дней и сколько в нём трафика. */
+export interface ExtraDevicePriceHint {
+  from_devices: number;
+  to_devices: number;
+  diff_30d_rub: number;
+  traffic_diff_gb: number;
+}
+
+export interface ExtraDeviceAdminResponse {
+  config: ExtraDeviceConfig;
+  effective_enabled: boolean;
+  hint: ExtraDevicePriceHint[];
+  summary: {
+    applied_30d?: number;
+    amount_30d?: number;
+    rejected_30d?: number;
+    credited_open?: number;
+    active_slots?: number;
+  };
+}
+
+export const extraDeviceAdminApi = {
+  get: () => adminApi.get<ExtraDeviceAdminResponse>("/extra-device"),
+  update: (data: ExtraDeviceConfig) =>
+    adminApi.put<{ config: ExtraDeviceConfig; effective_enabled: boolean }>("/extra-device", data),
+};
+
 // ---------- Месячный дайджест пользователю ----------
 
 export interface DigestConfig {
@@ -1551,6 +1615,11 @@ export interface AdminSubscription {
   external_squad: string | null;
   url: string;
   created_at: string | null;
+  // Откуда взялся device_limit: сколько даёт тариф и сколько мест докуплено. Полей
+  // нет (старый бот) — карточка показывает лимит как раньше, без расшифровки.
+  plan_device_limit?: number | null;
+  extra_devices_active?: number | null;
+  extra_until?: string | null;
 }
 
 export interface AdminDevice {
@@ -1614,8 +1683,22 @@ export const subscriptionsAdminApi = {
     adminApi.get<{ items: AdminUserTx[] }>(`/subscriptions/user/${userId}/transactions?limit=${limit}`),
   setTrafficLimit: (userId: number, traffic_limit: number) =>
     adminApi.post<{ success: boolean }>(`/subscriptions/user/${userId}/traffic-limit`, { traffic_limit }),
-  setDeviceLimit: (userId: number, device_limit: number) =>
-    adminApi.post<{ success: boolean }>(`/subscriptions/user/${userId}/device-limit`, { device_limit }),
+  // revokeExtras — второй заход после 409: админ увидел, что у человека есть
+  // оплаченные места, и подтвердил, что ставит лимит ниже вместе с их отменой.
+  setDeviceLimit: (userId: number, device_limit: number, revoke_extras = false) =>
+    adminApi.post<{ success: boolean }>(`/subscriptions/user/${userId}/device-limit`, {
+      device_limit,
+      revoke_extras,
+    }),
+  extraDevices: (userId: number) =>
+    adminApi.get<{ slots: AdminExtraSlot[]; orders: AdminExtraOrder[] }>(
+      `/subscriptions/user/${userId}/extra-devices`,
+    ),
+  revokeExtraDevice: (userId: number, slotId: number, refund_unused = false) =>
+    adminApi.post<{ success: boolean; device_limit: number; refunded: number | null }>(
+      `/subscriptions/user/${userId}/extra-devices/${slotId}/revoke`,
+      { refund_unused },
+    ),
   squadToggle: (userId: number, squad_id: string, external = false) =>
     adminApi.post<{ success: boolean }>(`/subscriptions/user/${userId}/squad-toggle`, { squad_id, external }),
   sync: (userId: number, direction: "from_remnawave" | "from_remnashop" = "from_remnawave") =>

@@ -47,6 +47,7 @@ import {
   Snowflake,
   Database,
   ShieldCheck,
+  MonitorSmartphone,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
@@ -87,6 +88,7 @@ export const navGroups: { title: string; items: NavItem[] }[] = [
       { to: "/admin/promocodes", icon: Tag, label: "Промокоды", section: "promocodes" },
       { to: "/admin/gateways", icon: Wallet, label: "Шлюзы", section: "gateways" },
       { to: "/admin/topup", icon: Coins, label: "Пополнение", section: "settings" },
+      { to: "/admin/extra-device", icon: MonitorSmartphone, label: "Докупка устройств", section: "settings" },
       { to: "/admin/reserve", icon: Umbrella, label: "Резервный доступ", section: "settings" },
       { to: "/admin/freeze", icon: Snowflake, label: "Заморозка", section: "settings" },
     ],

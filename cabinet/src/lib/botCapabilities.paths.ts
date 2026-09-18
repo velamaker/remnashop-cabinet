@@ -38,6 +38,14 @@ export const PATH_NEEDS_BOT: Record<string, BotCap> = {
   "GET /api/admin/renewal-discount/stats": "renewal_discount",
   "POST /api/admin/renewal-discount/revoke-active": "renewal_discount",
   "POST /api/admin/renewal-discount/test-send": "renewal_discount",
+  // Докупка «+1 устройства»: кнопку с суммой прячет canFeature, страницу настроек —
+  // canPage, карточку пользователя — та же возможность.
+  "GET /api/subscription/extra-device": "extra_device",
+  "POST /api/subscription/extra-device/buy": "extra_device",
+  "GET /api/admin/extra-device": "extra_device",
+  "PUT /api/admin/extra-device": "extra_device",
+  "GET /api/admin/subscriptions/user/{}/extra-devices": "extra_device",
+  "POST /api/admin/subscriptions/user/{}/extra-devices/{}/revoke": "extra_device",
 };
 
 export const PATH_GRACEFUL: Record<string, string> = {

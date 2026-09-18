@@ -274,3 +274,58 @@ describe("BillingPage: перенос остатка — с первого кл�
     expect(yesButton()).not.toBeNull();
   });
 });
+
+
+describe("BillingPage: докупленные устройства при смене и продлении", () => {
+  const withExtras = (over: Partial<SubscriptionOffersResponse> = {}) =>
+    offers(showcase(), {
+      plan_change_keeps_days: true,
+      plan_change_carry_active: true,
+      carry_mode: "carry",
+      current_days_left: 20,
+      current_extra_devices: 1,
+      current_extra_until: new Date(Date.now() + 10 * 86400_000).toISOString(),
+      plan_change_carry: [
+        { plan_code: "DUO2", duration_days: 30, currency: "RUB", mode: "carry", bonus_days: 14, lost_days: 0 },
+      ] as PlanChangeCarryEntry[],
+      ...over,
+    });
+
+  it("перенос включён — «стоимость добавится днями», оплата с первого клика", async () => {
+    open(withExtras());
+    await expand("DUO2");
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(ru("billing.changeExtra", { n: 1, limit: 2 })),
+    );
+    fireEvent.click(selectButton()!);
+    // Ёмкость сгорает всегда, но её стоимость не пропадает — переспрашивать не о чем.
+    await waitFor(() => expect(purchase).toHaveBeenCalledTimes(1));
+  });
+
+  it("перенос выключен — «оплата не пересчитывается» и обязательное подтверждение", async () => {
+    open(withExtras({ plan_change_carry_active: false, plan_change_carry: null, carry_mode: null }));
+    await expand("DUO2");
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(ru("billing.changeExtraLost", { n: 1, limit: 2 })),
+    );
+    fireEvent.click(selectButton()!);
+    await waitFor(() => expect(yesButton()).not.toBeNull());
+    expect(purchase).not.toHaveBeenCalled();
+    fireEvent.click(yesButton()!);
+    await waitFor(() => expect(purchase).toHaveBeenCalledTimes(1));
+  });
+
+  it("продление: место живёт до своей даты и продлевается отдельно", async () => {
+    open(withExtras());
+    await expand("SOLO1");
+    await waitFor(() => expect(document.body.textContent).toContain("Устройства"));
+  });
+
+  it("бэкенд про места молчит («Бедолага», старый бот) — ни строки нового текста", async () => {
+    open(offersWithoutTerms(showcase()));
+    await expand("DUO2");
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(document.body.textContent).not.toContain(ru("billing.changeExtra", { n: 1, limit: 2 }));
+    expect(document.body.textContent).not.toContain(ru("billing.changeExtraLost", { n: 1, limit: 2 }));
+  });
+});

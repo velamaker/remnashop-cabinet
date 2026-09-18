@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { ConnectGuide } from "@/components/ConnectGuide";
 import { PlatformIcon } from "@/components/PlatformIcon";
 import { DeviceUpsellCard } from "@/components/DeviceUpsellCard";
+import { ExtraDevicesPanel } from "@/components/ExtraDevicesPanel";
 import { formatDate, formatRelativeOnline } from "@/lib/format";
 import type { DeviceResponse, DevicesResponse, SubscriptionInfoResponse } from "@/types/api";
 import { ApiError } from "@/types/api";
@@ -198,6 +199,10 @@ export default function DevicesPage() {
     return set;
   }, [data]);
 
+  // Карточка апселла сообщает, показала ли она кнопку докупки: две одинаковые
+  // кнопки на одной странице сбивали бы с толку.
+  const [cardShowsExtra, setCardShowsExtra] = useState(false);
+
   const handleDeviceDeleted = (hwid: string) => {
     setData((prev) =>
       prev
@@ -266,7 +271,17 @@ export default function DevicesPage() {
 
         {!isLoading && data && data.devices.length > 0 && (
           <div className="flex flex-col gap-2">
-            <DeviceUpsellCard variant="devices" subscription={sub} devices={data} />
+            <DeviceUpsellCard
+              variant="devices"
+              subscription={sub}
+              devices={data}
+              onChanged={load}
+              onOfferShown={setCardShowsExtra}
+            />
+            {/* Панель докупленных мест тумблеру апселла не подчиняется: продление уже
+                оплаченного места — не реклама. Кнопку «Докупить» она показывает только
+                когда карточка выше её не показала. */}
+            <ExtraDevicesPanel cardShowsOffer={cardShowsExtra} onChanged={load} />
             <SameDeviceHint devices={data.devices} />
             {data.devices.map((device) => (
               <DeviceRow

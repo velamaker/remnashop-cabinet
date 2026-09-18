@@ -8,7 +8,8 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { PromocodeCard } from "@/components/PromocodeCard";
 import { TrialDiscountBanner } from "@/components/TrialDiscountBanner";
 import { RenewalDiscountBanner } from "@/components/RenewalBanner";
-import { formatTrafficLimit } from "@/lib/format";
+import { formatDate, formatTrafficLimit } from "@/lib/format";
+import { changeExtraNote, renewExtraUntil, type ChangeExtraNote } from "@/lib/extraDevice";
 import {
   changeTerms,
   currencyOf,
@@ -66,6 +67,8 @@ function PlanCard({
   balance,
   expanded,
   terms,
+  extraNote,
+  renewExtraUntil,
   confirmAction,
   onToggle,
   onBuy,
@@ -79,6 +82,9 @@ function PlanCard({
   balance: number;
   expanded: boolean;
   terms: ChangeTerms;
+  /** Что станет с докупленными местами (null — бэкенд про них молчит). */
+  extraNote: ChangeExtraNote;
+  renewExtraUntil: string | null;
   confirmAction: ConfirmAction | null;
   onToggle: () => void;
   onBuy: () => void;
@@ -204,6 +210,36 @@ function PlanCard({
                 </span>
               </p>
             ) : null
+          )}
+
+          {/* Докупленные места: ёмкость при смене тарифа сгорает всегда, разница лишь
+              в том, пересчитывается ли их стоимость в дни. Продление места не
+              продлевает — об этом честно предупреждаем на RENEW. */}
+          {!confirmAction && (canBuy || canPayBalance) && extraNote && (
+            <p
+              className={
+                extraNote.kind === "carry"
+                  ? "mt-2 flex gap-2 rounded-xl border border-[var(--border-subtle)] bg-bg-subtle px-3 py-2.5 text-xs text-fg-muted"
+                  : "mt-2 flex gap-2 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs text-fg"
+              }
+            >
+              {extraNote.kind === "carry" ? (
+                <Info className="mt-px h-4 w-4 shrink-0 text-accent" />
+              ) : (
+                <AlertTriangle className="mt-px h-4 w-4 shrink-0 text-warning" />
+              )}
+              <span>
+                {extraNote.kind === "carry"
+                  ? t("billing.changeExtra", { n: extraNote.count, limit: extraNote.limit })
+                  : t("billing.changeExtraLost", { n: extraNote.count, limit: extraNote.limit })}
+              </span>
+            </p>
+          )}
+          {!confirmAction && (canBuy || canPayBalance) && renewExtraUntil && (
+            <p className="mt-2 flex gap-2 rounded-xl border border-[var(--border-subtle)] bg-bg-subtle px-3 py-2.5 text-xs text-fg-muted">
+              <Info className="mt-px h-4 w-4 shrink-0 text-accent" />
+              <span>{t("billing.renewExtra", { date: formatDate(renewExtraUntil) })}</span>
+            </p>
           )}
 
           {/* Подтверждение прямо в карточке, а не window.confirm: оплата идёт и из
@@ -346,7 +382,15 @@ export default function BillingPage() {
    * true — можно платить; false — показали подтверждение и ждём второго клика.
    */
   const confirmed = (plan: PlanOfferResponse, action: ConfirmAction): boolean => {
-    if (needsConfirm(termsFor(plan)) && !(confirm?.code === plan.public_code && confirm.action === action)) {
+    // Докупленные места, чья стоимость НЕ пересчитывается в дни, — тоже потеря:
+    // спрашиваем, даже если сами дни переносятся целиком.
+    const extraLost =
+      plan.recommended_purchase_type === "CHANGE" &&
+      changeExtraNote(offers, plan.device_limit)?.kind === "lost";
+    if (
+      needsConfirm(termsFor(plan), extraLost) &&
+      !(confirm?.code === plan.public_code && confirm.action === action)
+    ) {
       setConfirm({ code: plan.public_code, action });
       return false;
     }
@@ -546,6 +590,14 @@ export default function BillingPage() {
             balance={balance}
             expanded={expandedCode === plan.public_code}
             terms={termsFor(plan)}
+            extraNote={
+              plan.recommended_purchase_type === "CHANGE"
+                ? changeExtraNote(offers, plan.device_limit)
+                : null
+            }
+            renewExtraUntil={
+              plan.recommended_purchase_type === "RENEW" ? renewExtraUntil(offers) : null
+            }
             confirmAction={confirm?.code === plan.public_code ? confirm.action : null}
             onToggle={() =>
               setExpandedCode((c) => (c === plan.public_code ? null : plan.public_code))

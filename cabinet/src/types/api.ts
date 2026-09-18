@@ -187,6 +187,83 @@ export interface SubscriptionOffersResponse {
   plan_change_carry?: PlanChangeCarryEntry[] | null;
   // Перенос включён и условия посчитаны — текущий кабинет берёт их из plan_change_carry.
   plan_change_carry_active?: boolean | null;
+  // Докупленные места под устройства у ТЕКУЩЕЙ подписки. Полей нет (старый бот или
+  // чужой бэкенд) — кабинет про них молчит: обещать перенос стоимости, не зная,
+  // считает ли её бэкенд, нельзя.
+  current_device_limit?: number | null;
+  current_extra_devices?: number | null;
+  current_extra_until?: string | null;
+}
+
+// ---------- Докупка +1 устройства ----------
+
+/** Цена одного действия: сумма целыми рублями, до какой даты и сколько это дней. */
+export interface ExtraDevicePriceResponse {
+  amount: string;
+  until: string;
+  days: number;
+}
+
+export interface ExtraDeviceSlotResponse {
+  slot_id: number;
+  ends_at: string;
+  /** null — продлевать нечего (подписка кончается вместе с местом). */
+  extend: ExtraDevicePriceResponse | null;
+}
+
+/**
+ * Предложение докупки. `enabled: false` — продажи закрыты, и цену бэкенд не
+ * раскрывает вовсе, поэтому остальные поля необязательные.
+ */
+export interface ExtraDeviceResponse {
+  enabled: boolean;
+  currency?: string;
+  currency_symbol?: string;
+  price_per_30d?: string | null;
+  max_extra?: number;
+  device_limit?: number;
+  plan_device_limit?: number;
+  extra_count?: number;
+  subscription_expire_at?: string | null;
+  balance?: string;
+  gateways?: { gateway_type: string; currency_symbol: string }[];
+  new?: {
+    available: boolean;
+    /** Код причины: max_reached | already_used | too_late | trial | … */
+    reason?: string | null;
+    amount?: string;
+    until?: string;
+    days?: number;
+  };
+  slots?: ExtraDeviceSlotResponse[];
+}
+
+export interface ExtraDeviceBuyRequest {
+  request_id: string;
+  kind: "new" | "extend";
+  slot_id?: number;
+  pay: "balance" | "gateway";
+  gateway_type?: string;
+  expected_amount: string;
+}
+
+/**
+ * Итог покупки. Бизнес-отказы приходят как 200 с `result`, а не как ошибка HTTP:
+ * `ApiError.detail` — строка, и перевести код причины из неё было бы нечем.
+ */
+export interface ExtraDeviceBuyResponse {
+  result: "applied" | "pending" | "price_changed" | "insufficient_balance" | "not_available";
+  device_limit?: number | null;
+  until?: string | null;
+  spent?: string;
+  balance?: string | null;
+  payment_id?: string;
+  payment_url?: string;
+  amount?: string;
+  need?: string;
+  reason?: string;
+  quote?: ExtraDeviceResponse;
+  repeat?: boolean;
 }
 
 export interface PurchaseRequest {

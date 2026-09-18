@@ -326,7 +326,14 @@ export default function HomePage() {
       )}
 
       {/* Лимит устройств заполнен: «освободите места» или тариф побольше (в конце срока) */}
-      {subscription && <DeviceUpsellCard variant="home" subscription={subscription} devices={devicesData} />}
+      {subscription && (
+        <DeviceUpsellCard
+          variant="home"
+          subscription={subscription}
+          devices={devicesData}
+          onChanged={loadExtras}
+        />
+      )}
 
       {/* Любимый сервер + Рефералы */}
       <div className="grid gap-4 sm:grid-cols-2">

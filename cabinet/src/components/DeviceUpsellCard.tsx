@@ -10,9 +10,12 @@ import {
   homePrecheck,
   pickDeviceUpgrade,
 } from "@/lib/deviceUpsell";
+import { newOffer, payOptions, suggestsBiggerPlan } from "@/lib/extraDevice";
+import { ExtraDeviceHeadline, ExtraDeviceOffer } from "./ExtraDeviceOffer";
 import { billingHref, changeTerms, paymentsBlocked } from "@/lib/planChange";
 import type {
   DevicesResponse,
+  ExtraDeviceResponse,
   SubscriptionInfoResponse,
   SubscriptionOffersResponse,
 } from "@/types/api";
@@ -41,6 +44,11 @@ function rememberHidden() {
 /**
  * «Нужно больше устройств?» — блок при заполненном лимите устройств.
  *
+ * ПОРЯДОК ПРЕДЛОЖЕНИЙ: сначала бесплатное («освободите места»), потом дешёвое
+ * («+1 устройство за X ₽ до конца срока»), и только потом дорогое (тариф побольше).
+ * Докупка встаёт между ними и на Главной не требует предпроверки потери дней: у неё
+ * нечему пропадать, она не меняет тариф.
+ *
  * - «Устройства» (variant="devices"): при упоре всегда — сюда панель сама отправляет
  *   тех, у кого новое устройство не подключилось. Если места заняли дубли одного
  *   аппарата и уборка снимает упор, молчим: там уже есть подсказка про дубли.
@@ -56,16 +64,24 @@ export function DeviceUpsellCard({
   variant,
   subscription,
   devices,
+  onChanged,
+  onOfferShown,
 }: {
   variant: "home" | "devices";
   subscription: SubscriptionInfoResponse | null;
   devices: DevicesResponse | null;
+  /** Место докуплено: перечитать устройства (лимит вырос) и предложение. */
+  onChanged?: () => void;
+  /** Показывает ли карточка кнопку докупки — чтобы панель «Устройств» её не дублировала. */
+  onOfferShown?: (shown: boolean) => void;
 }) {
   const t = useT();
   const { appearance, can } = useBranding();
   const [hidden, setHidden] = useState(() => variant === "home" && hiddenNow());
   const [offers, setOffers] = useState<SubscriptionOffersResponse | null>(null);
+  const [extra, setExtra] = useState<ExtraDeviceResponse | null>(null);
   const requested = useRef(false);
+  const extraRequested = useRef(false);
 
   // Без оформления не знаем, умеет ли бэкенд этот блок: `can` на пустом оформлении
   // отвечает «да», и поверх «Бедолаги» первый заход без кэша сходил бы за витриной.
@@ -81,10 +97,14 @@ export function DeviceUpsellCard({
     [allowed, hidden, subscription, devices],
   );
 
+  // Докупка отвечает «место уже покупали» или «больше нельзя» — тариф побольше
+  // становится единственным выходом, и ради него витрину стоит спросить даже на
+  // Главной, где обычно ждём конца срока (решение владельца: второй раз место не
+  // предлагаем, ведём на тариф).
   const wantOffers =
     state.kind === "full" &&
     !!subscription &&
-    (variant === "devices" || homePrecheck(subscription));
+    (variant === "devices" || homePrecheck(subscription) || suggestsBiggerPlan(extra));
 
   useEffect(() => {
     if (!wantOffers || requested.current) return;
@@ -96,6 +116,33 @@ export function DeviceUpsellCard({
         /* тихо: блок необязательный (501 у чужого бэкенда, сбой сети) */
       });
   }, [wantOffers]);
+
+  // Докупка — отдельный, дешёвый запрос (три SELECT, без панели) и БЕЗ предпроверки
+  // потери дней: тариф она не меняет, терять нечего.
+  const wantExtra = state.kind === "full" && !!subscription && can("extra_device");
+
+  const loadExtra = () => {
+    subscriptionApi
+      .extraDevice()
+      .then(setExtra)
+      .catch(() => {
+        /* тихо: докупки может не быть (старый бот, чужой бэкенд, сбой сети) */
+      });
+  };
+
+  useEffect(() => {
+    if (!wantExtra || extraRequested.current) return;
+    extraRequested.current = true;
+    loadExtra();
+  }, [wantExtra]);
+
+  const extraOffer = useMemo(() => (wantExtra ? newOffer(extra) : null), [wantExtra, extra]);
+  const extraPayable =
+    extraOffer != null && extra != null && payOptions(extra, extraOffer.amount).options.length > 0;
+
+  useEffect(() => {
+    onOfferShown?.(extraPayable);
+  }, [extraPayable, onOfferShown]);
 
   const upgrade = useMemo(
     () =>
@@ -146,6 +193,51 @@ export function DeviceUpsellCard({
             {t("deviceUpsell.freeCta")}
             <ArrowRight className="h-4 w-4" />
           </Link>
+        </div>
+        {closeButton}
+      </div>
+    );
+  }
+
+  // Докупка доступна и оплатима — показываем её ПЕРВОЙ. Тариф побольше остаётся
+  // ниже строкой, если витрина уже пришла; ждать её ради этой строки не нужно.
+  if (state.kind === "full" && extraPayable && extraOffer && extra && devices) {
+    const upgradeLink =
+      offers && upgrade && (variant !== "home" || homeAllows(changeTerms(offers, upgrade.plan, upgrade.days, upgrade.price.currency)))
+        ? upgrade
+        : null;
+    return (
+      <div
+        className={
+          variant === "home"
+            ? "relative overflow-hidden rounded-2xl border border-accent/40 bg-gradient-to-br from-accent/15 to-accent-2/15 p-4 sm:p-5"
+            : "rounded-xl border border-accent/30 bg-accent-subtle/40 p-3"
+        }
+      >
+        <div className={variant === "home" ? "pr-6" : ""}>
+          <ExtraDeviceHeadline offer={extraOffer} />
+          <p className="mt-1 text-xs text-fg-muted">
+            {t("deviceUpsell.full", { cur: devices.current_count, max: devices.max_count })}
+          </p>
+          <ExtraDeviceOffer
+            data={extra}
+            offer={extraOffer}
+            onChanged={() => {
+              loadExtra();
+              onChanged?.();
+            }}
+          />
+          {upgradeLink && (
+            <p className="mt-3 text-xs text-fg-subtle">
+              {t("extraDevice.orPlan")}{" "}
+              <Link
+                to={billingHref(upgradeLink.plan.public_code, upgradeLink.days)}
+                className="font-medium text-accent transition-opacity hover:opacity-80"
+              >
+                {upgradeLink.plan.name}
+              </Link>
+            </p>
+          )}
         </div>
         {closeButton}
       </div>

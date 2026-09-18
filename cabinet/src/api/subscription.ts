@@ -2,6 +2,9 @@ import { api } from "./client";
 import type {
   DevicesResponse,
   ExtendRequest,
+  ExtraDeviceBuyRequest,
+  ExtraDeviceBuyResponse,
+  ExtraDeviceResponse,
   PaymentInitResponse,
   PurchaseRequest,
   SubscriptionInfoResponse,
@@ -50,6 +53,11 @@ export const subscriptionApi = {
     ),
 
   offers: () => api.get<SubscriptionOffersResponse>("/subscription/offers"),
+
+  extraDevice: () => api.get<ExtraDeviceResponse>("/subscription/extra-device"),
+
+  buyExtraDevice: (data: ExtraDeviceBuyRequest) =>
+    api.post<ExtraDeviceBuyResponse>("/subscription/extra-device/buy", data),
 
   purchase: (data: PurchaseRequest) =>
     api.post<PaymentInitResponse>("/subscription/purchase", data),

@@ -15,7 +15,7 @@ import { device, devicesOf, iphoneTwice, offers, plan, sub } from "@/test/offers
 // («нет ключа = умеет») молча разошлась бы с кодом, когда блок стал зависеть от бота.
 // По умолчанию под кабинетом бот, который блок умеет (токен device_upsell).
 const look = (over: Partial<Appearance> = {}) =>
-  ({ brand_name: "X", bot_capabilities: ["device_upsell"], ...over }) as Appearance;
+  ({ brand_name: "X", bot_capabilities: ["device_upsell", "extra_device"], ...over }) as Appearance;
 let appearance: Appearance | null = look();
 vi.mock("@/contexts/BrandingContext", async () => {
   const { canFeature } = await import("@/lib/features");
@@ -28,8 +28,16 @@ vi.mock("@/contexts/BrandingContext", async () => {
 });
 
 const offersMock = vi.fn();
+// Докупка — отдельный, более дешёвый запрос. По умолчанию её нет (бот не умеет или
+// владелец не открыл продажи), и карточка ведёт себя ровно как раньше.
+const extraMock = vi.fn();
+const buyMock = vi.fn();
 vi.mock("@/api/subscription", () => ({
-  subscriptionApi: { offers: () => offersMock() },
+  subscriptionApi: {
+    offers: () => offersMock(),
+    extraDevice: () => extraMock(),
+    buyExtraDevice: (body: unknown) => buyMock(body),
+  },
 }));
 
 const { DeviceUpsellCard } = await import("./DeviceUpsellCard");
@@ -70,6 +78,9 @@ beforeEach(() => {
   appearance = look();
   offersMock.mockReset();
   offersMock.mockResolvedValue(offers(showcase()));
+  extraMock.mockReset();
+  extraMock.mockResolvedValue({ enabled: false });
+  buyMock.mockReset();
   try {
     localStorage.clear();
   } catch {
@@ -277,6 +288,130 @@ describe("DeviceUpsellCard: перенос остатка по цене дня",
     offersMock.mockResolvedValue(carrying(9, 5));
     const { container } = view("home", soloSub(5.5), soloFull());
     await waitFor(() => expect(offersMock).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(container.textContent).toBe("");
+  });
+});
+
+
+describe("DeviceUpsellCard: докупка +1 устройства", () => {
+  const UNTIL = new Date(Date.now() + 20 * DAY).toISOString();
+  const available = (over: Record<string, unknown> = {}) => ({
+    enabled: true,
+    currency_symbol: "₽",
+    balance: "500",
+    device_limit: 1,
+    plan_device_limit: 1,
+    subscription_expire_at: UNTIL,
+    gateways: [{ gateway_type: "YOOMONEY", currency_symbol: "₽" }],
+    new: { available: true, reason: null, amount: "60", until: UNTIL, days: 20 },
+    slots: [],
+    ...over,
+  });
+
+  it("докупка доступна — она первая, тариф побольше уходит строкой ниже", async () => {
+    extraMock.mockResolvedValue(available());
+    view("devices", soloSub(), soloFull());
+    await screen.findByRole("button", { name: new RegExp(say("extraDevice.buy", { price: "60 ₽" })) });
+    // Тариф остаётся доступным, но уже как «или тариф побольше», а не как главная кнопка.
+    await waitFor(() => expect(document.body.textContent).toContain(say("extraDevice.orPlan")));
+    expect(screen.queryByRole("link", { name: new RegExp(say("deviceUpsell.cta")) })).toBeNull();
+  });
+
+  it("бот без токена extra_device — за докупкой не ходим, поведение прежнее", async () => {
+    appearance = look({ bot_capabilities: ["device_upsell"] });
+    view("devices", soloSub(), soloFull());
+    await screen.findByRole("link", { name: new RegExp(say("deviceUpsell.cta")) });
+    expect(extraMock).not.toHaveBeenCalled();
+  });
+
+  it("дубли одного аппарата — карточка «освободите места», за докупкой не ходим", async () => {
+    view("home", soloSub(), devicesOf(iphoneTwice(), 2));
+    await settle();
+    expect(extraMock).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain(say("deviceUpsell.freeTitle"));
+  });
+
+  it("платить нечем (баланса мало, шлюзов нет) — докупки нет, остаётся тариф", async () => {
+    extraMock.mockResolvedValue(available({ balance: "1", gateways: [] }));
+    view("devices", soloSub(), soloFull());
+    await screen.findByRole("link", { name: new RegExp(say("deviceUpsell.cta")) });
+    expect(screen.queryByText(new RegExp(say("extraDevice.buy", { price: "60 ₽" })))).toBeNull();
+  });
+
+  it("с баланса: подтверждение, ровно один POST с request_id, повтор во время запроса не шлёт второй", async () => {
+    extraMock.mockResolvedValue(available());
+    let release: (v: unknown) => void = () => {};
+    buyMock.mockImplementation(() => new Promise((r) => (release = r)));
+    view("devices", soloSub(), soloFull());
+
+    fireEvent.click(await screen.findByRole("button", { name: new RegExp(say("extraDevice.buy", { price: "60 ₽" })) }));
+    const pay = await screen.findByRole("button", { name: say("extraDevice.payBalance") });
+    fireEvent.click(pay);
+    fireEvent.click(pay); // второй клик, пока запрос в полёте
+    await waitFor(() => expect(buyMock).toHaveBeenCalledTimes(1));
+    const body = buyMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(body.pay).toBe("balance");
+    expect(body.expected_amount).toBe("60");
+    expect(String(body.request_id)).toMatch(/^[0-9a-f-]{36}$/);
+
+    await act(async () => {
+      release({ result: "applied", device_limit: 2, until: UNTIL, spent: "60", balance: "440" });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(document.body.textContent).toContain("2");
+  });
+
+  it("цена изменилась — новая сумма в тексте, денег не тронули", async () => {
+    extraMock.mockResolvedValue(available());
+    buyMock.mockResolvedValue({
+      result: "price_changed",
+      quote: { enabled: true, new: { available: true, amount: "75", until: UNTIL, days: 25 } },
+    });
+    view("devices", soloSub(), soloFull());
+    fireEvent.click(await screen.findByRole("button", { name: new RegExp(say("extraDevice.buy", { price: "60 ₽" })) }));
+    fireEvent.click(await screen.findByRole("button", { name: say("extraDevice.payBalance") }));
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(say("extraDevice.errPrice", { price: "75 ₽" })),
+    );
+  });
+
+  it("оплата картой — уходим на страницу шлюза", async () => {
+    extraMock.mockResolvedValue(available({ balance: "0" }));
+    buyMock.mockResolvedValue({ result: "pending", payment_id: "p", payment_url: "https://pay.example.test/1" });
+    const href = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { set href(v: string) { href(v); }, get href() { return ""; } },
+    });
+    view("devices", soloSub(), soloFull());
+    fireEvent.click(await screen.findByRole("button", { name: new RegExp(say("extraDevice.buy", { price: "60 ₽" })) }));
+    fireEvent.click(await screen.findByRole("button", { name: new RegExp(say("extraDevice.payGateway", { price: "60 ₽" })) }));
+    await waitFor(() => expect(href).toHaveBeenCalledWith("https://pay.example.test/1"));
+  });
+
+  it("ошибка покупки — «деньги не списаны», без падения", async () => {
+    extraMock.mockResolvedValue(available());
+    buyMock.mockRejectedValue(new ApiError(502, "нет"));
+    view("devices", soloSub(), soloFull());
+    fireEvent.click(await screen.findByRole("button", { name: new RegExp(say("extraDevice.buy", { price: "60 ₽" })) }));
+    fireEvent.click(await screen.findByRole("button", { name: say("extraDevice.payBalance") }));
+    await waitFor(() => expect(document.body.textContent).toContain(say("extraDevice.errFailed")));
+  });
+
+  it("Главная: докупку спрашиваем даже вдалеке от конца срока — терять нечего", async () => {
+    extraMock.mockResolvedValue(available());
+    view("home", soloSub(90), soloFull());
+    await screen.findByRole("button", { name: new RegExp(say("extraDevice.buy", { price: "60 ₽" })) });
+    // Витрину при этом не дёргаем: до конца срока далеко, тариф там всё равно не показали бы.
+    expect(offersMock).not.toHaveBeenCalled();
+  });
+
+  it("Главная: крестик прячет блок на неделю", async () => {
+    extraMock.mockResolvedValue(available());
+    const { container } = view("home", soloSub(90), soloFull());
+    await screen.findByRole("button", { name: new RegExp(say("extraDevice.buy", { price: "60 ₽" })) });
+    fireEvent.click(screen.getByLabelText(say("common.hide")));
     await settle();
     expect(container.textContent).toBe("");
   });

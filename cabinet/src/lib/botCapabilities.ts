@@ -28,7 +28,7 @@
  * «Обновления» называют, чего не будет до обновления бота.
  * Сторож путей ловит новые РУЧКИ сам; новое ПОЛЕ в старой ручке — только это правило.
  *
- * КАК ДОБАВИТЬ ФУНКЦИЮ (пример — докупка +1 устройства, следующая в очереди):
+ * КАК ДОБАВИТЬ ФУНКЦИЮ (пример — докупка +1 устройства, уже сделанная по этим шагам):
  *  1. admin_src/src/web/cabinet_capabilities.py: строка `    "extra_device",` в
  *     CABINET_CAPABILITIES — в том же коммите, что и ручки бота;
  *  2. здесь, в BOT_CAPABILITIES:
@@ -58,6 +58,7 @@ export const BOT_CAPABILITIES = {
   refunds_tile: { since: "1.3.9", label: "Плитка «Возвраты (30 дн)» в статистике" },
   ad_link_url: { since: "1.3.9", label: "Готовая ссылка в окне новой рекламной ссылки" },
   plan_change_carry: { since: "1.3.9", label: "Перенос оставшихся дней при смене тарифа" },
+  extra_device: { since: "1.3.9", label: "Докупка +1 устройства к подписке до конца срока" },
 } as const;
 
 export type BotCap = keyof typeof BOT_CAPABILITIES;
@@ -81,11 +82,15 @@ export const FEATURE_NEEDS_BOT: Partial<Record<FeatureKey, BotCap>> = {
   // Тумблер в «Доступ и язык» писал поле, которое старый бот выбрасывал; карточка
   // заодно не ходит за витриной впустую.
   device_upsell: "device_upsell",
+  // Докупка обещает ДЕНЬГИ и место под устройство: кнопка «Докупить за X ₽» у старого
+  // бота упёрлась бы в 404 уже после подтверждения суммы.
+  extra_device: "extra_device",
 };
 
 /** Страницы админки, которых нет в меню, пока бот не прислал токен. */
 export const PAGE_NEEDS_BOT: Readonly<Record<string, BotCap>> = {
   "/admin/renewal-discount": "renewal_discount",
+  "/admin/extra-device": "extra_device",
 };
 
 /** Что показать на прямом заходе по адресу спрятанной страницы. */

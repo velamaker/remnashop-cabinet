@@ -208,7 +208,18 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
             <div className="flex gap-3 text-xs text-fg-muted">
               {/* traffic_limit приходит в ГБ (в байтах его хранит только панель). */}
               <span>Трафик: {sub.traffic_limit === 0 ? "∞" : `${sub.traffic_limit} ГБ`}</span>
-              <span>Устройств: {sub.device_limit === 0 ? "∞" : sub.device_limit}</span>
+              <span>
+                Устройств: {sub.device_limit === 0 ? "∞" : sub.device_limit}
+                {/* Расшифровка нужна, чтобы «4» не выглядело как навсегда: одно из
+                    мест докуплено и в свой срок отвалится. */}
+                {!!sub.extra_devices_active && sub.plan_device_limit != null && (
+                  <span className="text-fg-subtle">
+                    {" "}
+                    (тариф {sub.plan_device_limit} + докуплено {sub.extra_devices_active}
+                    {sub.extra_until ? ` до ${formatDate(sub.extra_until)}` : ""})
+                  </span>
+                )}
+              </span>
               {sub.is_trial && <Tag cls="bg-accent/8 text-accent border-accent/15">Пробная</Tag>}
             </div>
           </div>
@@ -576,6 +587,8 @@ function LimitsAndSquadsBlock({ userId, sub, onUpdated }: { userId: number; sub:
   const [squads, setSquads] = useState<AdminSquadsResponse | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  // Текст 409 от бэкенда: «Докуплено +N устр. до ДД.ММ. Отменить докупку и поставить M?»
+  const [extrasConflict, setExtrasConflict] = useState<string | null>(null);
   const { can, note } = useCapabilities();
 
   const toggle = () => {
@@ -596,6 +609,31 @@ function LimitsAndSquadsBlock({ userId, sub, onUpdated }: { userId: number; sub:
       if (!note(cap, e)) setMsg(e instanceof ApiError ? e.detail : "Ошибка");
     }
     finally { setBusy(null); }
+  };
+
+  /**
+   * Лимит устройств. Ниже «тариф + докупленные» бэкенд отвечает 409 с объяснением:
+   * молча отнять оплаченное место нельзя. Подтверждение админа уходит вторым
+   * запросом с revoke_extras — тогда места помечаются отменёнными явно.
+   */
+  const setDeviceLimit = async (revokeExtras: boolean) => {
+    const value = Math.max(0, parseInt(devices, 10) || 0);
+    setBusy("devices");
+    setMsg(null);
+    setExtrasConflict(null);
+    try {
+      await subscriptionsAdminApi.setDeviceLimit(userId, value, revokeExtras);
+      setMsg("Сохранено");
+      onUpdated();
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        setExtrasConflict(e.detail);
+      } else if (!note("sub.device-limit", e)) {
+        setMsg(e instanceof ApiError ? e.detail : "Ошибка");
+      }
+    } finally {
+      setBusy(null);
+    }
   };
 
   const squadChip = (uuid: string, name: string, on: boolean, external: boolean) => (
@@ -644,12 +682,32 @@ function LimitsAndSquadsBlock({ userId, sub, onUpdated }: { userId: number; sub:
             <input type="number" min={0} value={devices} onChange={(e) => setDevices(e.target.value)}
               className="w-24 rounded-lg border border-[var(--border)] bg-bg px-2 py-1 text-xs text-fg" />
             <span className="text-[10px] text-fg-subtle">0 = ∞</span>
-            <button onClick={() => act("devices", () => subscriptionsAdminApi.setDeviceLimit(userId, Math.max(0, parseInt(devices, 10) || 0)), "sub.device-limit")}
+            <button onClick={() => setDeviceLimit(false)}
               disabled={busy !== null}
               className="ml-auto rounded-lg bg-accent/10 px-3 py-1 text-xs text-accent hover:bg-accent/20 disabled:opacity-40">
               {busy === "devices" ? "…" : "OK"}
             </button>
           </div>
+          )}
+          {extrasConflict && (
+            <div className="rounded-lg border border-warning/40 bg-warning/10 p-2 text-xs text-fg">
+              <p>{extrasConflict}</p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  onClick={() => setDeviceLimit(true)}
+                  disabled={busy !== null}
+                  className="rounded-lg bg-warning/20 px-2 py-1 text-xs text-fg hover:bg-warning/30 disabled:opacity-40"
+                >
+                  Отменить докупку и поставить
+                </button>
+                <button
+                  onClick={() => setExtrasConflict(null)}
+                  className="rounded-lg px-2 py-1 text-xs text-fg-muted hover:text-fg"
+                >
+                  Отмена
+                </button>
+              </div>
+            </div>
           )}
           {canSquads && squads && squads.internal.length > 0 && (
             <div>

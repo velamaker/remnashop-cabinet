@@ -94,7 +94,10 @@ export function changeTerms(
 }
 
 /** Спрашивать ли подтверждение перед оплатой: только когда что-то пропадает. */
-export function needsConfirm(terms: ChangeTerms): boolean {
+export function needsConfirm(terms: ChangeTerms, extraDevicesLost = false): boolean {
+  // Докупленные места при смене тарифа сгорают всегда, но переспрашиваем только
+  // когда их СТОИМОСТЬ не пересчитывается: «добавится днями» — не потеря.
+  if (extraDevicesLost) return true;
   if (terms === null) return false;
   if (terms.kind === "carry") return terms.lost > 0;
   return true;
