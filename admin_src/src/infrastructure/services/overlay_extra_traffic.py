@@ -593,6 +593,55 @@ async def lock_state(session: "AsyncSession", user_id: int, *, lock: bool = True
     )
 
 
+# Лёгкое чтение для КАРТОЧКИ ПОДПИСКИ В МЕНЮ БОТА: одна строка вместо трёх запросов
+# lock_state. Меню — самый горячий экран бота, и ради одной даты тянуть прибавки,
+# паузу и резерв незачем.
+MENU_STATE_SQL = (
+    "SELECT s.user_remna_id, s.traffic_limit_strategy::text, s.traffic_limit "
+    "FROM users u JOIN subscriptions s ON s.id = u.current_subscription_id WHERE u.id = :uid"
+)
+
+
+async def reset_moment_for_user(
+    session: "AsyncSession", remnawave: Any, user_id: int, now: datetime
+) -> Optional[datetime]:
+    """Когда у этого человека обновится трафик. None — считать нечем или незачем.
+
+    Это тот же расчёт, что кормит срок докупки и тексты кабинета: карточка подписки
+    в меню бота обязана называть ТО ЖЕ число, иначе человек видит две разные даты и
+    справедливо считает, что ему врут.
+
+    В панель ходим только когда без неё нельзя (MONTH_ROLLING без якоря в кеше).
+    Дата создания пользователя панели не меняется никогда, поэтому одного запроса
+    хватает на всю жизнь процесса.
+    """
+    row = (await session.execute(text(MENU_STATE_SQL), {"uid": int(user_id)})).first()
+    if row is None:
+        return None
+    uuid, strategy, traffic_limit = row[0], row[1], int(row[2] or 0)
+    if traffic_limit == 0 or strategy_name(strategy) not in RESET_AT_UTC:
+        # Безлимит и NO_RESET: обновления нет, и базовый текст «сброс через …» тут
+        # тоже показывает ноль — менять нечего.
+        return None
+    anchor = None
+    if needs_anchor(strategy):
+        anchor = cached_created_at(uuid)
+        if anchor is None:
+            if remnawave is None or not uuid:
+                return None
+            try:
+                remna_user = await remnawave.get_user_by_uuid(str(uuid))
+            except Exception as exc:  # noqa: BLE001 — меню важнее точной даты
+                logger.debug(f"extra_traffic: дата создания в панели не прочитана: {exc}")
+                return None
+            if remna_user is None:
+                return None
+            anchor = panel_view(remna_user).created_at
+        if anchor is None:
+            return None
+    return next_traffic_reset(strategy, anchor, now)
+
+
 async def order_by_request(session: "AsyncSession", request_id: Any) -> Optional[dict]:
     row = (await session.execute(text(ORDER_BY_REQUEST_SQL), {"rid": str(request_id)})).first()
     if row is None:

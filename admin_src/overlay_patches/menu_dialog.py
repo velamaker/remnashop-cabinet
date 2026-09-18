@@ -30,7 +30,7 @@ from magic_filter import F
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.application.common import TranslatorRunner
+from src.application.common import Remnawave, TranslatorRunner
 
 from src.application.common.policy import Permission
 from src.core.config import AppConfig
@@ -136,8 +136,14 @@ def _is_telegram_link(url: str | None) -> bool:
 # Конфиг (assets/menu.json) читается на КАЖДЫЙ рендер → состав и порядок из
 # админки применяются сразу, без перезапуска бота.
 @inject
-async def menu_getter(i18n: FromDishka[TranslatorRunner], **kwargs):
+async def menu_getter(
+    i18n: FromDishka[TranslatorRunner],
+    session: FromDishka[AsyncSession],
+    remnawave: FromDishka[Remnawave],
+    **kwargs,
+):
     data = await _base_menu_getter(**kwargs)
+    await _fix_reset_time(data, session, remnawave, kwargs)
     cfg = load_menu_config()
     for key, value in cfg.items():
         if isinstance(value, bool):
@@ -205,6 +211,39 @@ async def menu_getter(i18n: FromDishka[TranslatorRunner], **kwargs):
             )
     data["menu_access_items"] = items
     return data
+
+
+async def _fix_reset_time(data, session, remnawave, kwargs) -> None:
+    """Дата обновления трафика в карточке подписки — по формуле ПАНЕЛИ.
+
+    ТРЕТЬЕ И ПОСЛЕДНЕЕ МЕСТО с этой датой (первые два чинит
+    overlay_patches/traffic_reset_date.py). Базовый геттер зовёт
+    `get_traffic_reset_delta(strategy, subscription.created_at)`, а там неверны и
+    часы, и якорь: панель считает по `created_at` СВОЕГО пользователя, наша строка
+    подписки пересоздаётся при смене тарифа. Чинить обязательно вместе с остальными:
+    расхождение «кабинет говорит 7-е, бот 21-е» человек читает как обман.
+
+    Тело базового геттера не трогаем — перезаписываем ОДНО готовое поле. Любая
+    ошибка означает «оставили как было»: меню открывают, когда что-то не работает,
+    и падать в этот момент нельзя.
+    """
+    if not data.get("has_subscription"):
+        return
+    try:
+        from src.core.utils.i18n_helpers import i18n_format_expire_time
+        from src.infrastructure.services import overlay_extra_traffic as extra
+
+        user = kwargs.get("user") or kwargs.get("event_from_user")
+        user_id = getattr(user, "id", None)
+        if user_id is None:
+            return
+        now = extra.now_utc()
+        moment = await extra.reset_moment_for_user(session, remnawave, int(user_id), now)
+        if moment is None:
+            return
+        data["reset_time"] = i18n_format_expire_time(moment - now)
+    except Exception as exc:  # noqa: BLE001 — приблизительная дата лучше пустого меню
+        logger.warning(f"extra_traffic: дату обновления трафика в меню не поправил: {exc}")
 
 
 # Динамический цвет кнопки: берём item[color] (задаётся в админке кабинета).

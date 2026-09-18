@@ -397,6 +397,11 @@ def install() -> None:
             "src.application.use_cases.broadcast.queries.audience",
             "broadcast_expiring",
         ),
+        (
+            "дата обновления трафика",
+            "src.application.services.remnawave",
+            "traffic_reset_date",
+        ),
     )
 
     # Правки запасной копии бэкенда: у них по три разные цели, поэтому идут
