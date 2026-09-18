@@ -21,11 +21,49 @@ import pytest
 DIALOG_KWARGS = {"dialog_manager", "config", "user", "event_from_user", "i18n", "middleware_data"}
 
 
-def _overlay_getters():
-    from overlay_patches import menu_dialog  # в образе правки лежат пакетом overlay_patches
+def _menu_dialog():
+    """Модуль правки через ЕЁ ЦЕЛЬ: прямой импорт даёт кольцо и «правка не применилась»."""
+    import importlib
+    import sys
 
+    importlib.import_module("src.telegram.routers.menu.dialog")
+    return sys.modules["overlay_patches.menu_dialog"]
+
+
+def _overlay_getters():  # noqa: C901
+    """ВСЕ геттеры, которые реально привязаны к окнам через `getter=`.
+
+    Раньше сторож смотрел только имена `*_getter_overlay` — и не видел `menu_getter`,
+    обёртку ГЛАВНОГО окна бота. То есть ровно то окно, которое открывают чаще всех,
+    оставалось без проверки. Берём объекты из самих окон: как бы функцию ни назвали,
+    привязка к окну её выдаст.
+
+    Отдельно возвращаем и то, что объявлено у нас по имени: окно может собираться
+    не из модульной переменной, и терять такую обёртку тоже нельзя.
+    """
+    menu_dialog = _menu_dialog()
+    seen: set[int] = set()
+    for value in vars(menu_dialog).values():
+        if type(value).__name__ != "Window":
+            continue
+        # aiogram_dialog оборачивает геттер окна (PreviewAwareGetter / StaticGetter),
+        # поэтому идём и по самому объекту, и по его атрибутам: как бы обёртка ни
+        # называлась, функция лежит в одном из них.
+        candidates = [getattr(value, "getter", None)]
+        candidates.extend(vars(candidates[0] or object()).values())
+        for candidate in candidates:
+            func = getattr(candidate, "__func__", candidate)
+            if not callable(func) or id(func) in seen:
+                continue
+            if getattr(func, "__module__", "") != menu_dialog.__name__:
+                # Чужие геттеры базы (devices_getter, invite_getter) не наши — их
+                # сигнатуру задаёт апстрим, и спорить с ним здесь не о чем.
+                continue
+            seen.add(id(func))
+            yield getattr(func, "__name__", "?"), func
     for name, obj in vars(menu_dialog).items():
-        if name.endswith("_getter_overlay") and callable(obj):
+        if name.endswith("_getter_overlay") and callable(obj) and id(obj) not in seen:
+            seen.add(id(obj))
             yield name, obj
 
 
@@ -69,7 +107,16 @@ def test_overlay_getters_do_not_shadow_dialog_kwargs():
         )
 
 
-@pytest.mark.parametrize("name", ["devices_getter_overlay"])
+@pytest.mark.parametrize("name", ["devices_getter_overlay", "menu_getter"])
 def test_known_overlay_getters_are_still_there(name):
-    """Сторож бесполезен, если обёртку переименуют и он перестанет её видеть."""
+    """Сторож бесполезен, если обёртку переименуют и он перестанет её видеть.
+
+    `menu_getter` — обёртка ГЛАВНОГО окна: до расширения сторожа она в его поле
+    зрения не попадала вовсе, хотя тоже просит у dishka сессию и панель.
+    """
     assert name in dict(_overlay_getters())
+
+
+def test_guard_sees_more_than_one_getter():
+    """Сузился отбор — сторож молча перестал бы что-то проверять."""
+    assert len(dict(_overlay_getters())) >= 2

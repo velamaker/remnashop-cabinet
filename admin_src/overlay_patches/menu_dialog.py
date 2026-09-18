@@ -137,16 +137,18 @@ def _is_telegram_link(url: str | None) -> bool:
 # админки применяются сразу, без перезапуска бота.
 @inject
 async def menu_getter(
-    i18n: FromDishka[TranslatorRunner],
-    # Имена НАРОЧНО с префиксом: aiogram_dialog зовёт геттер окна со своими kwargs,
-    # и одноимённый параметр под @inject даёт «got multiple values for keyword
-    # argument» — на этом 18.09 легло окно «Устройства» у всех. Правило и его цена
-    # записаны в tests/test_menu_getter_kwargs.py; `i18n` здесь остаётся как был —
-    # он в kwargs диалога не приходит (проверено боем, окно работает годами).
+    # ВСЕ имена НАРОЧНО с префиксом: aiogram_dialog зовёт геттер окна со своими
+    # kwargs, и одноимённый параметр под @inject даёт «got multiple values for
+    # keyword argument» — на этом 18.09 легло окно «Устройства» у всех. `i18n`
+    # переименован вместе с остальными: он годами работал, но полагаться на «в
+    # kwargs его вроде бы нет» в главном окне бота — это ставка без выигрыша.
+    # Правило и его цена — в tests/test_menu_getter_kwargs.py.
+    _extra_i18n: FromDishka[TranslatorRunner],
     _extra_session: FromDishka[AsyncSession],
     _extra_panel: FromDishka[Remnawave],
     **kwargs,
 ):
+    i18n = _extra_i18n
     data = await _base_menu_getter(**kwargs)
     await _fix_reset_time(data, _extra_session, _extra_panel, kwargs)
     cfg = load_menu_config()
