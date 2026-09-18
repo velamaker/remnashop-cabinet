@@ -36,6 +36,13 @@ payment.py (608 строк). Меняются в нём ровно два мес
 докупленного лимита сразу после RENEW: база при продлении ставит ТАРИФНЫЙ лимит, и без
 этого человек терял бы оплаченное место до ближайшего прохода крона.
 
+ШЕСТАЯ — ДОКУПКА ТРАФИКА. Устроена так же (снимок тарифа −5, деньги на ₽-баланс,
+затем лимит), но после RENEW ведёт себя ПРОТИВОПОЛОЖНО докупке устройства: место под
+устройство мы возвращаем, а докупленные гигабайты гасим. Причина в том, что продление
+не только ставит тарифный лимит, но и обнуляет РАСХОД, — человек начинает период с
+нуля и с полным объёмом тарифа, и гаснущая прибавка ничего у него не отнимает. Обе
+ветки стоят рядом и подписаны комментариями-антонимами.
+
 ЭТО ДЕНЕЖНЫЙ ПУТЬ, поэтому сверка исходника обязательна: апстрим правит что-то
 внутри `_handle_success` — правка не применяется и кричит, а не подменяет молча
 изменившуюся логику зачисления.
@@ -57,6 +64,8 @@ from src.infrastructure.services.overlay_topup import try_credit_topup
 from src.infrastructure.services import overlay_plan_change as carry
 # Сервис докупки устройства — с тем же ограничением на модульный уровень.
 from src.infrastructure.services import overlay_extra_device as extra
+# Сервис докупки трафика — там же и с тем же ограничением.
+from src.infrastructure.services import overlay_extra_traffic as etraffic
 
 from src.application.common import (
     EventPublisher,
@@ -356,6 +365,160 @@ async def _handle_extra_device(self, user: UserDto, transaction: TransactionDto)
     return result
 
 
+async def _handle_extra_traffic(self, user: UserDto, transaction: TransactionDto):
+    """Ветка докупки трафика. None — счёт не наш, дальше идёт обычный путь базы.
+
+    ПЕРВЫМ ДЕЛОМ — ПРЕДФИЛЬТР ПО СНИМКУ ТАРИФА, ровно по той же причине, что и у
+    докупки устройства выше. Эта функция стоит в пути КАЖДОГО платежа, а её таблицы
+    приносит миграция, которую накатывает только контейнер бота: taskiq-воркер в окне
+    выкатки может исполнять вебхук, когда `extra_traffic_orders` ещё нет. Обращение к
+    новым таблицам раньше проверки означало бы «оплата принята, подписка не выдана» у
+    обычного покупателя. Счёт докупки трафика узнаётся по снимку тарифа (−5) — он
+    приходит в самой транзакции, и в базу ходить не надо.
+    """
+    if getattr(transaction.plan_snapshot, "id", 0) != etraffic.SYNTHETIC_PLAN_ID:
+        return None
+    try:
+        result = await etraffic.handle_paid_order(
+            self.session,
+            getattr(self.remnawave, "sdk", None),
+            self.remnawave,
+            transaction.payment_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Дальше — только НАШИ счета. Деньги уже на балансе, заказ остался `credited`,
+        # доведёт крон. Наружу исключение не пускаем: шлюз получил бы 500 и начал
+        # повторять вебхук по уже зачисленным деньгам.
+        logger.exception(
+            f"extra_traffic: счёт '{transaction.payment_id}' не применён — доведёт крон"
+        )
+        await _note_traffic_failure(self, transaction.payment_id, exc)
+        try:
+            await _notify_admins_raw(
+                self,
+                etraffic.admin_text(
+                    "deferred", user=user.log, payment_id=transaction.payment_id, error=str(exc)
+                ),
+            )
+        except Exception:  # noqa: BLE001 — алерт не важнее самой оплаты
+            logger.warning("extra_traffic: алерт об отложенном применении не ушёл")
+        return {"result": "deferred"}
+    if result is None:
+        return None
+    if result.get("repeat"):
+        logger.info(f"extra_traffic: счёт '{transaction.payment_id}' уже обработан — пропускаю")
+        return result
+
+    config = etraffic.load_config()
+    order = result.get("order") or {}
+    try:
+        if result.get("result") == "applied":
+            if config.get("notify_users"):
+                await self.notifier.notify_user(
+                    user,
+                    payload=MessagePayloadDto(
+                        i18n_key="raw-message",
+                        i18n_kwargs={
+                            "content": etraffic.user_text(
+                                "applied",
+                                gb=result["gb"],
+                                limit=result["traffic_limit_gb"],
+                                until=result["until"],
+                                unlocked=str(result.get("status") or "").upper() == "ACTIVE",
+                            )
+                        },
+                        delete_after=None,
+                    ),
+                )
+            if config.get("notify_admins"):
+                await _notify_admins_raw(
+                    self,
+                    etraffic.admin_text(
+                        "bought",
+                        user=user.log,
+                        gb=result["gb"],
+                        until=result["until"],
+                        amount=result["spent"],
+                        source="gateway",
+                    ),
+                )
+        else:
+            reason = result.get("reason") or "unknown"
+            if config.get("notify_users"):
+                key = "balance_spent" if reason == "balance_spent" else "not_applied"
+                await self.notifier.notify_user(
+                    user,
+                    payload=MessagePayloadDto(
+                        i18n_key="raw-message",
+                        i18n_kwargs={
+                            "content": etraffic.user_text(
+                                key, amount=order.get("amount"), reason=reason
+                            )
+                        },
+                        delete_after=None,
+                    ),
+                )
+            if config.get("notify_admins"):
+                await _notify_admins_raw(
+                    self,
+                    etraffic.admin_text(
+                        "rejected",
+                        user=user.log,
+                        amount=order.get("amount"),
+                        payment_id=transaction.payment_id,
+                        reason=reason,
+                    ),
+                )
+    except Exception:  # noqa: BLE001 — сообщение не отменяет уже применённую покупку
+        logger.exception(f"extra_traffic: не сообщил о счёте '{transaction.payment_id}'")
+    return result
+
+
+async def _note_traffic_failure(self, payment_id, exc: Exception) -> None:
+    """Отметить неудачную попытку применения докупки трафика и очистить сессию."""
+    try:
+        await self.session.rollback()
+        order = await etraffic.order_by_payment(self.session, payment_id)
+        await self.session.rollback()
+        if order is not None:
+            await etraffic.note_attempt(self.session, order["id"], f"{type(exc).__name__}: {exc}")
+    except Exception:  # noqa: BLE001 — счётчик попыток не важнее самой оплаты
+        logger.warning(f"extra_traffic: попытку по счёту '{payment_id}' не отметил")
+        try:
+            await self.session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def _alert_refunded_traffic(self, data, before: "str | None") -> None:
+    """Возврат по счёту докупки трафика: прибавку отзываем НЕ мы, а владелец кнопкой.
+
+    Алертим только при РЕАЛЬНОМ переходе COMPLETED → REFUNDED: база при несовпавшем
+    переходе молча выходит, и повтор вебхука не должен слать второй алерт.
+    """
+    if before != TransactionStatus.COMPLETED.value:
+        return
+    session = getattr(self, "session", None)
+    if session is None:
+        return
+    if await carry.transaction_status(session, data.payment_id) != TransactionStatus.REFUNDED.value:
+        return
+    order = await etraffic.order_by_payment(session, data.payment_id)
+    if order is None:
+        return
+    user = await self.user_dao.get_by_id(order["user_id"])
+    await _notify_admins_raw(
+        self,
+        etraffic.admin_text(
+            "refunded",
+            user=user.log if user else f"user_id={order['user_id']}",
+            payment_id=data.payment_id,
+            grant_id=order["grant_id"] if order["status"] == "applied" else None,
+            until=order["window_end"],
+        ),
+    )
+
+
 async def _note_extra_failure(self, payment_id, exc: Exception) -> None:
     """Отметить неудачную попытку применения и вернуть сессию в рабочее состояние."""
     try:
@@ -515,6 +678,14 @@ def apply() -> str:
         if device is not None:
             return
 
+        # OVERLAY: докупка трафика. Счёт помечен строкой в extra_traffic_orders —
+        # зачисляем сумму на ₽-баланс и поднимаем лимит трафика тем же кодом, что и
+        # покупка с баланса. ВЫХОДИМ до подписки, события покупки, рефералки и
+        # редиректа: подписку этот счёт не продлевает и не меняет.
+        traffic = await _handle_extra_traffic(self, user, transaction)
+        if traffic is not None:
+            return
+
         subscription = await self.subscription_dao.get_current(user.id)
         old_plan = subscription.plan_snapshot if subscription else None
 
@@ -620,6 +791,23 @@ def apply() -> str:
                 except Exception:  # noqa: BLE001
                     pass
 
+            # OVERLAY: у ТРАФИКА всё НАОБОРОТ. Продление ставит тарифный лимит И
+            # обнуляет расход (reset_traffic=True), то есть человек начинает период
+            # с нуля и полным объёмом тарифа — докупленные ГБ гаснут, и это решение
+            # владельца. Панель здесь не зовём вовсе: лимит уже правильный, любой
+            # PATCH только сломал бы его. Не перепутайте с веткой устройства выше:
+            # там место оплачено вперёд и обязано пережить продление.
+            try:
+                await etraffic.burn_on_renew(self.session, user.id)
+            except Exception:  # noqa: BLE001 — крон пометит записи следующим проходом
+                logger.exception(
+                    f"extra_traffic: прибавки после продления не помечены (user {user.log})"
+                )
+                try:
+                    await self.session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+
         # OVERLAY: отчёт о переносе остатка (best-effort). ПОСЛЕ выдачи и события покупки:
         # уведомление владельцу не задерживает и не срывает то, за что заплачено.
         if transaction.purchase_type in (PurchaseType.CHANGE, PurchaseType.RENEW):
@@ -694,6 +882,12 @@ def apply() -> str:
             except Exception:  # noqa: BLE001 — алерт не ломает обработку возврата
                 logger.exception(
                     f"extra_device: алерт возврата по '{data.payment_id}' не отправлен"
+                )
+            try:
+                await _alert_refunded_traffic(self, data, status_before)
+            except Exception:  # noqa: BLE001 — алерт не ломает обработку возврата
+                logger.exception(
+                    f"extra_traffic: алерт возврата по '{data.payment_id}' не отправлен"
                 )
 
     async def _revive_canceled(self, data) -> None:

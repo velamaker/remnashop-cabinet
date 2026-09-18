@@ -106,6 +106,42 @@ docker exec "$PG" psql -U remnashop -d remnashop -q -c "
     SELECT gen_random_uuid(), 'balance', 'bogus', id, 1, 'applied', 10, 100, now(), now() + interval '1 day'
     FROM users LIMIT 1;" >/dev/null 2>&1 && fail "0011: CHECK по kind не сработал"
 docker exec "$PG" psql -U remnashop -d remnashop -q -c "TRUNCATE extra_device_orders;" >/dev/null
+# 0012: докупка трафика. Те же две идемпотентности (кнопка и вебхук), FK на users для
+# слияния двойников и частичные индексы под выборки крона. Отдельно проверяем, что
+# `ends_at` допускает NULL: при стратегии NO_RESET обнуления нет вовсе, и запрет на
+# NULL превратил бы такую покупку в падение посреди денежного пути.
+[ "$(q "SELECT to_regclass('extra_traffic_grants')::text")" = "extra_traffic_grants" ] || fail "extra_traffic_grants не создана"
+[ "$(q "SELECT to_regclass('extra_traffic_orders')::text")" = "extra_traffic_orders" ] || fail "extra_traffic_orders не создана"
+[ "$(q "SELECT count(*) FROM pg_constraint WHERE conrelid = to_regclass('extra_traffic_orders') AND contype = 'u'")" = "2" ] || fail "у extra_traffic_orders нет UNIQUE по request_id и payment_id"
+[ "$(q "SELECT count(*) FROM pg_constraint WHERE conrelid = to_regclass('extra_traffic_grants') AND contype = 'f' AND confrelid = to_regclass('users')")" = "1" ] || fail "у extra_traffic_grants нет FK на users"
+[ "$(q "SELECT count(*) FROM pg_constraint WHERE conrelid = to_regclass('extra_traffic_orders') AND contype = 'f' AND confrelid = to_regclass('users')")" = "1" ] || fail "у extra_traffic_orders нет FK на users"
+[ "$(q "SELECT count(*) FROM pg_indexes WHERE tablename='extra_traffic_grants' AND indexname='ix_etg_active_end' AND indexdef LIKE '%status%active%'")" = "1" ] || fail "нет частичного индекса ix_etg_active_end"
+[ "$(q "SELECT count(*) FROM pg_indexes WHERE tablename='extra_traffic_orders' AND indexname='ix_eto_open' AND indexdef LIKE '%pending%'")" = "1" ] || fail "нет частичного индекса ix_eto_open"
+docker exec "$PG" psql -U remnashop -d remnashop -q -c "
+  INSERT INTO extra_traffic_orders (request_id, source, user_id, subscription_id, status,
+    gb, amount, window_end)
+    SELECT gen_random_uuid(), 'balance', id, 1, 'applied', 50, 50, now() + interval '5 days'
+    FROM users LIMIT 1;
+  INSERT INTO extra_traffic_orders (request_id, source, user_id, subscription_id, status,
+    gb, amount, window_end)
+    SELECT gen_random_uuid(), 'balance', id, 1, 'applied', 50, 50, now() + interval '5 days'
+    FROM users LIMIT 1;" >/dev/null 2>&1 || fail "0012: два заказа без payment_id не прошли (UNIQUE ловит NULL?)"
+[ "$(q "SELECT count(*) FROM extra_traffic_orders")" = "2" ] || fail "0012: заказы без payment_id не записались"
+docker exec "$PG" psql -U remnashop -d remnashop -q -c "
+  INSERT INTO extra_traffic_orders (request_id, source, user_id, subscription_id, status,
+    gb, amount) SELECT gen_random_uuid(), 'balance', id, 1, 'bogus', 50, 50 FROM users LIMIT 1;" >/dev/null 2>&1 && fail "0012: CHECK по статусу не сработал"
+docker exec "$PG" psql -U remnashop -d remnashop -q -c "
+  INSERT INTO extra_traffic_orders (request_id, source, user_id, subscription_id, status,
+    gb, amount) SELECT gen_random_uuid(), 'balance', id, 1, 'applied', 0, 50 FROM users LIMIT 1;" >/dev/null 2>&1 && fail "0012: CHECK по объёму (gb > 0) не сработал"
+docker exec "$PG" psql -U remnashop -d remnashop -q -c "
+  INSERT INTO extra_traffic_grants (user_id, subscription_id, plan_id, gb, strategy,
+    granted_at, ends_at, last_applied_at)
+    SELECT id, 1, 1, 50, 'NO_RESET', now(), NULL, now() FROM users LIMIT 1;
+  INSERT INTO extra_traffic_grants (user_id, subscription_id, plan_id, gb, strategy,
+    granted_at, ends_at, last_applied_at)
+    SELECT id, 1, 1, 50, 'NO_RESET', now(), NULL, now() FROM users LIMIT 1;" >/dev/null 2>&1 || fail "0012: две прибавки без ends_at (NO_RESET) не прошли"
+[ "$(q "SELECT count(*) FROM extra_traffic_grants WHERE ends_at IS NULL")" = "2" ] || fail "0012: прибавки без ends_at не записались"
+docker exec "$PG" psql -U remnashop -d remnashop -q -c "TRUNCATE extra_traffic_orders; TRUNCATE extra_traffic_grants CASCADE;" >/dev/null
 [ "$(q "SELECT version_num FROM alembic_version_overlay")" = "$HEAD" ] || fail "версия != $HEAD"
 [ "$(q "SELECT count(*) FROM information_schema.columns WHERE table_name='users' AND column_name='cabinet_balance'")" = "1" ] || fail "users.cabinet_balance нет"
 CREATED="$(q "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")"
