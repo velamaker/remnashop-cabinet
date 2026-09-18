@@ -121,9 +121,21 @@ def _payload(
         "subscription_expire_at": _iso(st.expire_at),
     }
     if panel is None:
-        # Панель молчит: показываем, что знаем из базы, но кнопку прячем — считать
-        # прибавку от неизвестного лимита нельзя.
-        payload["offer"] = {"available": False, "reason": "panel_unavailable", "until": None}
+        # Панель не спрашивали ИЛИ она молчит — это два разных случая, и путать их
+        # нельзя. Безлимитному, пробному и истёкшему запрос в панель не делается
+        # вовсе (см. предфильтр в ручке), и «сервер не ответил» для них — неправда:
+        # владелец на своём безлимите читал именно её и решил, что сломана панель.
+        # Настоящая причина у нас уже есть — она из базы.
+        # Спрашиваем ТОЛЬКО то, что известно без панели (window_known=True): иначе
+        # у MONTH_ROLLING вышло бы «не знаем дату обновления», хотя настоящая
+        # причина — молчащая панель. Пусто — значит продать было можно и виновата
+        # действительно она.
+        known_why = extra.eligibility(st, cfg, now, window_end=None, window_known=True)
+        payload["offer"] = {
+            "available": False,
+            "reason": known_why or "panel_unavailable",
+            "until": None,
+        }
         return payload
     why = extra.eligibility(st, cfg, now, window_end=window_end, window_known=known)
     hours_left = None
