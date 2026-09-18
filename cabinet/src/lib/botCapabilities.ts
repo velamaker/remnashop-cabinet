@@ -59,6 +59,7 @@ export const BOT_CAPABILITIES = {
   ad_link_url: { since: "1.3.9", label: "Готовая ссылка в окне новой рекламной ссылки" },
   plan_change_carry: { since: "1.3.9", label: "Перенос оставшихся дней при смене тарифа" },
   extra_device: { since: "1.3.9", label: "Докупка устройства к подписке: место на 30 дней с продлением" },
+  extra_traffic: { since: "1.4.0", label: "Докупка трафика к подписке: +50 ГБ до ближайшего обновления" },
 } as const;
 
 export type BotCap = keyof typeof BOT_CAPABILITIES;
@@ -85,6 +86,9 @@ export const FEATURE_NEEDS_BOT: Partial<Record<FeatureKey, BotCap>> = {
   // Докупка обещает ДЕНЬГИ и место под устройство: кнопка «Докупить за X ₽» у старого
   // бота упёрлась бы в 404 уже после подтверждения суммы.
   extra_device: "extra_device",
+  // То же и с трафиком, и тут ещё и срок: кнопка называет дату обновления трафика,
+  // которую старый бот считать не умеет.
+  extra_traffic: "extra_traffic",
 };
 
 /** Страницы админки, которых нет в меню, пока бот не прислал токен. */

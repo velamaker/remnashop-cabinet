@@ -27,10 +27,13 @@ import { OnboardingWizard } from "@/components/OnboardingWizard";
 import { TrafficChart } from "@/components/TrafficChart";
 import { ServerStatusCard } from "@/components/ServerStatusCard";
 import { DeviceUpsellCard } from "@/components/DeviceUpsellCard";
+import { ExtraTrafficOffer } from "@/components/ExtraTrafficOffer";
+import { offerView, shouldAskOffer, DEFAULT_SHOW_FROM_PERCENT } from "@/lib/extraTraffic";
+import { useBranding } from "@/contexts/BrandingContext";
 import { formatBytes, formatTrafficLimit, trafficLimitBytes, formatDate, daysUntil } from "@/lib/format";
 import { Flag } from "@/components/Flag";
 import { ApiError } from "@/types/api";
-import type { DevicesResponse } from "@/types/api";
+import type { DevicesResponse, ExtraTrafficResponse } from "@/types/api";
 
 const REFRESH_SECONDS = 60 * 60; // автообновление раз в час
 
@@ -43,6 +46,9 @@ export default function HomePage() {
   const { user } = useAuth();
   const t = useT();
   const { subscription, isLoading, reload } = useSubscription();
+  // `can` — та же проверка возможностей, что и в остальных карточках кабинета:
+  // поверх «Бедолаги» и на старом боте докупки трафика нет вовсе.
+  const { appearance, can } = useBranding();
   // Скидка на продление живёт внутри плашки продления; пробному периоду её не выдают.
   const renewalOffer = useRenewalDiscount(!!subscription && !subscription.is_trial);
   const [devices, setDevices] = useState<{ current: number; max: number } | null>(null);
@@ -57,6 +63,9 @@ export default function HomePage() {
   const [activating, setActivating] = useState(false);
   const [countdown, setCountdown] = useState(REFRESH_SECONDS);
   const [trial, setTrial] = useState<{ available: boolean; days: number; traffic_gb: number; devices: number } | null>(null);
+  // Предложение докупить трафик. Запрашивается ТОЛЬКО за порогом расхода: ручка
+  // ходит в панель, и платить за это на каждой отрисовке Главной незачем.
+  const [extraTraffic, setExtraTraffic] = useState<ExtraTrafficResponse | null>(null);
 
   const loadExtras = useCallback(() => {
     subscriptionApi.devices().then((d) => {
@@ -81,11 +90,46 @@ export default function HomePage() {
     loadExtras();
   }, [loadExtras]);
 
+  // Докупка трафика: за предложением идём, только когда расход перешагнул порог.
+  // До этого — ни одного запроса: ручка ходит в панель, а человеку с 10 % расхода
+  // докупку всё равно не предлагают.
+  //
+  // РЕШЕНИЕ ПРИНИМАЕТСЯ ПО ПОСТОЯННОМУ ПОРОГУ, а не по тому, что вернул сервер.
+  // Иначе получилось бы кольцо: ответ меняет порог → меняется решение → новый
+  // запрос → новый ответ. Порог сервера применяется ниже, при ПОКАЗЕ карточки:
+  // он может быть строже нашего, и тогда карточку просто не рисуем.
+  const askTraffic = appearance != null && can("extra_traffic") && shouldAskOffer(subscription);
+  const [trafficNonce, setTrafficNonce] = useState(0);
+
+  useEffect(() => {
+    if (!askTraffic) {
+      setExtraTraffic(null);
+      return;
+    }
+    // Ответ пришедший после ухода со страницы (или после нового запроса) не должен
+    // перезаписывать состояние — иначе карточка мигала бы устаревшими числами.
+    let alive = true;
+    subscriptionApi
+      .extraTraffic()
+      .then((d) => {
+        if (alive) setExtraTraffic(d);
+      })
+      .catch(() => {
+        if (alive) setExtraTraffic(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [askTraffic, trafficNonce]);
+
+  const askExtraTraffic = useCallback(() => setTrafficNonce((n) => n + 1), []);
+
   // Автообновление раз в час
   const reloadRef = useRef(() => {});
   reloadRef.current = () => {
     reload();
     loadExtras();
+    askExtraTraffic();
   };
   useEffect(() => {
     const id = setInterval(() => {
@@ -124,6 +168,14 @@ export default function HomePage() {
   const usedPct = subscription && !isUnlimited && subscription.traffic_limit > 0
     ? Math.min(100, (used / trafficLimitBytes(subscription.traffic_limit)) * 100)
     : 100;
+
+  // Порог сервера (show_from_percent) применяем ЗДЕСЬ: он настраивается владельцем
+  // и может быть строже нашего постоянного, по которому мы решали, идти ли за
+  // предложением вообще.
+  const trafficOffer =
+    usedPct >= (extraTraffic?.show_from_percent ?? DEFAULT_SHOW_FROM_PERCENT)
+      ? offerView(extraTraffic)
+      : null;
 
   return (
     <div className="flex flex-col gap-5">
@@ -259,6 +311,20 @@ export default function HomePage() {
               style={{ width: `${usedPct}%`, opacity: isUnlimited ? 0.7 : 1 }}
             />
           </div>
+
+          {/* Докупка трафика: только за порогом расхода и только если бэкенд
+              подтвердил, что купить действительно можно. */}
+          {trafficOffer && (
+            <ExtraTrafficOffer
+              data={extraTraffic!}
+              offer={trafficOffer}
+              compact
+              onChanged={() => {
+                reload();
+                askExtraTraffic();
+              }}
+            />
+          )}
 
           {/* Подключить устройство */}
           <Link

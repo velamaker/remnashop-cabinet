@@ -5,6 +5,9 @@ import type {
   ExtraDeviceBuyRequest,
   ExtraDeviceBuyResponse,
   ExtraDeviceResponse,
+  ExtraTrafficBuyRequest,
+  ExtraTrafficBuyResponse,
+  ExtraTrafficResponse,
   PaymentInitResponse,
   PurchaseRequest,
   SubscriptionInfoResponse,
@@ -58,6 +61,11 @@ export const subscriptionApi = {
 
   buyExtraDevice: (data: ExtraDeviceBuyRequest) =>
     api.post<ExtraDeviceBuyResponse>("/subscription/extra-device/buy", data),
+
+  extraTraffic: () => api.get<ExtraTrafficResponse>("/subscription/extra-traffic"),
+
+  buyExtraTraffic: (data: ExtraTrafficBuyRequest) =>
+    api.post<ExtraTrafficBuyResponse>("/subscription/extra-traffic/buy", data),
 
   purchase: (data: PurchaseRequest) =>
     api.post<PaymentInitResponse>("/subscription/purchase", data),

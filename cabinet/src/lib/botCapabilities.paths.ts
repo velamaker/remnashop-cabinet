@@ -46,6 +46,8 @@ export const PATH_NEEDS_BOT: Record<string, BotCap> = {
   "PUT /api/admin/extra-device": "extra_device",
   "GET /api/admin/subscriptions/user/{}/extra-devices": "extra_device",
   "POST /api/admin/subscriptions/user/{}/extra-devices/{}/revoke": "extra_device",
+  "GET /api/subscription/extra-traffic": "extra_traffic",
+  "POST /api/subscription/extra-traffic/buy": "extra_traffic",
 };
 
 export const PATH_GRACEFUL: Record<string, string> = {

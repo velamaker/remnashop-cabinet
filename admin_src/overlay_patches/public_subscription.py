@@ -187,6 +187,12 @@ class SubscriptionOffersOverlayResponse(SubscriptionOffersResponse):
     current_device_limit: Optional[int] = None
     current_extra_devices: Optional[int] = None
     current_extra_until: Optional[str] = None
+    # Докупленный ТРАФИК текущего окна: сколько ГБ и до какого момента. Нужен, чтобы
+    # экран смены тарифа честно предупредил — докупленные гигабайты сгорят (решение
+    # владельца Р-1: стоимость днями не переносим, но человек должен знать заранее).
+    # None — «не знаем» (чужой бэкенд или сбой чтения), и тогда кабинет молчит.
+    current_extra_traffic_gb: Optional[int] = None
+    current_extra_traffic_until: Optional[str] = None
 
 
 def plan_change_terms(
@@ -971,6 +977,7 @@ async def get_subscription_offers(
         # Докупленные места — отдельным чтением в SAVEPOINT: витрина единственный путь
         # к покупке, и отсутствующая таблица (порядок выкатки) не должна её ронять.
         terms.update(await _extra_device_terms(session, user, current_subscription))
+        terms.update(await _extra_traffic_terms(session, user, current_subscription))
 
     keeps_days = False
     if current_subscription:
@@ -1017,6 +1024,34 @@ async def _extra_device_terms(session, user, current_subscription) -> dict:
     except Exception as e:  # noqa: BLE001
         await session.rollback()
         logger.warning(f"offers: докупленные устройства user_id={user.id} не прочитаны ({e})")
+        return {}
+
+
+async def _extra_traffic_terms(session, user, current_subscription) -> dict:
+    """Сколько ГБ докуплено к текущему окну и до когда. Сбой — пустой словарь.
+
+    Отдельным чтением и с откатом, как у мест: витрина — единственный путь к покупке,
+    и отсутствующая таблица (порядок выкатки) не должна её ронять.
+    """
+    try:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT coalesce(sum(gb), 0), min(ends_at) FROM extra_traffic_grants "
+                    "WHERE user_id = :uid AND subscription_id = :sid AND status = 'active'"
+                ),
+                {"uid": user.id, "sid": current_subscription.id},
+            )
+        ).first()
+        gb = int(row[0] or 0) if row else 0
+        until = row[1] if row else None
+        return {
+            "current_extra_traffic_gb": gb,
+            "current_extra_traffic_until": until.isoformat() if until is not None else None,
+        }
+    except Exception as e:  # noqa: BLE001
+        await session.rollback()
+        logger.warning(f"offers: докупленный трафик user_id={user.id} не прочитан ({e})")
         return {}
 
 

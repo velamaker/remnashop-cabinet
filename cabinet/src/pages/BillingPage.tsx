@@ -10,6 +10,8 @@ import { TrialDiscountBanner } from "@/components/TrialDiscountBanner";
 import { RenewalDiscountBanner } from "@/components/RenewalBanner";
 import { formatDate, formatTrafficLimit } from "@/lib/format";
 import { changeExtraNote, renewExtraUntil, type ChangeExtraNote } from "@/lib/extraDevice";
+import { changeTrafficNote, offerView } from "@/lib/extraTraffic";
+import { ExtraTrafficHeadline, ExtraTrafficOffer } from "@/components/ExtraTrafficOffer";
 import {
   changeTerms,
   currencyOf,
@@ -19,6 +21,7 @@ import {
   type ChangeTerms,
 } from "@/lib/planChange";
 import type {
+  ExtraTrafficResponse,
   PaymentGatewayType,
   PlanOfferResponse,
   SubscriptionOffersResponse,
@@ -68,6 +71,7 @@ function PlanCard({
   expanded,
   terms,
   extraNote,
+  trafficNote,
   renewExtraUntil,
   confirmAction,
   onToggle,
@@ -84,6 +88,8 @@ function PlanCard({
   terms: ChangeTerms;
   /** Что станет с докупленными местами (null — бэкенд про них молчит). */
   extraNote: ChangeExtraNote;
+  /** Сколько докупленных ГБ сгорит при смене тарифа. null — молчим. */
+  trafficNote: { gb: number } | null;
   renewExtraUntil: string | null;
   confirmAction: ConfirmAction | null;
   onToggle: () => void;
@@ -235,6 +241,15 @@ function PlanCard({
               </span>
             </p>
           )}
+          {/* Докупленные ГБ при смене тарифа СГОРАЮТ (решение владельца Р-1:
+              стоимость днями не переносим). Новый тариф даёт свой объём и обнуляет
+              расход, так что человек не в убытке, — но узнать он должен ДО оплаты. */}
+          {!confirmAction && (canBuy || canPayBalance) && trafficNote && (
+            <p className="mt-2 flex gap-2 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs text-fg">
+              <AlertTriangle className="mt-px h-4 w-4 shrink-0 text-warning" />
+              <span>{t("extraTraffic.burnOnChange", { gb: trafficNote.gb })}</span>
+            </p>
+          )}
           {!confirmAction && (canBuy || canPayBalance) && renewExtraUntil && (
             <p className="mt-2 flex gap-2 rounded-xl border border-[var(--border-subtle)] bg-bg-subtle px-3 py-2.5 text-xs text-fg-muted">
               <Info className="mt-px h-4 w-4 shrink-0 text-accent" />
@@ -302,7 +317,7 @@ function PlanCard({
 
 export default function BillingPage() {
   const t = useT();
-  const { appearance } = useBranding();
+  const { appearance, can } = useBranding();
   // Тех-работы: оплата ограничена (галка в оформлении).
   const payBlocked = paymentsBlocked(appearance);
   // `?plan=&days=` — ссылка из блока «Нужно больше устройств?»: раскрыть тариф и
@@ -323,6 +338,9 @@ export default function BillingPage() {
   const [confirm, setConfirm] = useState<{ code: string; action: ConfirmAction } | null>(null);
   // К какой карточке прокрутить после загрузки (один раз, из ссылки).
   const scrollToCode = useRef<string | null>(null);
+  // Докупка трафика. На «Оплате» показываем БЕЗ порога расхода: сюда человек пришёл
+  // сам разбираться с тарифом, и прятать от него вариант дешевле апгрейда незачем.
+  const [extraTraffic, setExtraTraffic] = useState<ExtraTrafficResponse | null>(null);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -351,6 +369,32 @@ export default function BillingPage() {
     balanceApi.get().then((b) => setBalance(b.balance)).catch(() => {});
   }, []);
 
+  // ЗАВИСИМОСТЬ — БУЛЕВО ЗНАЧЕНИЕ, А НЕ ФУНКЦИЯ `can`. Её identity меняется на каждый
+  // рендер (и в кабинете, и в подделке теста), а эффект, который зависит от identity
+  // и сам вызывает setState, — это бесконечный цикл рендеров.
+  const trafficCapable = appearance != null && can("extra_traffic");
+  const [trafficNonce, setTrafficNonce] = useState(0);
+
+  useEffect(() => {
+    if (!trafficCapable) return;
+    // Ответ, пришедший после ухода со страницы или после нового запроса, состояние
+    // не перезаписывает: иначе карточка мигала бы устаревшими числами.
+    let alive = true;
+    subscriptionApi
+      .extraTraffic()
+      .then((d) => {
+        if (alive) setExtraTraffic(d);
+      })
+      .catch(() => {
+        if (alive) setExtraTraffic(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [trafficCapable, trafficNonce]);
+
+  const loadExtraTraffic = useCallback(() => setTrafficNonce((n) => n + 1), []);
+
   useEffect(() => {
     load();
   }, [load]);
@@ -371,6 +415,9 @@ export default function BillingPage() {
   useEffect(() => {
     setConfirm(null);
   }, [selectedDays, selectedGateway, expandedCode]);
+
+  // Предложение докупить трафик: null — выключено, нельзя или платить нечем.
+  const trafficOffer = offerView(extraTraffic);
 
   /** Что будет с остатком при покупке тарифа на выбранный срок выбранным шлюзом. */
   const termsFor = (plan: PlanOfferResponse): ChangeTerms =>
@@ -578,6 +625,24 @@ export default function BillingPage() {
         </div>
       )}
 
+      {/* Докупить трафик к текущему периоду — дешевле перехода на тариф побольше,
+          но и живёт только до ближайшего обновления трафика. Карточка сама себя
+          прячет, если купить нельзя или платить нечем. */}
+      {trafficOffer && extraTraffic && (
+        <div className="mx-auto w-full max-w-xl rounded-2xl border border-[var(--border-subtle)] bg-bg-subtle/60 p-4">
+          <ExtraTrafficHeadline data={extraTraffic} />
+          <ExtraTrafficOffer
+            data={extraTraffic}
+            offer={trafficOffer}
+            onChanged={() => {
+              load();
+              loadExtraTraffic();
+              balanceApi.get().then((b) => setBalance(b.balance)).catch(() => {});
+            }}
+          />
+        </div>
+      )}
+
       {/* Карточки тарифов — аккордеон, раскрывается по клику */}
       <div className="mx-auto flex w-full max-w-xl flex-col gap-2.5">
         {offers.plans.map((plan) => (
@@ -594,6 +659,9 @@ export default function BillingPage() {
               plan.recommended_purchase_type === "CHANGE"
                 ? changeExtraNote(offers, plan.device_limit)
                 : null
+            }
+            trafficNote={
+              plan.recommended_purchase_type === "CHANGE" ? changeTrafficNote(offers) : null
             }
             renewExtraUntil={
               plan.recommended_purchase_type === "RENEW" ? renewExtraUntil(offers) : null

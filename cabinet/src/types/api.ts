@@ -193,6 +193,9 @@ export interface SubscriptionOffersResponse {
   current_device_limit?: number | null;
   current_extra_devices?: number | null;
   current_extra_until?: string | null;
+  /** Докупленный трафик текущего окна: сколько ГБ и до когда. null — «не знаем». */
+  current_extra_traffic_gb?: number | null;
+  current_extra_traffic_until?: string | null;
 }
 
 // ---------- Докупка +1 устройства ----------
@@ -265,6 +268,72 @@ export interface ExtraDeviceBuyResponse {
   need?: string;
   reason?: string;
   quote?: ExtraDeviceResponse;
+  repeat?: boolean;
+}
+
+/**
+ * Предложение докупить трафик. `enabled: false` — продажи закрыты, и цену бэкенд не
+ * раскрывает вовсе, поэтому остальные поля необязательные.
+ */
+export interface ExtraTrafficResponse {
+  enabled: boolean;
+  currency?: string;
+  currency_symbol?: string;
+  /** Сколько ГБ даёт одна покупка. */
+  gb?: number;
+  /** Цена за покупку, целые рубли строкой. */
+  price?: string | null;
+  balance?: string;
+  /** Текущий лимит и лимит тарифа — в ГБ, как их видит панель. */
+  traffic_limit_gb?: number;
+  plan_traffic_limit_gb?: number;
+  /** Расход из панели. null — панель не ответила. */
+  used_bytes?: number | null;
+  /** Уже докуплено в этом периоде, ГБ. */
+  extra_gb_active?: number;
+  strategy?: string;
+  /** Когда панель обнулит расход. null — стратегия без обнуления. */
+  resets_at?: string | null;
+  /** С какого процента расхода показывать предложение на Главной. */
+  show_from_percent?: number;
+  subscription_expire_at?: string | null;
+  gateways?: { gateway_type: string; currency_symbol: string }[];
+  offer?: {
+    available: boolean;
+    /** Код причины: trial | unlimited_traffic | reset_too_soon | panel_unavailable | … */
+    reason?: string | null;
+    until?: string | null;
+    hours_left?: number | null;
+  };
+}
+
+export interface ExtraTrafficBuyRequest {
+  request_id: string;
+  pay: "balance" | "gateway";
+  gateway_type?: string;
+  expected_amount: string;
+  expected_gb: number;
+}
+
+/**
+ * Итог покупки. Бизнес-отказы приходят как 200 с `result`, а не как ошибка HTTP:
+ * `ApiError.detail` — строка, и перевести код причины из неё было бы нечем.
+ */
+export interface ExtraTrafficBuyResponse {
+  result: "applied" | "pending" | "price_changed" | "insufficient_balance" | "not_available";
+  gb?: number;
+  traffic_limit_gb?: number | null;
+  /** Панель сама сняла LIMITED — доступ вернулся вместе с трафиком. */
+  unlocked?: boolean;
+  until?: string | null;
+  spent?: string;
+  balance?: string | null;
+  payment_id?: string;
+  payment_url?: string;
+  amount?: string;
+  need?: string;
+  reason?: string;
+  quote?: ExtraTrafficResponse;
   repeat?: boolean;
 }
 

@@ -22,6 +22,8 @@ vi.mock("@/api/subscription", () => ({
     purchase: (d: unknown) => purchase(d),
     extend: (d: unknown) => extend(d),
     payWithBalance: (d: unknown) => payWithBalance(d),
+    // Докупка трафика к оплате тарифа отношения не имеет: отвечаем «выключено».
+    extraTraffic: () => Promise.resolve({ enabled: false }),
   },
 }));
 vi.mock("@/api/balance", () => ({
