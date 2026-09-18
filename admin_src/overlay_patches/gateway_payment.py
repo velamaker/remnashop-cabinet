@@ -260,6 +260,92 @@ async def _alert_refunded_carry(self, data, before: "str | None") -> None:
     await _notify_admins_raw(self, carry.admin_refund_text(data.payment_id, carries))
 
 
+async def _orphan_synthetic_payment(self, user: UserDto, transaction: TransactionDto, what: str):
+    """Синтетический счёт БЕЗ строки заказа: деньги на баланс и алерт владельцу.
+
+    ЗАЧЕМ ЭТА ВЕТКА. Снимок тарифа −4/−5 означает «это докупка», а строку заказа
+    пишет тот же запрос, что отдаёт ссылку на оплату. Если строки нет (её удалили,
+    база потеряла транзакцию, счёт выставлен сторонним кодом), прежний код возвращал
+    None — и платёж проваливался в ОБЫЧНЫЙ путь: человеку выдавалась «подписка» по
+    синтетическому тарифу с нулём устройств и сроком «дней до конца окна». Это хуже
+    любого отказа: чинить такую выдачу приходится руками и по одному.
+
+    Поэтому деньги честно зачисляем на ₽-баланс (человек за них уже заплатил) и зовём
+    владельца. Идемпотентность держит сама проверка «строки заказа нет»: повторный
+    вебхук по этому же счёту снова её не найдёт, поэтому зачисление помечается в
+    balance_topups тем же кодом, что и обычное пополнение.
+    """
+    amount = transaction.pricing.final_amount
+    try:
+        credited = await credit_orphan_to_balance(self.session, transaction.payment_id, user.id, amount)
+    except Exception:  # noqa: BLE001 — наружу нельзя: шлюз начнёт повторять вебхук
+        logger.exception(
+            f"{what}: счёт '{transaction.payment_id}' без строки заказа — деньги НЕ зачислены"
+        )
+        credited = False
+    try:
+        await _notify_admins_raw(
+            self,
+            f"🚨 <b>Счёт докупки без заказа</b>\n{user.log}\n"
+            f"Счёт <code>{transaction.payment_id}</code> на {amount} ₽ пришёл со снимком "
+            f"докупки ({what}), но строки заказа нет. "
+            + ("Сумма зачислена на баланс." if credited else "ЗАЧИСЛИТЬ НА БАЛАНС ВРУЧНУЮ.")
+            + " Подписка по такому счёту НЕ выдана — это правильно.",
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning(f"{what}: алерт о счёте без заказа не ушёл")
+    if credited:
+        try:
+            await self.notifier.notify_user(
+                user,
+                payload=MessagePayloadDto(
+                    i18n_key="raw-message",
+                    i18n_kwargs={
+                        "content": (
+                            f"💳 Оплата {amount} ₽ получена и зачислена на баланс в кабинете: "
+                            "докупку по этому счёту выдать не удалось. Напишите в поддержку, "
+                            "если что-то пошло не так."
+                        )
+                    },
+                    delete_after=None,
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(f"{what}: сообщение о зачислении не ушло")
+    return {"result": "orphan", "credited": credited}
+
+
+async def credit_orphan_to_balance(session, payment_id, user_id: int, amount) -> bool:
+    """Зачислить сумму счёта на ₽-баланс ровно один раз.
+
+    Отметку кладём в `balance_topups` — ту же таблицу, которой пользуется обычное
+    пополнение: повтор вебхука по этому счёту упрётся в UNIQUE и второй раз денег
+    не добавит.
+    """
+    from sqlalchemy import text as _text
+
+    inserted = (
+        await session.execute(
+            _text(
+                "INSERT INTO balance_topups "
+                "(payment_id, user_id, amount, bonus, credited, credited_at) "
+                "VALUES (:p, :u, :a, 0, true, now()) "
+                "ON CONFLICT (payment_id) DO NOTHING RETURNING payment_id"
+            ),
+            {"p": str(payment_id), "u": int(user_id), "a": amount},
+        )
+    ).scalar()
+    if inserted is None:
+        await session.rollback()
+        return False
+    await session.execute(
+        _text("UPDATE users SET cabinet_balance = cabinet_balance + :a WHERE id = :u"),
+        {"a": amount, "u": int(user_id)},
+    )
+    await session.commit()
+    return True
+
+
 async def _handle_extra_device(self, user: UserDto, transaction: TransactionDto):
     """Ветка докупки устройства. None — счёт не наш, дальше идёт обычный путь базы.
 
@@ -299,7 +385,9 @@ async def _handle_extra_device(self, user: UserDto, transaction: TransactionDto)
             logger.warning("extra_device: алерт об отложенном применении не ушёл")
         return {"result": "deferred"}
     if result is None:
-        return None
+        # Снимок наш, а заказа нет: в обычный путь такой счёт пускать нельзя —
+        # человек получил бы «подписку» по синтетическому тарифу.
+        return await _orphan_synthetic_payment(self, user, transaction, "extra_device")
     if result.get("repeat"):
         logger.info(f"extra_device: счёт '{transaction.payment_id}' уже обработан — пропускаю")
         return result
@@ -404,7 +492,8 @@ async def _handle_extra_traffic(self, user: UserDto, transaction: TransactionDto
             logger.warning("extra_traffic: алерт об отложенном применении не ушёл")
         return {"result": "deferred"}
     if result is None:
-        return None
+        # Снимок наш (−5), а заказа нет — см. _orphan_synthetic_payment.
+        return await _orphan_synthetic_payment(self, user, transaction, "extra_traffic")
     if result.get("repeat"):
         logger.info(f"extra_traffic: счёт '{transaction.payment_id}' уже обработан — пропускаю")
         return result

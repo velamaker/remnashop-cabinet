@@ -215,6 +215,12 @@ EXPECTED_WRITERS = {
     ("overlay_patches/gateway_payment.py", "update_status"): 1,
     ("src/web/endpoints/payments.py", "update"): 1,
     ("src/application/use_cases/misc/commands/maintenance.py", "cancel_old"): 1,
+    # Отзыв докупленного трафика владельцем с возвратом денег: исходный счёт
+    # переводится COMPLETED → REFUNDED. Возврат здесь ВСЕГДА полный (у объёма нет
+    # доли «непрожитого»), поэтому отдельной строки рядом не заводим — иначе в
+    # выручке покупка стояла бы целиком. Через DAO, чтобы `updated_at` (дата
+    # возврата в плитке) проставился переходом, а не остался датой покупки.
+    ("src/web/endpoints/admin/subscriptions.py", "update_status"): 1,
 }
 
 

@@ -894,17 +894,19 @@ async def revoke_extra_traffic(
     from decimal import Decimal
 
     refunded = None
+    paid_ids: list[Any] = []
     if body.refund:
-        refunded = (
+        rows = (
             await session.execute(
                 text(
-                    "SELECT coalesce(sum(amount), 0) FROM extra_traffic_orders "
+                    "SELECT payment_id, amount FROM extra_traffic_orders "
                     "WHERE grant_id = :gid AND status = 'applied'"
                 ),
                 {"gid": grant_id},
             )
-        ).scalar()
-        refunded = Decimal(str(refunded or 0))
+        ).all()
+        refunded = sum((Decimal(str(r[1])) for r in rows), Decimal(0))
+        paid_ids = [r[0] for r in rows if r[0] is not None]
 
     await session.execute(
         text(
@@ -918,24 +920,18 @@ async def revoke_extra_traffic(
             text("UPDATE users SET cabinet_balance = cabinet_balance + :a WHERE id = :u"),
             {"a": refunded, "u": user_id},
         )
-        # Возврат — отдельной строкой в transactions, а не только прибавкой к балансу.
-        # Без неё деньги «возвращены», а в выручке покупка стоит целиком: отчёты
-        # показывали бы доход, которого уже нет.
-        await transaction_dao.create(
-            TransactionDto(
-                payment_id=uuid4(),
-                user_id=user_id,
-                status=TransactionStatus.REFUNDED,
-                purchase_type=PurchaseType.NEW,
-                gateway_type=_first_rub_gateway_type(st),
-                gateway_display_name="Возврат · трафик",
-                pricing=PriceDetailsDto(
-                    original_amount=refunded, discount_percent=0, final_amount=refunded
-                ),
-                currency=Currency.RUB,
-                plan_snapshot=extra.synthetic_snapshot(grant.gb, 1),
-            )
-        )
+        # ИСХОДНЫЕ СЧЕТА ПЕРЕВОДИМ В REFUNDED, а не заводим новую строку рядом.
+        # Возврат здесь всегда ПОЛНЫЙ (у объёма нет доли «непрожитого»), поэтому
+        # честно именно это: выручка считается суммой COMPLETED, и отдельная строка
+        # REFUNDED рядом с живой COMPLETED показывала бы доход, которого уже нет, —
+        # ровно то, что комментарий обещал исправить, но не исправлял.
+        # У докупки УСТРОЙСТВА возврат частичный, и там правило обратное — отдельная
+        # строка; не перепутайте.
+        # ЧЕРЕЗ DAO, А НЕ СЫРЫМ SQL. Плитка «Возвраты» берёт дату возврата из
+        # `updated_at`, а его проставляет ORM на переходе. Сырой UPDATE оставил бы
+        # там дату ПОКУПКИ — возврат показался бы сделанным месяц назад.
+        for paid in paid_ids:
+            await transaction_dao.update_status(paid, TransactionStatus.REFUNDED)
     active_after = sum(
         g.gb for g in st.grants if g.subscription_id == st.sub_id and g.id != grant_id
     )

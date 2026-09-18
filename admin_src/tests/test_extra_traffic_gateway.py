@@ -419,3 +419,85 @@ def test_renew_branches_of_device_and_traffic_are_opposites():
     # У трафика в этой ветке нет ни одного обращения к панели.
     burn = inspect.getsource(extra.burn_on_renew)
     assert "update_user" not in burn and "set_traffic_limit" not in burn
+
+
+# ── синтетический счёт без строки заказа ────────────────────────────────────
+
+
+class OrphanSession(OrderSession):
+    """Заказа нет, но пишущие запросы (зачисление на баланс) считаем."""
+
+    def __init__(self, log: Log, **kw) -> None:
+        super().__init__(log, order=None, **kw)
+        self.topups = 0
+
+    async def execute(self, stmt: Any, params: Any = None):
+        sql = " ".join(str(stmt).split())
+        if "INSERT INTO balance_topups" in sql:
+            self.topups += 1
+            self.log.append(("topup_insert", dict(params)))
+            return _Row((params["p"],))
+        return await super().execute(stmt, params)
+
+
+async def test_synthetic_invoice_without_an_order_never_becomes_a_subscription():
+    """Снимок докупки есть, строки заказа нет — подписку по такому счёту НЕ выдаём.
+
+    Раньше такой платёж возвращал None и проваливался в ОБЫЧНЫЙ путь: человеку
+    выдавалась «подписка» по синтетическому тарифу (ноль устройств, срок «дней до
+    конца окна»). Чинить такую выдачу приходится руками и по одному. Теперь деньги
+    честно уходят на ₽-баланс, а владелец получает алерт.
+    """
+    log = Log()
+    session = OrphanSession(log)
+    remnawave = FakeRemnawave(log)
+    tx = SimpleNamespace(
+        payment_id=uuid_lib.uuid4(),
+        plan_snapshot=SimpleNamespace(id=extra.SYNTHETIC_PLAN_ID),
+        pricing=SimpleNamespace(final_amount=Decimal(50)),
+    )
+
+    result = await gateway_mod._handle_extra_traffic(handler(session, log, remnawave), USER, tx)
+
+    assert result is not None, "None отправил бы счёт в обычный путь — к выдаче подписки"
+    assert result["result"] == "orphan" and result["credited"] is True
+    assert session.topups == 1
+    assert any(name == "notify_admins" for name, _ in log)
+    assert any(name == "credit" or name == "topup_insert" for name, _ in log)
+
+
+async def test_orphan_credit_happens_once_on_a_webhook_repeat():
+    """Повтор вебхука по тому же счёту второй раз денег не добавляет."""
+    log = Log()
+    session = OrphanSession(log)
+
+    class OnceSession(OrphanSession):
+        async def execute(self, stmt: Any, params: Any = None):
+            sql = " ".join(str(stmt).split())
+            if "INSERT INTO balance_topups" in sql:
+                self.topups += 1
+                # ON CONFLICT DO NOTHING: второй раз строка не появляется.
+                return _Row(None if self.topups > 1 else (params["p"],))
+            return await OrderSession.execute(self, stmt, params)
+
+    session = OnceSession(log)
+    remnawave = FakeRemnawave(log)
+    payment_id = uuid_lib.uuid4()
+    tx = SimpleNamespace(
+        payment_id=payment_id,
+        plan_snapshot=SimpleNamespace(id=extra.SYNTHETIC_PLAN_ID),
+        pricing=SimpleNamespace(final_amount=Decimal(50)),
+    )
+
+    first = await gateway_mod._handle_extra_traffic(handler(session, log, remnawave), USER, tx)
+    second = await gateway_mod._handle_extra_traffic(handler(session, log, remnawave), USER, tx)
+
+    assert first["credited"] is True
+    assert second["credited"] is False, "повтор не должен зачислять деньги второй раз"
+
+
+def test_device_purchase_has_the_same_guard():
+    """У докупки УСТРОЙСТВА та же дыра была — закрыта тем же способом."""
+    source = inspect.getsource(gateway_mod._handle_extra_device)
+    assert "_orphan_synthetic_payment" in source
+    assert "return None\n    if result.get" not in source

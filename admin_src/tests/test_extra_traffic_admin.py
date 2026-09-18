@@ -17,6 +17,7 @@
 
 import importlib
 import inspect
+import uuid as uuid_lib
 from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -184,32 +185,31 @@ class RevokeSession(TickSession):
 
 
 class FakeTransactionDaoSpy:
+    """Ловит ПЕРЕХОД исходного счёта в REFUNDED — новую строку мы больше не пишем."""
+
     def __init__(self, log: Log) -> None:
         self.log = log
 
-    async def create(self, transaction: Any) -> Any:
-        self.log.append(
-            (
-                "refund_transaction",
-                {
-                    "status": transaction.status.value,
-                    "display": transaction.gateway_display_name,
-                    "amount": transaction.pricing.final_amount,
-                },
-            )
-        )
-        return transaction
+    async def update_status(self, payment_id: Any, status: Any) -> Any:
+        self.log.append(("refund_transition", {"payment_id": str(payment_id), "status": status.value}))
+        return None
+
+    async def create(self, transaction: Any) -> Any:  # pragma: no cover — не должно звучать
+        raise AssertionError("возврат обязан переводить исходный счёт, а не плодить строки")
 
 
-async def call_revoke(session, log, *, refund: bool):
+async def call_revoke(session, log, *, refund: bool, remnawave=None):
     body = subscriptions.RevokeExtraTrafficRequest(refund=refund)
+    panel = remnawave or FakeRemnawave(log)
+    # Панель «согласна» с нашей строкой: отзыв считает лимит тем же правилом, что крон.
+    panel.limit_bytes = gb_to_bytes(session.traffic_limit)
     return await subscriptions.revoke_extra_traffic.__dishka_orig_func__(
         user_id=USER_ID,
         grant_id=1,
         body=body,
         admin=SimpleNamespace(role=None),
         session=session,
-        remnawave=FakeRemnawave(log),
+        remnawave=panel,
         transaction_dao=FakeTransactionDaoSpy(log),
     )
 
@@ -235,27 +235,31 @@ async def test_revoke_keeps_manual_generosity():
     assert result["traffic_limit_gb"] == 450
 
 
-async def test_revoke_with_refund_writes_a_transaction_not_just_balance():
-    """Без строки возврата отчёты показывали бы доход, которого уже нет."""
-    log = Log()
-    session = RevokeSession(log, traffic_limit=PLAN_GB + 50, grants=(a_grant(),))
-    session.refund_amount = Decimal(50)
+async def test_revoke_with_refund_turns_the_original_invoice_into_refunded():
+    """Возврат ПЕРЕВОДИТ исходный счёт, а не заводит вторую строку рядом.
 
-    # Подделка возвращает сумму заказов через общий путь FakeSession: подменяем ответ.
+    Возврат здесь всегда полный: у объёма нет доли «непрожитого». Новая строка
+    REFUNDED рядом с живой COMPLETED оставила бы покупку в выручке целиком — ровно
+    то, что комментарий обещал исправить, но не исправлял.
+    """
+    log = Log()
+    paid = uuid_lib.uuid4()
+    session = RevokeSession(log, traffic_limit=PLAN_GB + 50, grants=(a_grant(),))
+
     async def execute(stmt, params=None, _orig=session.execute):
         sql = " ".join(str(stmt).split())
-        if "coalesce(sum(amount), 0) FROM extra_traffic_orders" in sql:
-            log.append(("refund_amount", None))
+        if "SELECT payment_id, amount FROM extra_traffic_orders" in sql:
+            log.append(("refund_orders", None))
 
             class _R:
+                def all(self_inner):
+                    return [(paid, Decimal(50))]
+
                 def scalar(self_inner):
-                    return Decimal(50)
+                    return None
 
                 def first(self_inner):
                     return None
-
-                def all(self_inner):
-                    return []
 
             return _R()
         return await _orig(stmt, params)
@@ -266,9 +270,9 @@ async def test_revoke_with_refund_writes_a_transaction_not_just_balance():
 
     assert result["refunded"] == 50.0
     assert log[log.index_of("credit")][1] == "50"
-    row = log[log.index_of("refund_transaction")][1]
+    row = log[log.index_of("refund_transition")][1]
     assert row["status"] == "REFUNDED"
-    assert row["display"] == "Возврат · трафик"
+    assert row["payment_id"] == str(paid)
 
 
 async def test_revoke_of_a_missing_grant_is_404_not_a_silent_success():
@@ -286,18 +290,8 @@ async def test_revoke_rolls_back_when_the_panel_refuses():
 
     log = Log()
     session = RevokeSession(log, traffic_limit=PLAN_GB + 50, grants=(a_grant(),))
-    remnawave = FakeRemnawave(log, fail=True)
-    body = subscriptions.RevokeExtraTrafficRequest(refund=False)
     with pytest.raises(HTTPException) as exc:
-        await subscriptions.revoke_extra_traffic.__dishka_orig_func__(
-            user_id=USER_ID,
-            grant_id=1,
-            body=body,
-            admin=SimpleNamespace(role=None),
-            session=session,
-            remnawave=remnawave,
-            transaction_dao=FakeTransactionDaoSpy(log),
-        )
+        await call_revoke(session, log, refund=False, remnawave=FakeRemnawave(log, fail=True))
     assert exc.value.status_code == 502
     assert session.commits == 0
 
@@ -312,3 +306,31 @@ def test_user_card_masks_money_for_preview_admin():
     source = inspect.getsource(subscriptions.user_extra_traffic.__dishka_orig_func__)
     assert "is_readonly_admin(admin)" in source
     assert "None if hide_money else float" in source
+
+
+# ── права делегированного админа ────────────────────────────────────────────
+
+
+def test_settings_section_covers_the_new_page():
+    """Раздел «Настройки» обязан покрывать ручки докупки трафика.
+
+    Иначе получается худший вид отказа: пункт меню делегированный админ ВИДИТ
+    (список пунктов строится в кабинете), а на открытии страницы получает 403 —
+    и это при том, что соседняя «Докупка устройств» у него работает.
+    """
+    from src.web import permissions
+
+    sections = {s["key"]: s for s in permissions.SECTIONS}
+    prefixes = sections["settings"]["prefixes"]
+    assert "extra-traffic" in prefixes, "страница есть, а раздела для неё нет — будет 403"
+    # Рядом с соседкой: если однажды уедет одна, видно будет обе.
+    assert "extra-device" in prefixes
+
+
+def test_every_admin_prefix_of_the_feature_is_covered():
+    """Все наши админские пути принадлежат разделу, а не висят без хозяина."""
+    from src.web import permissions
+
+    covered = {p for s in permissions.SECTIONS for p in s["prefixes"]}
+    for prefix in ("extra-traffic", "subscriptions"):
+        assert prefix in covered, f"путь {prefix} не принадлежит ни одному разделу"
