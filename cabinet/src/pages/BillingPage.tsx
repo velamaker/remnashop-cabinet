@@ -634,6 +634,14 @@ export default function BillingPage() {
           <ExtraTrafficOffer
             data={extraTraffic}
             offer={trafficOffer}
+            // Метка в адресе значит «человек уже нажал докупить»: шаг оплаты
+            // открываем сразу и подводим к нему экран, а не заставляем искать
+            // карточку под ползунком расхода. `extra_traffic=1` шлёт бот (кнопка
+            // меню и письмо «трафик закончился»), `buy=traffic` — запасное
+            // написание для ссылок, сделанных руками.
+            autoOpen={
+              searchParams.get("extra_traffic") === "1" || searchParams.get("buy") === "traffic"
+            }
             onChanged={() => {
               load();
               loadExtraTraffic();

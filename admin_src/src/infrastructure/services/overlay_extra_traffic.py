@@ -1523,10 +1523,21 @@ async def claim_limited(redis: Any, user_id: int, window_end: Optional[datetime]
     return bool(got)
 
 
+# Адрес докупки в кабинете. Страница «Баланс», а не Главная, и с меткой в адресе:
+# по ней кабинет сразу раскрывает шаг оплаты. Человек, нажавший «докупить», не
+# должен искать карточку под ползунком расхода — на это владелец и пожаловался.
+OFFER_PATH = "/billing?extra_traffic=1"
+
+
+def offer_url_from_base(base: Any) -> str:
+    """Ссылка на докупку от готового адреса кабинета. Пусто — звать некуда."""
+    base = (str(base or "")).strip().rstrip("/")
+    return f"{base}{OFFER_PATH}" if base else ""
+
+
 def cabinet_offer_url(config: Any) -> str:
-    """Ссылка в кабинет на докупку. Пусто — кабинета нет, звать некуда."""
-    base = (getattr(config, "web_cabinet_url", "") or "").strip().rstrip("/")
-    return f"{base}/billing?extra_traffic=1" if base else ""
+    """То же от конфига приложения: сообщение «трафик закончился» зовёт отсюда."""
+    return offer_url_from_base(getattr(config, "web_cabinet_url", ""))
 
 
 async def can_offer_now(

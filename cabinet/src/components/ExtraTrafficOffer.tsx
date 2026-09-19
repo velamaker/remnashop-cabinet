@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Gauge, Plus } from "lucide-react";
 import { Link } from "react-router-dom";
 import { subscriptionApi } from "@/api/subscription";
@@ -29,18 +29,44 @@ export function ExtraTrafficOffer({
   offer,
   onChanged,
   compact = false,
+  autoOpen = false,
 }: {
   data: ExtraTrafficResponse;
   offer: ExtraTrafficOfferView;
   /** Перечитать подписку и предложение: лимит и расход изменились. */
   onChanged?: () => void;
   compact?: boolean;
+  /**
+   * Пришли по прямой ссылке «докупить» (кнопка из бота): сразу показываем шаг
+   * оплаты и подводим к нему экран. Человек нажал «докупить» в боте — искать
+   * карточку под ползунком расхода он не должен.
+   */
+  autoOpen?: boolean;
 }) {
   const t = useT();
+  const cardRef = useRef<HTMLDivElement>(null);
+  const opened = useRef(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [requestId, setRequestId] = useState<string | null>(null);
+
+  // Хук стоит ДО раннего возврата ниже: иначе при «платить нечем» порядок вызовов
+  // хуков менялся бы между рендерами (правило React, eslint это ловит).
+  //
+  // Прямая ссылка раскрывает шаг оплаты ОДИН раз: закрыл — значит закрыл, и
+  // повторный рендер не должен открывать окно снова у человека под руками.
+  useEffect(() => {
+    if (!autoOpen || opened.current) return;
+    opened.current = true;
+    setNote(null);
+    setRequestId((prev) => prev ?? newRequestId());
+    setConfirming(true);
+    // Карточка может быть ниже сгиба: подводим её к середине экрана.
+    requestAnimationFrame(() => {
+      cardRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  }, [autoOpen]);
 
   const pay = payOptions(data, offer.price);
   if (pay.options.length === 0) return null;
@@ -141,7 +167,7 @@ export function ExtraTrafficOffer({
   };
 
   return (
-    <div className={compact ? "mt-2" : "mt-3"}>
+    <div ref={cardRef} className={compact ? "mt-2" : "mt-3"}>
       {!confirming && (
         <Button type="button" size={compact ? "sm" : "md"} onClick={start} className="w-full sm:w-auto">
           <Plus className="h-4 w-4" />

@@ -324,7 +324,9 @@ async def _extra_traffic_button(data, session, remnawave, kwargs) -> None:
         data["extra_traffic_text"] = EXTRA_TRAFFIC_TEXT.format(
             gb=int(cfg["gb_per_purchase"]), price=_money(cfg["price_rub"])
         )
-        data["extra_traffic_url"] = base_url
+        # Ровно тот же адрес, что и в сообщении «трафик закончился»: /billing с
+        # меткой, по которой кабинет сразу открывает оплату.
+        data["extra_traffic_url"] = extra.offer_url_from_base(base_url)
     except Exception as exc:  # noqa: BLE001 — кнопки нет, меню живо
         logger.warning(f"extra_traffic: кнопку в меню не показал: {exc}")
 

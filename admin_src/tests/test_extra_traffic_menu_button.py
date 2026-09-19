@@ -108,7 +108,13 @@ def restore_service():
 async def test_button_appears_when_traffic_is_running_out(menu):
     data = await call(menu, st=state(), panel_view=panel(used_gb=250))
     assert data["extra_traffic_button"] is True
-    assert data["extra_traffic_url"] == "https://cabinet.example.test"
+    # Ведём СРАЗУ на оплату, а не на Главную: иначе человек, нажавший «докупить»,
+    # ищет карточку под ползунком расхода (жалоба владельца 19.09). Адрес тот же,
+    # что в сообщении «трафик закончился», — он один на весь проект.
+    assert data["extra_traffic_url"] == "https://cabinet.example.test/billing?extra_traffic=1"
+    assert data["extra_traffic_url"] == extra.cabinet_offer_url(
+        type("C", (), {"web_cabinet_url": "https://cabinet.example.test"})
+    )
     assert "50 ГБ" in data["extra_traffic_text"]
     assert "50 ₽" in data["extra_traffic_text"]
 

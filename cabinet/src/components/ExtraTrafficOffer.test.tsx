@@ -41,13 +41,13 @@ const data = (over: Partial<ExtraTrafficResponse> = {}): ExtraTrafficResponse =>
   ...over,
 });
 
-function show(over: Partial<ExtraTrafficResponse> = {}) {
+function show(over: Partial<ExtraTrafficResponse> = {}, autoOpen = false) {
   const payload = data(over);
   const view = offerView(payload)!;
   render(
     <MemoryRouter>
       <I18nProvider>
-        <ExtraTrafficOffer data={payload} offer={view} />
+        <ExtraTrafficOffer data={payload} offer={view} autoOpen={autoOpen} />
       </I18nProvider>
     </MemoryRouter>,
   );
@@ -62,6 +62,40 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("ExtraTrafficOffer", () => {
+
+  it("пришли по ссылке «докупить» — оплата открыта сразу, без лишнего нажатия", () => {
+    // Кнопка в боте и письмо «трафик закончился» ведут на /billing?extra_traffic=1.
+    // Человек уже нажал «докупить»; заставлять его искать карточку под ползунком
+    // расхода и жать второй раз — ровно то, на что пожаловался владелец 19.09.
+    show({}, true);
+    expect(screen.getByText(ru("extraTraffic.payBalance"))).toBeTruthy();
+    // Подтверждение на экране — значит человек видит срок прибавки до оплаты.
+    expect(screen.getByText(/Трафик обновится/)).toBeTruthy();
+    expect(buy).not.toHaveBeenCalled();
+  });
+
+  it("по ссылке окно оплаты открывается один раз: закрыл — осталось закрытым", () => {
+    show({}, true);
+    fireEvent.click(screen.getByText(ru("common.cancel")));
+    expect(screen.queryByText(ru("extraTraffic.payBalance"))).toBeNull();
+    // Кнопка предложения на месте — человек может начать заново сам.
+    expect(screen.getByText(ru("extraTraffic.offer", { gb: 50, price: "50 ₽" }))).toBeTruthy();
+  });
+
+  it("по ссылке, когда платить нечем, карточки всё равно нет", () => {
+    // Хук автооткрытия стоит до раннего возврата — важно, чтобы он не «оживил»
+    // карточку, которой быть не должно.
+    const payload = data({ balance: "0", gateways: [] });
+    const view = offerView(payload)!;
+    const { container } = render(
+      <MemoryRouter>
+        <I18nProvider>
+          <ExtraTrafficOffer data={payload} offer={view} autoOpen />
+        </I18nProvider>
+      </MemoryRouter>,
+    );
+    expect(container.textContent).toBe("");
+  });
   it("первый клик только спрашивает — ни одного платежа", () => {
     show();
     fireEvent.click(screen.getByText(ru("extraTraffic.offer", { gb: 50, price: "50 ₽" })));
