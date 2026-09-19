@@ -63,6 +63,23 @@ afterEach(cleanup);
 
 describe("ExtraTrafficOffer", () => {
 
+  it("мини-апп: счёт открывается наружу, а карточка говорит вернуться", async () => {
+    // Иначе WebView уходит на платёжку и стрелке «назад» возвращать некуда
+    // (жалоба владельца 19.09).
+    const openLink = vi.fn();
+    (window as unknown as { Telegram?: unknown }).Telegram = {
+      WebApp: { initData: "user=1", openLink },
+    };
+    buy.mockResolvedValue({ result: "pending", payment_url: "https://pay.example/inv/1" });
+    show({ balance: "0" });
+    fireEvent.click(screen.getByText(ru("extraTraffic.offer", { gb: 50, price: "50 ₽" })));
+    fireEvent.click(screen.getByText(ru("extraTraffic.payGateway", { price: "50 ₽" })));
+
+    await waitFor(() => expect(openLink).toHaveBeenCalledWith("https://pay.example/inv/1", { try_instant_view: false }));
+    expect(screen.getByText(ru("payment.openedExternally"))).toBeTruthy();
+    delete (window as unknown as { Telegram?: unknown }).Telegram;
+  });
+
   it("пришли по ссылке «докупить» — оплата открыта сразу, без лишнего нажатия", () => {
     // Кнопка в боте и письмо «трафик закончился» ведут на /billing?extra_traffic=1.
     // Человек уже нажал «докупить»; заставлять его искать карточку под ползунком

@@ -7,6 +7,7 @@ import { useT } from "@/i18n/I18nContext";
 import { formatDateTime } from "@/lib/format";
 import { newRequestId } from "@/lib/bulkJobs";
 import { leftGb, payOptions, type ExtraTrafficOfferView } from "@/lib/extraTraffic";
+import { onReturnFromPayment, openPayment } from "@/lib/payment";
 import type { ExtraTrafficResponse } from "@/types/api";
 
 /**
@@ -50,6 +51,9 @@ export function ExtraTrafficOffer({
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [requestId, setRequestId] = useState<string | null>(null);
+  // Счёт открыт во внешнем окне: ждём возвращения человека, чтобы перечитать
+  // подписку — редирект платёжки до мини-аппы не доезжает.
+  const [awaitingReturn, setAwaitingReturn] = useState(false);
 
   // Хук стоит ДО раннего возврата ниже: иначе при «платить нечем» порядок вызовов
   // хуков менялся бы между рендерами (правило React, eslint это ловит).
@@ -67,6 +71,11 @@ export function ExtraTrafficOffer({
       cardRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
     });
   }, [autoOpen]);
+
+  useEffect(() => {
+    if (!awaitingReturn) return;
+    return onReturnFromPayment(() => onChanged?.());
+  }, [awaitingReturn, onChanged]);
 
   const pay = payOptions(data, offer.price);
   if (pay.options.length === 0) return null;
@@ -125,7 +134,13 @@ export function ExtraTrafficOffer({
         // Ключ отработал: по нему уже выставлен счёт. Возврат на страницу после
         // оплаты должен начинать новую покупку, а не повторять эту.
         setRequestId(null);
-        window.location.href = result.payment_url;
+        // В мини-аппе счёт открывается НАРУЖУ, кабинет остаётся на месте: иначе
+        // WebView уходит на платёжку и вернуться назад нечем.
+        if (openPayment(result.payment_url)) {
+          setConfirming(false);
+          setNote(t("payment.openedExternally"));
+          setAwaitingReturn(true);
+        }
         return;
       }
       if (result.result === "not_available" && result.reason === "in_progress") {

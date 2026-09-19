@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Gift, Loader2, Copy, Check, RefreshCw, Clock } from "lucide-react";
 import { subscriptionApi } from "@/api/subscription";
 import { giftApi, type GiftHistoryItem, type GiftResult } from "@/api/gift";
+import { onReturnFromPayment, openPayment } from "@/lib/payment";
 import type { SubscriptionOffersResponse } from "@/types/api";
 import { ApiError } from "@/types/api";
 import { useT } from "@/i18n/I18nContext";
@@ -37,6 +38,9 @@ export function GiftCard() {
   const [copied, setCopied] = useState<string | null>(null);
   const [history, setHistory] = useState<GiftHistoryItem[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  // Счёт открыт во внешнем окне (мини-апп): код подарка выпустит вебхук, и
+  // увидеть его человек должен, вернувшись сюда, а не в браузере платёжки.
+  const [opened, setOpened] = useState(false);
   const pollsLeft = useRef(20);
 
   const loadHistory = useCallback(async () => {
@@ -63,6 +67,15 @@ export function GiftCard() {
   }, [loadHistory]);
 
   const pending = history.some((g) => !g.issued);
+
+  // Счёт открывали наружу — человек вернулся: перечитываем историю сразу, не
+  // дожидаясь следующего круга опроса, иначе код «появится» только через минуту.
+  useEffect(() => {
+    if (!opened) return;
+    return onReturnFromPayment(() => {
+      void loadHistory();
+    });
+  }, [opened, loadHistory]);
 
   // Вернулись со страницы оплаты — код выпустит вебхук, дожидаемся его (2 минуты).
   useEffect(() => {
@@ -96,7 +109,11 @@ export function GiftCard() {
         pollsLeft.current = 20;
         await loadHistory();
         if (r.payment_url) {
-          window.location.href = r.payment_url;
+          // Мини-апп: счёт открываем наружу, кабинет остаётся на месте — иначе
+          // WebView уходит на платёжку и стрелке «назад» возвращать некуда.
+          if (openPayment(r.payment_url)) {
+            setOpened(true);
+          }
           return;
         }
         setError(t("gift.noUrl"));
@@ -189,6 +206,7 @@ export function GiftCard() {
             )}
           </div>
           {error && <p className="mt-2 text-xs text-danger">{error}</p>}
+          {opened && <p className="mt-2 text-xs text-fg-muted">{t("payment.openedExternally")}</p>}
           <button type="button" onClick={submit} disabled={busy || !planCode || !days} className="mt-4 inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-accent-fg hover:bg-accent/90 disabled:opacity-50">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Gift className="h-4 w-4" />}
             {method === BALANCE ? t("gift.submit") : t("gift.submitPay")}

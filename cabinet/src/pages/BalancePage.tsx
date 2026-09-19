@@ -5,6 +5,7 @@ import { balanceApi, POINT_VALUE_RUB, type BalanceResponse, type BalanceTransact
 import { subscriptionApi } from "@/api/subscription";
 import { ApiError, type PlanOfferResponse } from "@/types/api";
 import { formatDate, activeLocale } from "@/lib/format";
+import { onReturnFromPayment, openPayment } from "@/lib/payment";
 import { useT } from "@/i18n/I18nContext";
 import { useBranding } from "@/contexts/BrandingContext";
 
@@ -222,18 +223,26 @@ function AutopayToggle({ enabled, onChange }: { enabled: boolean; onChange: (v: 
   );
 }
 
-function TopupCard() {
+function TopupCard({ onPaid }: { onPaid: () => void }) {
   const [cfg, setCfg] = useState<TopupConfig | null>(null);
   const [amount, setAmount] = useState<string>("");
   const [gateway, setGateway] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Счёт открыт во внешнем окне (мини-апп): ждём возвращения, чтобы перечитать
+  // баланс — редирект платёжки до мини-аппы не доезжает.
+  const [opened, setOpened] = useState(false);
   const tr = useT();
   const { appearance } = useBranding();
   // Тех-работы: пополнение баланса — это оплата, ограничивается той же галкой.
   const payBlocked =
     appearance?.maintenance === true &&
     appearance?.maintenance_block_payments !== false;
+
+  useEffect(() => {
+    if (!opened) return;
+    return onReturnFromPayment(() => onPaid());
+  }, [opened, onPaid]);
 
   useEffect(() => {
     balanceApi
@@ -273,7 +282,11 @@ function TopupCard() {
     try {
       const r = await balanceApi.createTopup(amt, gateway);
       if (r.payment_url) {
-        window.location.href = r.payment_url;
+        // Мини-апп: счёт наружу, кабинет остаётся — иначе «назад» возвращать некуда.
+        if (openPayment(r.payment_url)) {
+          setOpened(true);
+          setBusy(false);
+        }
       } else {
         setErr(tr("balance.topupNoUrl"));
       }
@@ -288,6 +301,11 @@ function TopupCard() {
       <h2 className="flex items-center gap-2 text-base font-semibold text-fg">
         <PlusCircle className="h-4 w-4 text-accent" /> {tr("balance.topupTitle")}
       </h2>
+      {opened && (
+        <p className="mb-3 mt-2 rounded-xl border border-accent/30 bg-bg-raised px-3 py-2 text-xs text-fg">
+          {tr("payment.openedExternally")}
+        </p>
+      )}
       <p className="mb-4 mt-0.5 text-xs text-fg-muted">
         {cfg.bonus_percent > 0
           ? tr("balance.topupBonusNote", { percent: cfg.bonus_percent })
@@ -478,6 +496,10 @@ export default function BalancePage() {
   const [txLoading, setTxLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const reloadBalance = useCallback(() => {
+    balanceApi.get().then(setBalance).catch(() => {});
+  }, []);
+
   useEffect(() => {
     balanceApi
       .get()
@@ -562,7 +584,7 @@ export default function BalancePage() {
       </div>
 
       {/* Пополнить баланс через шлюз (скроется, если выключено/нет шлюзов) */}
-      {can("topup") && <TopupCard />}
+      {can("topup") && <TopupCard onPaid={reloadBalance} />}
 
       {/* Подарить подписку с баланса */}
       {can("gift") && <GiftCard />}

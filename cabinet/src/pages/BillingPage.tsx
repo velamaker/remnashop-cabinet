@@ -10,6 +10,7 @@ import { TrialDiscountBanner } from "@/components/TrialDiscountBanner";
 import { RenewalDiscountBanner } from "@/components/RenewalBanner";
 import { formatDate, formatTrafficLimit } from "@/lib/format";
 import { changeExtraNote, renewExtraUntil, type ChangeExtraNote } from "@/lib/extraDevice";
+import { onReturnFromPayment, openPayment } from "@/lib/payment";
 import { changeTrafficNote, offerView } from "@/lib/extraTraffic";
 import { ExtraTrafficHeadline, ExtraTrafficOffer } from "@/components/ExtraTrafficOffer";
 import {
@@ -323,6 +324,9 @@ export default function BillingPage() {
   // `?plan=&days=` — ссылка из блока «Нужно больше устройств?»: раскрыть тариф и
   // выбрать срок. Только предвыбор, оплату ссылка не запускает.
   const [searchParams] = useSearchParams();
+  // Счёт открыт во внешнем окне (мини-апп): ждём возвращения человека, чтобы
+  // перечитать подписку — редирект платёжки сюда не доезжает.
+  const [paymentOpened, setPaymentOpened] = useState(false);
   const [offers, setOffers] = useState<SubscriptionOffersResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -394,6 +398,16 @@ export default function BillingPage() {
   }, [trafficCapable, trafficNonce]);
 
   const loadExtraTraffic = useCallback(() => setTrafficNonce((n) => n + 1), []);
+
+  // Вернулись из внешнего окна оплаты — перечитываем витрину и предложение:
+  // подписка могла уже стать оплаченной, а страница об этом не узнала бы.
+  useEffect(() => {
+    if (!paymentOpened) return;
+    return onReturnFromPayment(() => {
+      void load();
+      loadExtraTraffic();
+    });
+  }, [paymentOpened, load, loadExtraTraffic]);
 
   useEffect(() => {
     load();
@@ -471,7 +485,11 @@ export default function BillingPage() {
       if (result.is_free) {
         window.location.href = "/";
       } else if (result.payment_url) {
-        window.location.href = result.payment_url;
+        // В мини-аппе счёт открываем наружу: если увести сам WebView на платёжку,
+        // «назад» в Telegram возвращать уже некуда.
+        if (openPayment(result.payment_url)) {
+          setPaymentOpened(true);
+        }
       }
     } catch (e) {
       const detail = e instanceof ApiError ? e.detail : "";
@@ -614,6 +632,13 @@ export default function BillingPage() {
               ? t("billing.errConnection")
               : purchaseError}
           </p>
+        </div>
+      )}
+      {/* Счёт открыт во внешнем окне (мини-апп): человек должен понимать, что
+          страница его дождётся и обновится сама. */}
+      {paymentOpened && (
+        <div className="rounded-xl border border-accent/30 bg-bg-subtle px-4 py-3 text-sm text-fg">
+          {t("payment.openedExternally")}
         </div>
       )}
       {purchaseError === "__email__" && (

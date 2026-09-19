@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { MonitorSmartphone, Plus } from "lucide-react";
 import { subscriptionApi } from "@/api/subscription";
 import { Button } from "@/components/ui/Button";
@@ -6,6 +6,7 @@ import { useT } from "@/i18n/I18nContext";
 import { formatDate } from "@/lib/format";
 import { newRequestId } from "@/lib/bulkJobs";
 import { payOptions, type ExtraDeviceOfferView } from "@/lib/extraDevice";
+import { onReturnFromPayment, openPayment } from "@/lib/payment";
 import type { ExtraDeviceResponse } from "@/types/api";
 
 /**
@@ -39,6 +40,14 @@ export function ExtraDeviceOffer({
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [requestId, setRequestId] = useState<string | null>(null);
+  // Счёт открыт во внешнем окне: ждём возвращения, чтобы перечитать места —
+  // редирект платёжки до мини-аппы не доезжает.
+  const [awaitingReturn, setAwaitingReturn] = useState(false);
+
+  useEffect(() => {
+    if (!awaitingReturn) return;
+    return onReturnFromPayment(() => onChanged?.());
+  }, [awaitingReturn, onChanged]);
 
   const pay = payOptions(data, offer.amount);
   if (pay.options.length === 0) return null;
@@ -86,7 +95,12 @@ export function ExtraDeviceOffer({
         return;
       }
       if (result.result === "pending" && result.payment_url) {
-        window.location.href = result.payment_url;
+        // В мини-аппе — наружу: иначе WebView уходит на платёжку и «назад» некуда.
+        if (openPayment(result.payment_url)) {
+          setConfirming(false);
+          setNote(t("payment.openedExternally"));
+          setAwaitingReturn(true);
+        }
         return;
       }
       if (result.result === "price_changed") {
