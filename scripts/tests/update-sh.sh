@@ -183,7 +183,10 @@ out_lacks() { ! grep -qF -- "$1" "$OUT" || fail "в выводе лишнее: $
 count_out() { grep -cF -- "$1" "$OUT"; }
 # Журнал без пробы работающего бота (docker inspect/run только читают его образ).
 calls_wo_probe() {
-  grep -vE '^docker (inspect -f \{\{\.Image\}\} remnashop|run --rm --network none --entrypoint sh )' "$CALLS"
+  # Из журнала убираем ПРОБЫ окружения: пробу образа бота (что он умеет) и пробу сети
+  # до registry.npmjs.org. Обе ничего не меняют и нужны только для диагностики, но
+  # появляются в разных сценариях по-разному — в золотом журнале им не место.
+  grep -vE '^docker (inspect -f \{\{\.Image\}\} remnashop|run --rm --network none --entrypoint sh |run --rm --network bridge node:22-alpine )' "$CALLS"
 }
 no_probe() { ! grep -qE '^docker (inspect|run --rm --network none)' "$CALLS" || fail "лишняя проба образа бота"; }
 

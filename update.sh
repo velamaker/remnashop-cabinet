@@ -505,7 +505,26 @@ check_build_memory() {
 }
 
 # ── 3. Пересборка и запуск (overlay бота + кабинет) ───────────────────────────
+# Дотянемся ли мы до registry.npmjs.org?
+#
+# ЗАЧЕМ. Вторая половина падений сборки — не память, а сеть: npm 10 прячет ЛЮБУЮ свою
+# беду за «Exit handler never called!», и человек час ищет ошибку в проекте, хотя у
+# него просто не открывается реестр (маршрут, DNS, сломанный IPv6, блокировка).
+# Проверка занимает секунды и делает диагноз до, а не после двадцати минут сборки.
+check_registry() {
+  command -v docker >/dev/null 2>&1 || return 0
+  if docker run --rm --network bridge node:22-alpine \
+      sh -c 'npm ping --registry https://registry.npmjs.org >/dev/null 2>&1' 2>/dev/null; then
+    return 0
+  fi
+  warn "Не получилось достучаться до registry.npmjs.org из docker-контейнера."
+  warn "Сборка кабинета без него не соберётся — и упадёт с невнятной ошибкой npm."
+  warn "Проверьте DNS и доступ к сети; на серверах со сломанным IPv6 помогает"
+  warn "отключить его для docker или задать IPv4-DNS в /etc/docker/daemon.json."
+}
+
 check_build_memory
+check_registry
 
 if [ "$SCOPE" = cabinet ]; then
   # Адаптер «Бедолаги» — реализация контракта кабинета, а не бот: он меняется в тех же
