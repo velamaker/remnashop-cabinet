@@ -77,6 +77,33 @@ export function DiagnosticWizard() {
       } catch {
         /* устройства недоступны — пропускаем чек */
       }
+      // Подключался ли человек ВООБЩЕ. Замер по боевой базе: из 78 истёкших пробных
+      // 37 не подключились ни разу, а 15 успели завести устройство и всё равно не
+      // пошли дальше. Для них «подписка активна, трафик есть, устройства есть» —
+      // бесполезный ответ: у них не настроено приложение, и сказать об этом должен
+      // именно этот экран. Данные уже в ответе подписки, лишних запросов нет.
+      const lifetime = sub.lifetime_used_traffic_bytes ?? 0;
+      const used = sub.used_traffic_bytes ?? 0;
+      const onlineAt = sub.online_at ? new Date(sub.online_at).getTime() : null;
+      if (!onlineAt && lifetime === 0 && used === 0) {
+        out.push({
+          key: "conn",
+          status: "fail",
+          label: t("diag.conn.never"),
+          hint: t("diag.conn.never.hint"),
+          cta: { label: t("diag.cta.devices"), to: "/subscription" },
+        });
+      } else if (onlineAt && now - onlineAt > 14 * 24 * 3600 * 1000) {
+        out.push({
+          key: "conn",
+          status: "warn",
+          label: t("diag.conn.stale", { date: formatDate(sub.online_at ?? "") }),
+          hint: t("diag.conn.stale.hint"),
+          cta: { label: t("diag.cta.devices"), to: "/subscription" },
+        });
+      } else {
+        out.push({ key: "conn", status: "ok", label: t("diag.conn.ok") });
+      }
     }
 
     try {
