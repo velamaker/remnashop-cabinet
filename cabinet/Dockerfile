@@ -14,8 +14,16 @@ COPY package.json package-lock.json* ./
 #   --no-audit --no-fund — два лишних сетевых шага, которые на слабой сети только
 #                    удлиняют установку;
 #   max-old-space-size=512 — потолок кучи самого npm.
+# Вторая попытка после чистки кеша — не суеверие: «Exit handler never called!» на
+# маленьких машинах приходит и от битого кеша npm, и от убитого ядром процесса. Первый
+# проход мог оставить половину распакованного пакета; чистка делает вторую попытку
+# осмысленной, а не повтором той же ошибки.
 RUN NODE_OPTIONS=--max-old-space-size=512 \
-    nice -n 19 npm ci --no-audit --no-fund --maxsockets 4
+    nice -n 19 npm ci --no-audit --no-fund --maxsockets 4 \
+ || (echo "npm ci упал — чищу кеш и пробую ещё раз (обычно это нехватка памяти)" \
+     && npm cache clean --force \
+     && NODE_OPTIONS=--max-old-space-size=384 \
+        nice -n 19 npm ci --no-audit --no-fund --maxsockets 2)
 
 COPY . .
 

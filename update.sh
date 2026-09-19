@@ -472,9 +472,36 @@ check_build_memory() {
   [ "$total_mb" -lt 1400 ] || return 0
   warn "Для сборки кабинета мало памяти: свободно ${avail_mb} МБ, swap ${swap_mb:-0} МБ."
   warn "Сборка фронтенда обычно падает с «Exit handler never called!» или молча обрывается."
-  warn "Самый простой выход — временный файл подкачки (после сборки можно удалить):"
-  warn "  fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile"
-  warn "Удалить потом: swapoff /swapfile && rm -f /swapfile"
+  warn "Помогает временный файл подкачки — могу включить его сам."
+
+  # Предлагаем починить, а не только диагностировать: человек пришёл обновиться, а не
+  # изучать управление памятью. Без терминала (запуск из скрипта) молча не трогаем
+  # чужую машину — только совет.
+  if [ ! -t 0 ] || [ "${RS_NO_SWAP:-}" = "1" ]; then
+    warn "  fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile"
+    warn "Удалить потом: swapoff /swapfile && rm -f /swapfile"
+    return 0
+  fi
+  printf 'Создать временный файл подкачки 2 ГБ? [Д/н]: ' >&2
+  local answer=""
+  IFS= read -r answer || answer=""
+  case "$answer" in
+    [нНnN]*) warn "Хорошо, продолжаю без подкачки — сборка может не дойти до конца."; return 0 ;;
+  esac
+  if [ -e /swapfile ]; then
+    warn "/swapfile уже есть — включаю его."
+  elif ! fallocate -l 2G /swapfile 2>/dev/null && ! dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none; then
+    warn "Не получилось создать /swapfile — продолжаю без подкачки."
+    rm -f /swapfile 2>/dev/null || true
+    return 0
+  fi
+  chmod 600 /swapfile 2>/dev/null || true
+  mkswap /swapfile >/dev/null 2>&1 || true
+  if swapon /swapfile 2>/dev/null; then
+    ok "Подкачка включена (2 ГБ). После обновления можно убрать: swapoff /swapfile && rm -f /swapfile"
+  else
+    warn "Подкачку включить не вышло (бывает в контейнере или при запрете ядра) — продолжаю так."
+  fi
 }
 
 # ── 3. Пересборка и запуск (overlay бота + кабинет) ───────────────────────────
