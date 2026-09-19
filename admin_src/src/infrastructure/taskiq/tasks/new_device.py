@@ -126,7 +126,12 @@ async def run_new_device(
             text(
                 "SELECT DISTINCT s.user_remna_id, u.id, lower(u.language::text), u.telegram_id "
                 "FROM subscriptions s JOIN users u ON u.id = s.user_id "
-                "WHERE u.role = 'USER' AND s.user_remna_id IS NOT NULL"
+                # Удалённые подписки пропускаем: их пользователя в панели уже нет, а
+                # карта t_id→uuid пытается его «восстановить» по короткой ссылке и
+                # каждый проход пишет в лог три предупреждения о 404. Устройств у
+                # несуществующего пользователя не бывает — искать нечего.
+                "WHERE u.role = 'USER' AND s.user_remna_id IS NOT NULL "
+                "AND s.status::text <> 'DELETED'"
             )
         )
     ).all()

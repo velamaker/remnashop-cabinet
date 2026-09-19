@@ -172,6 +172,56 @@ _MIN_DELETE_AFTER = 30
 class OverlayNotificationService(BaseNotificationService):
     """Уведомления кабинета. Всё, что не перекрыто, — поведение базы."""
 
+    # [OVERLAY] «Не подключился»: помогаем подключиться, а не отправляем в поддержку.
+    #
+    # Панель умеет сама звать тех, у кого подписка есть, а подключений не было
+    # (NOT_CONNECTED_USERS_NOTIFICATIONS_* в её .env) — бот это событие уже принимает.
+    # Базовый текст спрашивает «не получилось?» и даёт одну кнопку в поддержку, то есть
+    # перекладывает работу на человека и на нас. Замер по боевой базе: из 78 истёкших
+    # пробных 37 не подключились НИ РАЗУ, а 15 успели завести устройство и всё равно не
+    # пошли дальше. Им нужна не переписка, а кнопка «подключить».
+    #
+    # Текст и кнопки подменяем только для этого события: остальные идут как у базы.
+    def _not_connected_payload(self, event: "UserNotConnectedEvent") -> "MessagePayloadDto":
+        from aiogram.types import InlineKeyboardButton
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+        lang = str(getattr(getattr(event, "user", None), "language", "") or "ru").lower()
+        base_url = (getattr(self.config, "web_cabinet_url", "") or "").strip().rstrip("/")
+        if lang.startswith("en"):
+            text = (
+                "<b>🔌 Your access is ready — one step left</b>\n\n"
+                "The subscription is active, but we haven't seen a single connection yet. "
+                "It takes a couple of minutes: open your account, pick your device and tap "
+                "«Connect» — the app sets itself up.\n\n"
+                "If something goes wrong, write to support and we'll sort it out."
+            )
+            connect, support = "⚡ Connect", "💬 Support"
+        else:
+            text = (
+                "<b>🔌 Доступ уже ждёт — осталось подключить</b>\n\n"
+                "Подписка активна, но подключений пока не было. Это пара минут: откройте "
+                "кабинет, выберите устройство и нажмите «Подключиться» — приложение "
+                "настроится само.\n\n"
+                "Если что-то не выходит — напишите в поддержку, поможем."
+            )
+            connect, support = "⚡ Подключить", "💬 Поддержка"
+
+        builder = InlineKeyboardBuilder()
+        if base_url:
+            builder.row(InlineKeyboardButton(text=connect, url=f"{base_url}/devices"))
+        support_url = getattr(event, "support_url", "") or ""
+        if support_url:
+            builder.row(InlineKeyboardButton(text=support, url=support_url))
+        return MessagePayloadDto(
+            i18n_key="raw-message",
+            i18n_kwargs={"content": text},
+            reply_markup=builder.as_markup() if (base_url or support_url) else None,
+            disable_default_markup=True,
+            # delete_after=None обязательно: дефолт DTO — 5 секунд (грабля рассылок).
+            delete_after=None,
+        )
+
     @on_event(UserEvent)
     async def on_user_event(self, event: UserEvent) -> None:
         logger.info(f"Received '{event.event_type}' event")
@@ -181,8 +231,11 @@ class OverlayNotificationService(BaseNotificationService):
             logger.info(f"Notification for '{event.notification_type}' is disabled, skipping")
             return
 
-        payload = event.as_payload()
-        payload.reply_markup = self._resolve_keyboard(event)
+        if isinstance(event, UserNotConnectedEvent):
+            payload = self._not_connected_payload(event)
+        else:
+            payload = event.as_payload()
+            payload.reply_markup = self._resolve_keyboard(event)
         await self.notify_user(event.user, payload)
 
         # [OVERLAY] Пуш пригласившему: «по вашей ссылке подключился реферал».
