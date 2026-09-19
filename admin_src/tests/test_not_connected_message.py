@@ -77,3 +77,44 @@ def test_no_addresses_at_all_still_sends_text():
     payload = Service(cabinet="")._not_connected_payload(event(support=""))
     assert payload.reply_markup is None
     assert payload.i18n_kwargs["content"]
+
+
+# ── кнопка «Продлить» ────────────────────────────────────────────────────────
+
+
+class RenewEvent:
+    """Событие об окончании подписки: боту известны только эти два факта."""
+
+    def __init__(self, is_trial: bool = False, lang: str = "RU") -> None:
+        self.is_trial = is_trial
+        self.user = SimpleNamespace(id=1, language=lang, telegram_id=555)
+
+
+def test_renew_button_leads_straight_to_payment():
+    """Базовая кнопка открывала диалог покупки: тариф → срок → способ → оплатить.
+
+    Для продления всё это уже известно, и четыре шага ради «то же самое ещё раз» —
+    ровно то место, где люди отваливаются.
+    """
+    markup = Service()._renew_keyboard(RenewEvent())
+    button = markup.inline_keyboard[0][0]
+    assert button.text == "⚡ Продлить"
+    assert button.url == "https://cab.example/billing?renew=1"
+
+
+def test_trial_gets_a_choice_not_a_renewal():
+    """Пробнику продлевать нечего — ему нужен выбор тарифа."""
+    markup = Service()._renew_keyboard(RenewEvent(is_trial=True))
+    button = markup.inline_keyboard[0][0]
+    assert button.text == "⚡ Выбрать тариф"
+    assert button.url == "https://cab.example/billing"
+
+
+def test_english_renew_button():
+    markup = Service()._renew_keyboard(RenewEvent(lang="EN"))
+    assert markup.inline_keyboard[0][0].text == "⚡ Renew"
+
+
+def test_without_cabinet_base_keyboard_stays():
+    """Нет адреса кабинета — возвращаем None, чтобы осталась базовая клавиатура."""
+    assert Service(cabinet="")._renew_keyboard(RenewEvent()) is None

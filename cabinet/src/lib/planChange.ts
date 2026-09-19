@@ -122,6 +122,25 @@ export function billingHref(code: string, days: number): string {
  * ввод: принимаем только код из витрины и срок, который у этого тарифа есть.
  * Всё остальное — поведение по умолчанию (бэкенд тариф и срок всё равно проверит).
  */
+/**
+ * Что раскрыть на «Оплате», если пришли по ссылке «Продлить» из бота.
+ *
+ * Бот не знает ни кода тарифа, ни срока — и знать не должен: ссылка в сообщении
+ * статичная (`/billing?renew=1`), а какой тариф продлевать, решает сама витрина по
+ * `recommended_purchase_type === "RENEW"`. Так ссылка не протухает при смене тарифа и
+ * не зависит от того, что бот успел прочитать из базы.
+ */
+export function renewPreselect(
+  offers: SubscriptionOffersResponse,
+): { code: string | null; days: number | null } {
+  const plan = offers.plans.find((p) => p.recommended_purchase_type === "RENEW");
+  if (!plan) return { code: null, days: null };
+  // Срок берём тот же, что у человека сейчас, если он ещё продаётся; иначе первый.
+  const current = offers.current_days_left ?? null;
+  const same = current ? plan.durations.find((d) => d.days === current) : undefined;
+  return { code: plan.public_code, days: (same ?? plan.durations[0])?.days ?? null };
+}
+
 export function readBillingPreselect(
   params: URLSearchParams,
   offers: SubscriptionOffersResponse,

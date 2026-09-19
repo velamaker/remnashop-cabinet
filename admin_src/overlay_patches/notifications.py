@@ -172,6 +172,36 @@ _MIN_DELETE_AFTER = 30
 class OverlayNotificationService(BaseNotificationService):
     """Уведомления кабинета. Всё, что не перекрыто, — поведение базы."""
 
+    # [OVERLAY] «Продлить» ведёт СРАЗУ к оплате, а не в начало диалога покупки.
+    #
+    # Базовая кнопка открывает диалог: выбрать тариф → срок → способ → оплатить. Для
+    # ПРОДЛЕНИЯ всё это уже известно, и четыре шага ради «то же самое ещё раз» — это
+    # ровно то место, где люди отваливаются. Ссылка ведёт на витрину кабинета с меткой
+    # `renew=1`: какой тариф продлевать и на какой срок, витрина решает сама (боту это
+    # знать неоткуда, а ссылка не протухает при смене тарифа) — человеку остаётся
+    # нажать «Оплатить».
+    #
+    # Пробникам продлевать нечего: им нужен выбор тарифа, поэтому ведём в корень
+    # витрины. Без адреса кабинета возвращаем None — останется базовая клавиатура,
+    # мёртвых кнопок не делаем.
+    def _renew_keyboard(self, event: Any) -> Any:
+        from aiogram.types import InlineKeyboardButton
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+        base_url = (getattr(self.config, "web_cabinet_url", "") or "").strip().rstrip("/")
+        if not base_url:
+            return None
+        is_trial = bool(getattr(event, "is_trial", False))
+        lang = str(getattr(getattr(event, "user", None), "language", "") or "ru").lower()
+        if lang.startswith("en"):
+            label = "⚡ Choose a plan" if is_trial else "⚡ Renew"
+        else:
+            label = "⚡ Выбрать тариф" if is_trial else "⚡ Продлить"
+        url = f"{base_url}/billing" if is_trial else f"{base_url}/billing?renew=1"
+        builder = InlineKeyboardBuilder()
+        builder.row(InlineKeyboardButton(text=label, url=url))
+        return builder.as_markup()
+
     # [OVERLAY] «Не подключился»: помогаем подключиться, а не отправляем в поддержку.
     #
     # Панель умеет сама звать тех, у кого подписка есть, а подключений не было
@@ -236,6 +266,17 @@ class OverlayNotificationService(BaseNotificationService):
         else:
             payload = event.as_payload()
             payload.reply_markup = self._resolve_keyboard(event)
+            if isinstance(
+                event,
+                (
+                    SubscriptionExpiresEvent,
+                    SubscriptionExpiredEvent,
+                    SubscriptionExpiredAgoEvent,
+                    SubscriptionLimitedEvent,
+                ),
+            ):
+                # Кнопка ведёт в кабинет к оплате; нет адреса — остаётся базовая.
+                payload.reply_markup = self._renew_keyboard(event) or payload.reply_markup
         await self.notify_user(event.user, payload)
 
         # [OVERLAY] Пуш пригласившему: «по вашей ссылке подключился реферал».

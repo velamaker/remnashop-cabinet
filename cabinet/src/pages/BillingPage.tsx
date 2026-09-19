@@ -19,6 +19,7 @@ import {
   needsConfirm,
   paymentsBlocked,
   readBillingPreselect,
+  renewPreselect,
   type ChangeTerms,
 } from "@/lib/planChange";
 import type {
@@ -354,7 +355,12 @@ export default function BillingPage() {
       setOffers(data);
       if (data.gateways.length > 0) setSelectedGateway(data.gateways[0]!.gateway_type);
       const firstDuration = data.plans[0]?.durations[0]?.days ?? null;
-      const preselect = readBillingPreselect(searchParams, data);
+      // `?renew=1` — ссылка «Продлить» из сообщения бота: тариф и срок витрина
+      // выбирает сама (см. renewPreselect), боту знать их неоткуда.
+      const preselect =
+        searchParams.get("renew") === "1" && !searchParams.get("plan")
+          ? renewPreselect(data)
+          : readBillingPreselect(searchParams, data);
       setSelectedDays(preselect.days ?? firstDuration);
       if (preselect.code) {
         setExpandedCode(preselect.code);
