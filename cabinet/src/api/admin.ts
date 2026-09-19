@@ -1374,6 +1374,34 @@ export const extraTrafficAdminApi = {
     adminApi.put<{ config: ExtraTrafficConfig; effective_enabled: boolean }>("/extra-traffic", data),
 };
 
+// ---------- Напоминание о незавершённой оплате ----------
+
+export interface PaymentReminderConfig {
+  enabled: boolean;
+  delay_minutes: number;
+  max_age_minutes: number;
+  cooldown_hours: number;
+  max_per_30d: number;
+  notify_admins: boolean;
+}
+
+export interface PaymentReminderAdminResponse {
+  config: PaymentReminderConfig;
+  effective_enabled: boolean;
+  summary: { status: string; detail: string; count: number }[];
+  conversion: { sent_30d?: number; paid_after_30d?: number };
+  backlog: { invoices_30d?: number; people_30d?: number; amount_30d?: number };
+}
+
+export const paymentReminderAdminApi = {
+  get: () => adminApi.get<PaymentReminderAdminResponse>("/payment-reminder"),
+  update: (data: PaymentReminderConfig) =>
+    adminApi.put<{ config: PaymentReminderConfig; effective_enabled: boolean }>(
+      "/payment-reminder",
+      data,
+    ),
+};
+
 // ---------- Месячный дайджест пользователю ----------
 
 export interface DigestConfig {

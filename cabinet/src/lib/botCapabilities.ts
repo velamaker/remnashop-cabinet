@@ -60,6 +60,7 @@ export const BOT_CAPABILITIES = {
   plan_change_carry: { since: "1.4.0", label: "Перенос оставшихся дней при смене тарифа" },
   extra_device: { since: "1.4.0", label: "Докупка устройства к подписке: место на 30 дней с продлением" },
   extra_traffic: { since: "1.4.0", label: "Докупка трафика к подписке: +50 ГБ до ближайшего обновления" },
+  payment_reminder: { since: "1.4.1", label: "Напоминание о незавершённой оплате" },
 } as const;
 
 export type BotCap = keyof typeof BOT_CAPABILITIES;
@@ -96,6 +97,7 @@ export const PAGE_NEEDS_BOT: Readonly<Record<string, BotCap>> = {
   "/admin/renewal-discount": "renewal_discount",
   "/admin/extra-device": "extra_device",
   "/admin/extra-traffic": "extra_traffic",
+  "/admin/payment-reminder": "payment_reminder",
 };
 
 /** Что показать на прямом заходе по адресу спрятанной страницы. */

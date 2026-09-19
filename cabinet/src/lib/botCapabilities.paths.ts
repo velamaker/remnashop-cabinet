@@ -51,6 +51,8 @@ export const PATH_NEEDS_BOT: Record<string, BotCap> = {
   "GET /api/admin/extra-traffic": "extra_traffic",
   "PUT /api/admin/extra-traffic": "extra_traffic",
   "GET /api/admin/subscriptions/user/{}/extra-traffic": "extra_traffic",
+  "GET /api/admin/payment-reminder": "payment_reminder",
+  "PUT /api/admin/payment-reminder": "payment_reminder",
   "POST /api/admin/subscriptions/user/{}/extra-traffic/{}/revoke": "extra_traffic",
 };
 

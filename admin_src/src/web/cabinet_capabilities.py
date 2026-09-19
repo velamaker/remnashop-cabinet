@@ -36,6 +36,7 @@ CABINET_CAPABILITIES: tuple[str, ...] = (
     "plan_change_carry",
     "extra_device",
     "extra_traffic",
+    "payment_reminder",
 )
 
 # Заметные изменения ТОЛЬКО в боте — кабинета не касаются, но при «только кабинет»
