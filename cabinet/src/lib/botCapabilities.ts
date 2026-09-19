@@ -50,15 +50,15 @@ import type { Appearance } from "@/api/appearance";
 import type { FeatureKey } from "./features";
 
 export const BOT_CAPABILITIES = {
-  bulk_jobs: { since: "1.3.9", label: "Пользователи → массово по фильтру: добавить дни и написать" },
-  renewal_discount: { since: "1.3.9", label: "Скидка на продление до окончания подписки" },
-  device_upsell: { since: "1.3.9", label: "«Нужно больше устройств?» и предупреждение о смене тарифа" },
-  broadcast_expiring: { since: "1.3.9", label: "Рассылка «Истекают скоро»" },
-  digest_email: { since: "1.3.9", label: "Месячная сводка письмом" },
-  refunds_tile: { since: "1.3.9", label: "Плитка «Возвраты (30 дн)» в статистике" },
-  ad_link_url: { since: "1.3.9", label: "Готовая ссылка в окне новой рекламной ссылки" },
-  plan_change_carry: { since: "1.3.9", label: "Перенос оставшихся дней при смене тарифа" },
-  extra_device: { since: "1.3.9", label: "Докупка устройства к подписке: место на 30 дней с продлением" },
+  bulk_jobs: { since: "1.4.0", label: "Пользователи → массово по фильтру: добавить дни и написать" },
+  renewal_discount: { since: "1.4.0", label: "Скидка на продление до окончания подписки" },
+  device_upsell: { since: "1.4.0", label: "«Нужно больше устройств?» и предупреждение о смене тарифа" },
+  broadcast_expiring: { since: "1.4.0", label: "Рассылка «Истекают скоро»" },
+  digest_email: { since: "1.4.0", label: "Месячная сводка письмом" },
+  refunds_tile: { since: "1.4.0", label: "Плитка «Возвраты (30 дн)» в статистике" },
+  ad_link_url: { since: "1.4.0", label: "Готовая ссылка в окне новой рекламной ссылки" },
+  plan_change_carry: { since: "1.4.0", label: "Перенос оставшихся дней при смене тарифа" },
+  extra_device: { since: "1.4.0", label: "Докупка устройства к подписке: место на 30 дней с продлением" },
   extra_traffic: { since: "1.4.0", label: "Докупка трафика к подписке: +50 ГБ до ближайшего обновления" },
 } as const;
 
