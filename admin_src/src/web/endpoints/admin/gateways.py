@@ -210,3 +210,47 @@ async def set_gateway_field(
     await session.commit()
 
     return {"ok": True, "is_configured": bool(getattr(gateway.settings, "is_configured", False))}
+
+
+# ─── Порядок шлюзов ───────────────────────────────────────────────────────────
+#
+# ЗАЧЕМ. Порядок из этой колонки — это то, что человек видит при оплате: первым
+# стоит способ, который подставляется по умолчанию, и именно им платит
+# большинство. Менять его до сих пор было нечем: порядок задавала миграция
+# базового образа, где первым идёт Telegram Stars. У нас Stars за полгода не
+# принёс ни рубля, а ЮMoney — всю выручку, и переставить их местами владелец мог
+# только через SQL.
+
+
+class ReorderRequest(BaseModel):
+    ids: list[int]  # порядок целиком: первый в списке = первый у человека
+
+
+@router.put("/order")
+@inject
+async def reorder_gateways(
+    body: ReorderRequest,
+    _admin: AdminUser,
+    gateway_dao: FromDishka[PaymentGatewayDao],
+    session: FromDishka[AsyncSession],
+) -> dict[str, Any]:
+    gateways = await gateway_dao.get_all(only_active=False, sorted=True)
+    by_id = {g.id: g for g in gateways}
+
+    # Принимаем только полный список: частичный порядок пришлось бы «дотасовывать»
+    # самим, и результат перестал бы совпадать с тем, что админ видел на экране.
+    if sorted(body.ids) != sorted(by_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Список должен содержать все шлюзы ровно по одному разу",
+        )
+
+    for index, gateway_id in enumerate(body.ids, start=1):
+        gateway = by_id[gateway_id]
+        if gateway.order_index != index:
+            gateway.order_index = index
+            await gateway_dao.update(gateway)
+
+    await session.commit()
+    updated = await gateway_dao.get_all(only_active=False, sorted=True)
+    return {"items": [_gateway_to_dict(g) for g in updated], "total": len(updated)}

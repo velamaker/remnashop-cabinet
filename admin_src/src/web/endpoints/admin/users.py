@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 from dishka import FromDishka
 from dishka.integrations.fastapi import inject
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +13,12 @@ from src.application.common import Remnawave
 from src.application.common.dao import SubscriptionDao, TransactionDao, UserDao
 from src.application.dto import UserDto
 from src.core.enums import Role
+from src.infrastructure.services.overlay_user_purge import (
+    CONFIRM_PHRASE,
+    PanelUnavailable,
+    confirm_matches,
+    purge_user,
+)
 
 from ._common import AdminUser
 from ._redact import is_readonly_admin, redact_user
@@ -730,3 +736,67 @@ async def set_user_discount(
         "personal_discount": updated.personal_discount,
         "purchase_discount": updated.purchase_discount,
     }
+
+
+# ─── Удаление человека целиком ────────────────────────────────────────────────
+#
+# ЗАЧЕМ ЭТО ЗДЕСЬ. В карточке давно были «Отключить» и «Удалить», но обе про
+# ПОДПИСКУ: сам человек оставался в базе навсегда. Админы читали это как
+# поломку («удаление не активное»), а дубли из панели и мусорные регистрации
+# убрать было нечем.
+#
+# Шаги удаления общие с самоудалением из кабинета (overlay_user_purge), здесь —
+# только право: себя удалять нельзя, владельца нельзя, и нельзя тому, кому
+# нарезали лишь часть разделов (удаление человека — не работа поддержки).
+
+
+class DeleteUserRequest(BaseModel):
+    confirm: str
+
+
+@router.post("/{user_id}/delete")
+@inject
+async def delete_user(
+    user_id: int,
+    body: DeleteUserRequest,
+    request: Request,
+    admin: AdminUser,
+    user_dao: FromDishka[UserDao],
+    remnawave: FromDishka[Remnawave],
+    session: FromDishka[AsyncSession],
+) -> dict[str, Any]:
+    access = getattr(request.state, "admin_access", {}) or {}
+    if not (access.get("full_access") or access.get("is_owner")):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Удаление человека доступно только админу с полным доступом",
+        )
+
+    if not confirm_matches(body.confirm):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Для подтверждения введите «{CONFIRM_PHRASE}»",
+        )
+
+    user = await user_dao.get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
+    if user.id == admin.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя удалить себя")
+    if user.role >= Role.OWNER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Нельзя удалить владельца"
+        )
+
+    try:
+        report = await purge_user(session, remnawave, user_id)
+    except PanelUnavailable as exc:
+        # Панель не ответила — ничего не меняли. Честно говорим, что доступ к VPN
+        # остался, иначе админ решит, что человек удалён, а VPN у него работает.
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Панель не ответила, человек НЕ удалён: {exc}",
+        )
+
+    await session.commit()
+    return {"success": True, **report}

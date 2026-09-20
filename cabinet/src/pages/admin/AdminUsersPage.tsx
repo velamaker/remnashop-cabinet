@@ -1158,9 +1158,12 @@ function UserDetailModal({ userId, onClose, onUpdated, onOpenUser }: { userId: n
   const [discountPersonal, setDiscountPersonal] = useState("");
   const [discountPurchase, setDiscountPurchase] = useState("");
   const t = useT();
-  const { isOwner, isReadonlyAdmin, canSection } = useAuth();
+  const { isOwner, isReadonlyAdmin, canSection, fullAccess } = useAuth();
   const { can: hasFeature } = useBranding();
   const { can, note } = useCapabilities();
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteWord, setDeleteWord] = useState("");
+  const [deleting, setDeleting] = useState(false);
 
   // Вкладка «Подписка» целиком живёт на разделе subscriptions: бэкенд, который
   // его не объявил, ответит на неё ошибкой. Раз вкладки может не быть — и
@@ -1211,6 +1214,25 @@ function UserDetailModal({ userId, onClose, onUpdated, onOpenUser }: { userId: n
       load(); onUpdated();
     } catch (e) { if (!note("users.block", e)) alert(e instanceof ApiError ? e.detail : t("adm.users.err_generic")); }
     finally { setSaving(false); }
+  };
+
+  // Удаление человека. Что именно произойдёт, решает бэкенд и честно сообщает:
+  // за платившим остаётся обезличенная запись (иначе каскадом ушла бы
+  // отчётность), за не платившим не остаётся ничего.
+  const removeUser = async () => {
+    setDeleting(true);
+    try {
+      const r = await usersAdminApi.remove(userId, deleteWord.trim());
+      setDeleteOpen(false);
+      setDeleteWord("");
+      onUpdated();
+      onClose();
+      alert(r.mode === "anonymized" ? t("adm.users.del_done_anon") : t("adm.users.del_done_purged"));
+    } catch (e) {
+      if (!note("users.delete", e)) alert(e instanceof ApiError ? e.detail : t("adm.users.err_generic"));
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const saveDiscount = async () => {
@@ -1344,6 +1366,42 @@ function UserDetailModal({ userId, onClose, onUpdated, onOpenUser }: { userId: n
                     className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${u.is_blocked ? "border-success/20 bg-success/8 text-success hover:bg-success/15" : "border-danger/20 bg-danger/8 text-danger hover:bg-danger/15"}`}>
                     {u.is_blocked ? <><CheckCircle className="h-4 w-4" />{t("adm.users.btn_unblock")}</> : <><Ban className="h-4 w-4" />{t("adm.users.btn_block")}</>}
                   </button>
+                  )}
+
+                  {/* Удаление человека — отдельно от подписки и только тем, у кого
+                      полный доступ: поддержке такое право не нарезают. Владельца и
+                      себя не удалить, это проверяет и бэкенд. */}
+                  {!isReadonlyAdmin && fullAccess && can("users.delete") && u.role != null && u.role < 5 && (
+                  <div className="rounded-xl border border-danger/20 p-4">
+                    <p className="mb-1 text-xs font-semibold text-danger">{t("adm.users.del_title")}</p>
+                    <p className="mb-3 text-xs text-fg-muted">{t("adm.users.del_desc")}</p>
+                    {!deleteOpen ? (
+                      <button onClick={() => setDeleteOpen(true)} disabled={saving}
+                        className="flex items-center gap-2 rounded-lg border border-danger/20 bg-danger/8 px-4 py-2 text-sm font-medium text-danger hover:bg-danger/15 disabled:opacity-50 transition-colors">
+                        <Trash2 className="h-4 w-4" />{t("adm.users.del_btn")}
+                      </button>
+                    ) : (
+                      <div className="space-y-2">
+                        <label className="block text-xs text-fg-muted" htmlFor="del-confirm">
+                          {t("adm.users.del_confirm_label", { phrase: t("adm.users.del_word") })}
+                        </label>
+                        <input id="del-confirm" autoFocus value={deleteWord}
+                          onChange={e => setDeleteWord(e.target.value)}
+                          className="h-9 w-full rounded-lg border border-[var(--border)] bg-bg px-3 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-danger" />
+                        <div className="flex gap-2">
+                          <button onClick={removeUser}
+                            disabled={deleting || deleteWord.trim().toUpperCase() !== t("adm.users.del_word")}
+                            className="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-40 transition-opacity">
+                            {deleting ? t("adm.users.del_running") : t("adm.users.del_forever")}
+                          </button>
+                          <button onClick={() => { setDeleteOpen(false); setDeleteWord(""); }} disabled={deleting}
+                            className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm text-fg-muted hover:text-fg disabled:opacity-50 transition-colors">
+                            {t("adm.users.del_cancel")}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                   )}
                 </div>
               )}

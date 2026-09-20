@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { AlertCircle, KeyRound, X, Settings2, FlaskConical } from "lucide-react";
+import { AlertCircle, ArrowDown, ArrowUp, KeyRound, X, Settings2, FlaskConical } from "lucide-react";
 import { gatewaysAdminApi, type AdminGateway, type GatewayField } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { GATEWAY_NAMES } from "@/lib/gatewayNames";
@@ -159,6 +159,7 @@ export default function AdminGatewaysPage() {
   const [configuring, setConfiguring] = useState<AdminGateway | null>(null);
   const [testing, setTesting] = useState<number | null>(null);
   const [testResult, setTestResult] = useState<Record<number, { ok: boolean; text: string }>>({});
+  const [ordering, setOrdering] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -183,6 +184,30 @@ export default function AdminGatewaysPage() {
       alert(e instanceof ApiError ? e.detail : t("adm.gateways.err_generic"));
     } finally {
       setToggling(null);
+    }
+  };
+
+  // Порядок здесь — не украшение: первым в списке стоит способ оплаты, который
+  // человек увидит первым и которым заплатит, не выбирая. Двигаем сразу на
+  // экране, а не после ответа: перестановка должна ощущаться мгновенно.
+  const move = async (index: number, step: -1 | 1) => {
+    const target = index + step;
+    if (target < 0 || target >= gateways.length) return;
+    const next = [...gateways];
+    const moved = next[index]!;
+    next[index] = next[target]!;
+    next[target] = moved;
+    setGateways(next);
+    setOrdering(true);
+    setError(null);
+    try {
+      const r = await gatewaysAdminApi.reorder(next.map((g) => g.id));
+      setGateways(r.items);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : t("adm.gateways.order_failed"));
+      load(); // не сохранилось — показываем то, что на самом деле в базе
+    } finally {
+      setOrdering(false);
     }
   };
 
@@ -220,6 +245,10 @@ export default function AdminGatewaysPage() {
         💡 {t("adm.gateways.hint")}
       </div>
 
+      <div className="rounded-2xl border border-border-subtle bg-bg-subtle px-5 py-4 text-sm text-fg-muted">
+        ↕️ {t("adm.gateways.order_hint")}
+      </div>
+
       {error && <div className="flex items-center gap-2 rounded-xl bg-danger/10 px-4 py-3 text-sm text-danger"><AlertCircle className="h-4 w-4" />{error}</div>}
 
       {loading ? (
@@ -228,17 +257,40 @@ export default function AdminGatewaysPage() {
         <div className="py-20 text-center text-fg-muted">{t("adm.gateways.empty")}</div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {gateways.map(g => {
+          {gateways.map((g, i) => {
             const name = g.display_name || GATEWAY_NAMES[g.type] || g.type;
             const sym = CURRENCY_SYMBOLS[g.currency] ?? g.currency;
             return (
               <div key={g.id} className={`rounded-2xl border bg-bg-subtle p-5 transition-colors ${g.is_active ? "border-success/30" : "border-border-subtle"}`}>
                 <div className="flex items-start justify-between mb-3">
                   <div>
-                    <p className="font-semibold text-fg">{name}</p>
+                    <p className="font-semibold text-fg">
+                      {i === 0 && <span className="mr-1.5 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent align-middle">{t("adm.gateways.first")}</span>}
+                      {name}
+                    </p>
                     <p className="text-xs text-fg-muted">{g.currency} {sym}</p>
                   </div>
                   <div className="flex items-center gap-2">
+                    <div className="flex items-center">
+                      <button
+                        onClick={() => move(i, -1)}
+                        disabled={ordering || i === 0}
+                        title={t("adm.gateways.move_up")}
+                        aria-label={t("adm.gateways.move_up")}
+                        className="rounded-lg p-1 text-fg-subtle transition-colors hover:text-fg disabled:opacity-30"
+                      >
+                        <ArrowUp className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => move(i, 1)}
+                        disabled={ordering || i === gateways.length - 1}
+                        title={t("adm.gateways.move_down")}
+                        aria-label={t("adm.gateways.move_down")}
+                        className="rounded-lg p-1 text-fg-subtle transition-colors hover:text-fg disabled:opacity-30"
+                      >
+                        <ArrowDown className="h-4 w-4" />
+                      </button>
+                    </div>
                     {g.is_configured ? (
                       <span title={t("adm.gateways.keys_set")} className="text-success"><KeyRound className="h-4 w-4" /></span>
                     ) : (

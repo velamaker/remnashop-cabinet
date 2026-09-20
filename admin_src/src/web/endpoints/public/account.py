@@ -2,10 +2,11 @@
 
 - GET  /account/export — отдаёт все данные юзера одним JSON (профиль, подписка,
   платежи, история входов, рефералка, тикеты). Кабинет качает файлом.
-- POST /account/delete — удаление аккаунта с подтверждением. Каскады аккуратно:
-  подписка в Remnawave УДАЛЯЕТСЯ (VPN перестаёт работать), локальный юзер
-  АНОНИМИЗИРУЕТСЯ (PII затирается, is_blocked=true) — транзакции остаются для
-  финучёта (обезличены через анонимный юзер). Личные данные (входы, push) чистим.
+- POST /account/delete — удаление аккаунта с подтверждением. Сами шаги живут в
+  `overlay_user_purge`: там же их берёт админка, чтобы «удалить» значило одно и
+  то же с обеих сторон. Коротко: аккаунт в панели удаляется (VPN перестаёт
+  работать), личные данные вычищаются, а сама запись либо удаляется целиком,
+  либо — если за человеком есть платежи — остаётся обезличенной ради отчётности.
 """
 
 from __future__ import annotations
@@ -21,13 +22,18 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common import Remnawave
-from src.infrastructure.services.overlay_sessions import invalidate_all
+from src.infrastructure.services.overlay_user_purge import (
+    CONFIRM_PHRASE,
+    PanelUnavailable,
+    confirm_matches,
+    purge_user,
+)
 from src.web.endpoints.public._common import CurrentUser
 from src.web.endpoints.public.sub_alias import maybe_alias_url
 
 router = APIRouter(prefix="/account", tags=["Public - Account (GDPR)"])
 
-DELETE_CONFIRM_PHRASE = "УДАЛИТЬ"
+DELETE_CONFIRM_PHRASE = CONFIRM_PHRASE
 
 
 def _iso(v: Any) -> Any:
@@ -111,60 +117,20 @@ async def delete_account(
     remnawave: FromDishka[Remnawave],
     response: Response,
 ) -> dict[str, Any]:
-    if (body.confirm or "").strip().upper() != DELETE_CONFIRM_PHRASE:
+    if not confirm_matches(body.confirm):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Для подтверждения введите «{DELETE_CONFIRM_PHRASE}»",
         )
 
-    # 1) Удаляем пользователя в Remnawave — VPN перестаёт работать. Если панель
-    #    недоступна — прерываемся (не оставляем «полуудалённое» состояние с живым VPN).
-    sub = (
-        await session.execute(
-            text(
-                "SELECT s.user_remna_id FROM users u "
-                "JOIN subscriptions s ON u.current_subscription_id = s.id WHERE u.id = :u"
-            ),
-            {"u": user.id},
+    try:
+        report = await purge_user(session, remnawave, user.id)
+    except PanelUnavailable:
+        raise HTTPException(
+            status_code=502, detail="Не удалось отозвать подписку, попробуйте позже"
         )
-    ).first()
-    if sub and sub[0]:
-        sdk = getattr(remnawave, "sdk", None)
-        if sdk is None:
-            raise HTTPException(status_code=500, detail="Панель недоступна, попробуйте позже")
-        try:
-            await sdk.users.delete_user(str(sub[0]))
-        except Exception as e:  # noqa: BLE001
-            msg = str(e).lower()
-            # «уже нет в панели» трактуем как успех, прочее — ошибка панели
-            if "not found" not in msg and "404" not in msg:
-                raise HTTPException(status_code=502, detail="Не удалось отозвать подписку, попробуйте позже") from e
 
-    # 2) Анонимизируем локального юзера (PII затираем; транзакции остаются обезличенными).
-    await session.execute(
-        text(
-            "UPDATE users SET "
-            "email = NULL, pending_email = NULL, password_hash = NULL, "
-            "email_verification_code_hash = NULL, email_verification_expires_at = NULL, "
-            "is_email_verified = false, username = NULL, name = 'Удалённый аккаунт', "
-            "telegram_id = NULL, referral_code = 'deleted_' || id::text, auth_type = 'deleted', "
-            "is_blocked = true, cabinet_balance = 0, points = 0, autopay_enabled = false, "
-            "current_subscription_id = NULL, updated_at = now() "
-            "WHERE id = :u"
-        ),
-        {"u": user.id},
-    )
-
-    # 3) Чистим личные данные (история входов, push-подписки).
-    for tbl in ("login_events", "push_subscriptions"):
-        try:
-            await session.execute(text(f"DELETE FROM {tbl} WHERE user_id = :u"), {"u": user.id})
-        except Exception:  # noqa: BLE001 — таблицы может не быть
-            pass
-
-    # 4) Инвалидируем все сессии и чистим куки.
-    await invalidate_all(session, user.id)
     await session.commit()
     response.delete_cookie("access_token", path="/")
     response.delete_cookie("refresh_token", path="/")
-    return {"deleted": True}
+    return {"deleted": True, "mode": report["mode"]}

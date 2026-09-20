@@ -344,6 +344,15 @@ export const usersAdminApi = {
       personal_discount,
       purchase_discount,
     }),
+  /** Удаление человека целиком. `confirm` — слово подтверждения («УДАЛИТЬ»),
+   *  его же спрашивают у человека при самоудалении. Ответ говорит, как вышло:
+   *  `purged` — записи больше нет, `anonymized` — осталась обезличенной, потому
+   *  что за человеком есть платежи и отчётность их терять нельзя. */
+  remove: (id: number, confirm: string) =>
+    adminApi.post<{ success: boolean; mode: "purged" | "anonymized"; panel_accounts_removed: number }>(
+      `/users/${id}/delete`,
+      { confirm },
+    ),
   // Экспорт Excel (.xlsx) с текущими фильтрами: качаем blob (cookie-auth) и скачиваем.
   exportXlsx: async (params: {
     search?: string; blocked?: boolean; role?: number; sort?: string; order?: string;
@@ -1670,6 +1679,10 @@ export const gatewaysAdminApi = {
       `/gateways/${id}/test`,
       {},
     ),
+  /** Новый порядок целиком: первый в списке — тот, что человек увидит первым и
+   *  которым заплатит по умолчанию. Частичный список бэкенд не принимает. */
+  reorder: (ids: number[]) =>
+    adminApi.put<{ items: AdminGateway[]; total: number }>("/gateways/order", { ids }),
 };
 
 // ---------- Ad Links ----------
