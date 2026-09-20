@@ -115,6 +115,19 @@ describe("самодиагностика: подключался ли челов
     expect(screen.getByText(ru("diag.conn.ok"))).toBeTruthy();
   });
 
+  it("панель молчит — о подключении не говорим ничего", async () => {
+    // Пустые поля панели (она не ответила) — это «не знаем», а не «не подключался».
+    // Иначе платящему человеку экран заявит «подключений ещё не было».
+    current.mockResolvedValue(
+      sub({ online_at: null, used_traffic_bytes: null, lifetime_used_traffic_bytes: null }),
+    );
+    await run();
+    expect(screen.queryByText(ru("diag.conn.never"))).toBeNull();
+    expect(screen.queryByText(ru("diag.conn.ok"))).toBeNull();
+    // Остальные проверки при этом на месте.
+    expect(screen.getByText(ru("diag.srv.ok"))).toBeTruthy();
+  });
+
   it("без подписки проверку подключения не показываем вовсе", async () => {
     current.mockResolvedValue(null);
     await run();

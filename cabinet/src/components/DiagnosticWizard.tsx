@@ -114,10 +114,21 @@ export function DiagnosticWizard() {
       // пошли дальше. Для них «подписка активна, трафик есть, устройства есть» —
       // бесполезный ответ: у них не настроено приложение, и сказать об этом должен
       // именно этот экран. Данные уже в ответе подписки, лишних запросов нет.
+      // ПАНЕЛЬ МОЛЧИТ — НЕ ПОВОД ВЫНОСИТЬ ВЕРДИКТ. Расход и последний онлайн живут
+      // только в Remnawave; когда она не ответила, эти поля приходят пустыми. Если
+      // считать пустое нулём, человеку с оплаченной подпиской экран заявит
+      // «подключений ещё не было» — уверенная неправда в момент, когда у него и так
+      // что-то не работает. Молчим о том, чего не знаем: проверку пропускаем.
+      const panelSilent =
+        sub.used_traffic_bytes == null &&
+        sub.lifetime_used_traffic_bytes == null &&
+        sub.online_at == null;
       const lifetime = sub.lifetime_used_traffic_bytes ?? 0;
       const used = sub.used_traffic_bytes ?? 0;
       const onlineAt = sub.online_at ? new Date(sub.online_at).getTime() : null;
-      if (!onlineAt && lifetime === 0 && used === 0) {
+      if (panelSilent) {
+        /* нет данных панели — о подключении не говорим ничего */
+      } else if (!onlineAt && lifetime === 0 && used === 0) {
         out.push({
           key: "conn",
           status: "fail",
