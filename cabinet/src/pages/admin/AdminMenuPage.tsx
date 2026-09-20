@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { clsx } from "clsx";
 import { Save, CheckCircle2, SquareMenu, ChevronUp, ChevronDown, Smile } from "lucide-react";
 import { menuAdminApi, type MenuConfig, type BotButton } from "@/api/menu";
+import { useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
 import { ApiError } from "@/types/api";
 
 type Key =
@@ -12,30 +14,32 @@ type Key =
   | "remna_sub"
   | "custom_miniapp";
 
+// В title/desc лежат КЛЮЧИ перевода: подпись берётся при рендере (t), иначе
+// строки застыли бы на языке, который стоял в момент загрузки модуля.
 const META: Record<Key, { title: string; desc: string }> = {
   cabinet_miniapp: {
-    title: "Личный кабинет (Mini App)",
-    desc: "Открывает кабинет внутри Telegram. Синяя, основная.",
+    title: "adm.menu.cabinet_miniapp_title",
+    desc: "adm.menu.cabinet_miniapp_desc",
   },
   cabinet_url: {
-    title: "Кабинет в браузере",
-    desc: "Прямая ссылка на сайт кабинета (резерв, если Mini App не открылся).",
+    title: "adm.menu.cabinet_url_title",
+    desc: "adm.menu.cabinet_url_desc",
   },
   connect_miniapp: {
-    title: "Подключиться (Mini App)",
-    desc: "Открывает раздел «Устройства» кабинета внутри Telegram.",
+    title: "adm.menu.connect_miniapp_title",
+    desc: "adm.menu.connect_miniapp_desc",
   },
   connect_url: {
-    title: "Подключиться (ссылка)",
-    desc: "Раздел «Устройства» кабинета прямой ссылкой в браузере.",
+    title: "adm.menu.connect_url_title",
+    desc: "adm.menu.connect_url_desc",
   },
   remna_sub: {
-    title: "Подписка (резерв)",
-    desc: "Стандартная страница подписки Remnawave — на случай, если кабинет недоступен.",
+    title: "adm.menu.remna_sub_title",
+    desc: "adm.menu.remna_sub_desc",
   },
   custom_miniapp: {
-    title: "Своё мини-приложение",
-    desc: "Ваша страница подписки или чужая мини-аппа. Ссылку укажите ниже — она открывается внутри Telegram.",
+    title: "adm.menu.custom_miniapp_title",
+    desc: "adm.menu.custom_miniapp_desc",
   },
 };
 
@@ -50,19 +54,27 @@ const ORDER_FALLBACK: Key[] = [
 
 // Базовые кнопки навигации (состав фиксирован в боте; ключи совпадают с NAV_KEYS).
 const NAV_META: { key: string; title: string }[] = [
-  { key: "nav_devices", title: "Устройства" },
-  { key: "nav_subscription", title: "Подписка" },
-  { key: "nav_invite", title: "Пригласить" },
-  { key: "nav_support", title: "Поддержка" },
-  { key: "nav_dashboard", title: "Панель управления" },
+  { key: "nav_devices", title: "adm.menu.nav_devices" },
+  { key: "nav_subscription", title: "adm.menu.nav_subscription" },
+  { key: "nav_invite", title: "adm.menu.nav_invite" },
+  { key: "nav_support", title: "adm.menu.nav_support" },
+  { key: "nav_dashboard", title: "adm.menu.nav_dashboard" },
 ];
 
 const COLOR_META: Record<string, { label: string; dot: string }> = {
-  "": { label: "Дефолт", dot: "bg-fg-subtle" },
-  primary: { label: "Синяя", dot: "bg-[#2563eb]" },
-  success: { label: "Зелёная", dot: "bg-[#16a34a]" },
-  danger: { label: "Красная", dot: "bg-[#dc2626]" },
+  "": { label: "adm.menu.color_default", dot: "bg-fg-subtle" },
+  primary: { label: "adm.menu.color_primary", dot: "bg-[#2563eb]" },
+  success: { label: "adm.menu.color_success", dot: "bg-[#16a34a]" },
+  danger: { label: "adm.menu.color_danger", dot: "bg-[#dc2626]" },
 };
+
+// Одна фраза — один ключ, а выделение <b>…</b> живёт внутри перевода: так
+// переводчик сам решает, что выделить, и фраза не собирается из кусков.
+function withBold(s: string) {
+  return s
+    .split(/(<b>.*?<\/b>)/g)
+    .map((part, i) => (part.startsWith("<b>") ? <b key={i}>{part.slice(3, -4)}</b> : part));
+}
 
 // Палитра быстрой вставки эмодзи в текст кнопки (можно печатать/вставлять любые).
 // Эмодзи по категориям (вкладка = первый эмодзи). Плюс поле «вставить любой».
@@ -78,6 +90,7 @@ const EMOJI_CATS: { icon: string; list: string[] }[] = [
 ];
 
 function EmojiPicker({ onPick, disabled }: { onPick: (em: string) => void; disabled?: boolean }) {
+  const t = useT();
   const [cat, setCat] = useState(0);
   const [custom, setCustom] = useState("");
   const insertCustom = () => {
@@ -105,14 +118,14 @@ function EmojiPicker({ onPick, disabled }: { onPick: (em: string) => void; disab
       <div className="flex items-center gap-1.5 border-t border-[var(--border)] pt-2">
         <input value={custom} onChange={(e) => setCustom(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); insertCustom(); } }}
-          placeholder="вставить любой эмодзи"
+          placeholder={t("adm.menu.emoji_any_ph")}
           className="h-7 flex-1 rounded-md border border-[var(--border)] bg-bg px-2 text-sm text-fg outline-none focus:border-accent" />
         <button type="button" onClick={insertCustom} disabled={disabled || !custom.trim()}
           className="h-7 rounded-md border border-accent bg-accent/10 px-2.5 text-xs font-medium text-accent disabled:opacity-40">
-          Вставить
+          {t("adm.menu.insert")}
         </button>
       </div>
-      <p className="text-[10px] leading-snug text-fg-subtle">Любой эмодзи: вставьте из системного пикера — Win + . (Windows) или Ctrl+Cmd+Space (Mac).</p>
+      <p className="text-[10px] leading-snug text-fg-subtle">{t("adm.menu.emoji_any_hint")}</p>
     </div>
   );
 }
@@ -131,12 +144,16 @@ const btnLen = (s: string) => Array.from(cleanBtnText(s)).length;
 // раскрывать редактор ради проверки, задан ли уже свой текст/цвет.
 function summaryLabel(text: string, color: string) {
   const parts: string[] = [];
-  if (text) parts.push("свой текст");
-  if (color) parts.push(COLOR_META[color]?.label.toLowerCase() ?? color);
+  if (text) parts.push(translate("adm.menu.sum_custom_text"));
+  if (color) {
+    const labelKey = COLOR_META[color]?.label;
+    parts.push(labelKey ? translate(labelKey).toLowerCase() : color);
+  }
   return parts.join(", ");
 }
 
 export default function AdminMenuPage() {
+  const t = useT();
   const [cfg, setCfg] = useState<MenuConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -153,7 +170,7 @@ export default function AdminMenuPage() {
     menuAdminApi
       .get()
       .then(setCfg)
-      .catch((e) => setError(e instanceof ApiError ? e.detail : "Ошибка загрузки"))
+      .catch((e) => setError(e instanceof ApiError ? e.detail : translate("adm.menu.err_load")))
       .finally(() => setLoading(false));
   }, []);
 
@@ -227,7 +244,9 @@ export default function AdminMenuPage() {
               value={text}
               onChange={(e) => setText(key, e.target.value)}
               placeholder={
-                cfg?.defaults?.[key] ? `По умолчанию: ${cfg.defaults[key]}` : "Подпись по умолчанию"
+                cfg?.defaults?.[key]
+                  ? t("adm.menu.text_default_ph", { text: cfg.defaults[key] })
+                  : t("adm.menu.text_ph")
               }
               className="w-full rounded-lg border border-[var(--border)] bg-bg px-2.5 py-1.5 text-sm text-fg outline-none focus:border-accent"
             />
@@ -237,7 +256,7 @@ export default function AdminMenuPage() {
           </div>
           <button
             type="button"
-            aria-label="Добавить эмодзи"
+            aria-label={t("adm.menu.add_emoji")}
             onClick={() => setEmojiFor((c) => (c === key ? null : key))}
             className={clsx(
               "shrink-0 rounded-lg border p-1.5 transition-colors",
@@ -254,11 +273,11 @@ export default function AdminMenuPage() {
           <div className="space-y-2 rounded-lg border border-[var(--border)] bg-bg p-2">
             <EmojiPicker onPick={(em) => addEmoji(key, em)} disabled={btnLen(text) >= 64} />
             <div className="border-t border-[var(--border)] pt-2">
-              <p className="mb-1.5 text-[11px] font-semibold text-fg-muted">Премиум-эмодзи (Telegram Premium)</p>
+              <p className="mb-1.5 text-[11px] font-semibold text-fg-muted">{t("adm.menu.premium_title")}</p>
               {hasPremiumEmoji(text) ? (
                 <div className="flex items-center justify-between gap-2 text-xs">
-                  <span className="text-success">✓ добавлен · остальные видят fallback</span>
-                  <button type="button" onClick={() => clearPremiumEmoji(key)} className="font-medium text-danger hover:underline">Убрать</button>
+                  <span className="text-success">{t("adm.menu.premium_added")}</span>
+                  <button type="button" onClick={() => clearPremiumEmoji(key)} className="font-medium text-danger hover:underline">{t("adm.menu.premium_remove")}</button>
                 </div>
               ) : (
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -272,12 +291,12 @@ export default function AdminMenuPage() {
                     onClick={() => { addPremiumEmoji(key, premiumId, premiumFb); setPremiumId(""); setPremiumFb(""); }}
                     disabled={!/^\d+$/.test(premiumId)}
                     className="h-7 rounded-md border border-accent bg-accent/10 px-2.5 text-xs font-medium text-accent disabled:opacity-40">
-                    Вставить
+                    {t("adm.menu.insert")}
                   </button>
                 </div>
               )}
               <p className="mt-1 text-[10px] leading-snug text-fg-subtle">
-                emoji-id: перешлите премиум-эмодзи боту @userinfobot. В веб-кабинете и у не-Premium показывается fallback.
+                {t("adm.menu.premium_hint")}
               </p>
             </div>
           </div>
@@ -299,7 +318,7 @@ export default function AdminMenuPage() {
                     : "border-[var(--border)] text-fg-muted hover:text-fg",
                 )}>
                 <span className={`h-2.5 w-2.5 rounded-full ${m.dot}`} />
-                {m.label}
+                {t(m.label)}
               </button>
             );
           })}
@@ -326,7 +345,7 @@ export default function AdminMenuPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : translate("adm.menu.err_save"));
     } finally {
       setSaving(false);
     }
@@ -345,7 +364,7 @@ export default function AdminMenuPage() {
       <div className="sticky top-0 z-10 -mx-5 flex items-center justify-between border-b border-border-subtle bg-bg/80 px-5 py-3 backdrop-blur-md md:-mx-8 md:px-8">
         <h1 className="flex items-center gap-2 text-xl font-bold text-fg md:text-2xl">
           <SquareMenu className="h-5 w-5 text-accent" />
-          Меню бота
+          {t("adm.menu.title")}
         </h1>
         <button
           onClick={save}
@@ -353,7 +372,7 @@ export default function AdminMenuPage() {
           className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-accent-fg transition-opacity hover:opacity-90 disabled:opacity-60"
         >
           {saved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
-          {saved ? "Сохранено" : saving ? "Сохранение…" : "Сохранить"}
+          {saved ? t("adm.menu.saved") : saving ? t("adm.menu.saving") : t("adm.menu.save")}
         </button>
       </div>
 
@@ -363,19 +382,17 @@ export default function AdminMenuPage() {
           которая ответит отказом на сохранении, объясняем это одной строкой. */}
       {sup.access_buttons === false && (
         <p className="rounded-xl border border-border-subtle bg-bg-subtle px-4 py-3 text-xs leading-relaxed text-fg-muted">
-          Главное меню этого бота собрано из его собственных кнопок — наши кнопки
-          доступа в кабинет туда не добавить. Здесь можно менять подписи, эмодзи и
-          цвета его кнопок навигации.
+          {t("adm.menu.foreign_notice")}
         </p>
       )}
 
       {/* Основные кнопки: доступ (кабинет/подключиться, с галочкой и порядком) + навигация (состав фиксирован) */}
       <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
-        <h2 className="text-sm font-semibold text-fg">{sup.access_buttons === false ? "Кнопки бота" : "Основные кнопки"}</h2>
+        <h2 className="text-sm font-semibold text-fg">
+          {sup.access_buttons === false ? t("adm.menu.sec_foreign_title") : t("adm.menu.sec_main_title")}
+        </h2>
         <p className="mb-3 mt-0.5 text-xs text-fg-muted">
-          {sup.access_buttons === false
-            ? "Кнопки навигации этого бота. Состав задаёт он сам, а подписи, эмодзи и цвета меняются здесь — применяется сразу после «Сохранить»."
-            : "Кнопки доступа к кабинету и стандартная навигация — то, чем пользователь пользуется в первую очередь. Доступ можно включать/выключать и менять порядок, навигация фиксирована. Нажмите на кнопку, чтобы изменить текст, эмодзи и цвет — применяется сразу после «Сохранить»."}
+          {sup.access_buttons === false ? t("adm.menu.sec_foreign_hint") : t("adm.menu.sec_main_hint")}
         </p>
 
         {/* Кнопки доступа в кабинет — наши. На чужом боте их некуда поставить,
@@ -403,15 +420,15 @@ export default function AdminMenuPage() {
                     className="h-4 w-4 shrink-0 cursor-pointer accent-[var(--accent)]"
                   />
                   <div className="min-w-0 flex-1">
-                    <span className="text-sm font-semibold text-fg">{meta.title}</span>
-                    <p className="mt-0.5 truncate text-xs text-fg-muted">{meta.desc}</p>
+                    <span className="text-sm font-semibold text-fg">{t(meta.title)}</span>
+                    <p className="mt-0.5 truncate text-xs text-fg-muted">{t(meta.desc)}</p>
                   </div>
                   <div className="flex shrink-0 flex-col gap-1">
                     <button
                       type="button"
                       onClick={() => move(idx, -1)}
                       disabled={idx === 0}
-                      aria-label="Выше"
+                      aria-label={t("adm.menu.move_up")}
                       className="rounded-lg border border-border-subtle p-1 text-fg-muted transition-colors hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-30"
                     >
                       <ChevronUp className="h-3.5 w-3.5" />
@@ -420,7 +437,7 @@ export default function AdminMenuPage() {
                       type="button"
                       onClick={() => move(idx, 1)}
                       disabled={idx === orderKeys.length - 1}
-                      aria-label="Ниже"
+                      aria-label={t("adm.menu.move_down")}
                       className="rounded-lg border border-border-subtle p-1 text-fg-muted transition-colors hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-30"
                     >
                       <ChevronDown className="h-3.5 w-3.5" />
@@ -430,7 +447,7 @@ export default function AdminMenuPage() {
                     <button
                       type="button"
                       onClick={() => toggleExpanded(key)}
-                      aria-label="Текст и цвет"
+                      aria-label={t("adm.menu.edit_style")}
                       className="flex shrink-0 items-center gap-1.5 rounded-lg border border-border-subtle px-2 py-1.5 text-fg-muted transition-colors hover:bg-bg-overlay hover:text-fg"
                     >
                       {summary && <span className="text-[11px] text-fg-subtle">{summary}</span>}
@@ -444,7 +461,7 @@ export default function AdminMenuPage() {
                     {key === "custom_miniapp" && (
                       <div className="mb-3">
                         <label className="mb-1 block text-[11px] font-semibold text-fg-muted">
-                          Ссылка на мини-приложение
+                          {t("adm.menu.custom_url_label")}
                         </label>
                         <input
                           value={cfg.custom_url ?? ""}
@@ -453,10 +470,7 @@ export default function AdminMenuPage() {
                           className="w-full rounded-lg border border-[var(--border)] bg-bg px-2.5 py-1.5 text-sm text-fg outline-none focus:border-accent"
                         />
                         <p className="mt-1 text-[10px] leading-snug text-fg-subtle">
-                          Только https. Ссылка <b>общая для всех пользователей</b> — не вставляйте
-                          сюда свою личную ссылку подписки. Пустое поле = кнопки не будет, даже
-                          если галочка стоит. Адрес на t.me откроется обычной ссылкой (Telegram
-                          не пускает мини-приложения по t.me).
+                          {withBold(t("adm.menu.custom_url_hint"))}
                         </p>
                       </div>
                     )}
@@ -473,7 +487,7 @@ export default function AdminMenuPage() {
         {/* «Подарить подписку» — тоже наша механика: у чужого бота её нет. */}
         {sup.gift !== false && (<>
         <p className="mb-1 mt-4 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">
-          Подарки
+          {t("adm.menu.gifts")}
         </p>
         <div className="space-y-1.5">
           {(() => {
@@ -490,16 +504,16 @@ export default function AdminMenuPage() {
                     className="h-4 w-4 shrink-0 cursor-pointer accent-[var(--accent)]"
                   />
                   <div className="min-w-0 flex-1">
-                    <span className="text-sm font-semibold text-fg">Подарить подписку</span>
+                    <span className="text-sm font-semibold text-fg">{t("adm.menu.gift_title")}</span>
                     <p className="mt-0.5 truncate text-xs text-fg-muted">
-                      Открывает выбор тарифа прямо в боте. То же самое доступно командой /gift.
+                      {t("adm.menu.gift_desc")}
                     </p>
                   </div>
                   {on && (
                     <button
                       type="button"
                       onClick={() => toggleExpanded("gift")}
-                      aria-label="Текст и цвет"
+                      aria-label={t("adm.menu.edit_style")}
                       className="flex shrink-0 items-center gap-1.5 rounded-lg border border-border-subtle px-2 py-1.5 text-fg-muted transition-colors hover:bg-bg-overlay hover:text-fg"
                     >
                       {summary && <span className="text-[11px] text-fg-subtle">{summary}</span>}
@@ -517,13 +531,14 @@ export default function AdminMenuPage() {
         </>)}
 
         <p className="mb-1 mt-4 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">
-          Навигация
+          {t("adm.menu.nav_heading")}
         </p>
         <div className="space-y-1.5">
           {/* Кнопки берём у бэкенда, если он их прислал: у чужого бота меню своё
               (Личный кабинет, Баланс, Партнёрка…), и показывать вместо него наши
               названия — заставлять человека править несуществующие кнопки. */}
-          {(cfg.nav_items?.map((it) => ({ key: it.key, title: it.label })) ?? NAV_META).map((n) => {
+          {(cfg.nav_items?.map((it) => ({ key: it.key, title: it.label, raw: true })) ??
+            NAV_META.map((n) => ({ ...n, raw: false }))).map((n) => {
             const isOpen = expanded === n.key;
             const summary = summaryLabel(cfg.texts?.[n.key] ?? "", cfg.colors?.[n.key] ?? "");
             return (
@@ -533,7 +548,9 @@ export default function AdminMenuPage() {
                   onClick={() => toggleExpanded(n.key)}
                   className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
                 >
-                  <span className="min-w-0 flex-1 truncate text-sm font-semibold text-fg">{n.title}</span>
+                  <span className="min-w-0 flex-1 truncate text-sm font-semibold text-fg">
+                    {n.raw ? n.title : t(n.title)}
+                  </span>
                   {summary && <span className="shrink-0 text-[11px] text-fg-subtle">{summary}</span>}
                   <ChevronDown className={clsx("h-4 w-4 shrink-0 text-fg-muted transition-transform", isOpen && "rotate-180")} />
                 </button>
@@ -548,10 +565,7 @@ export default function AdminMenuPage() {
         </div>
 
         <p className="mt-4 text-xs text-fg-subtle">
-          Порядок и состав кнопок доступа действуют только при включённом
-          веб-кабинете. Если выключить все — в меню останутся только базовые
-          разделы навигации. Когда веб-кабинет выключен, показывается
-          стандартная кнопка подписки Remnawave.
+          {t("adm.menu.footer_note")}
         </p>
       </section>
 
@@ -563,6 +577,7 @@ export default function AdminMenuPage() {
 // ── Основные кнопки бота (авторская задумка: settings.menu.buttons[]) ──────
 
 function BotButtonColors() {
+  const t = useT();
   const [buttons, setButtons] = useState<BotButton[]>([]);
   const [colors, setColors] = useState<Record<number, string>>({}); // index → "" | primary…
   const [texts, setTexts] = useState<Record<number, string>>({}); // index → текст кнопки
@@ -583,7 +598,7 @@ function BotButtonColors() {
         setColors(Object.fromEntries(r.buttons.map((b) => [b.index, b.color ?? ""])));
         setTexts(Object.fromEntries(r.buttons.map((b) => [b.index, b.text ?? ""])));
       })
-      .catch((e) => setErr(e instanceof ApiError ? e.detail : "Ошибка"))
+      .catch((e) => setErr(e instanceof ApiError ? e.detail : translate("adm.menu.err_generic")))
       .finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, []);
@@ -627,7 +642,7 @@ function BotButtonColors() {
       setButtons(r.buttons);
       setTexts(Object.fromEntries(r.buttons.map((b) => [b.index, b.text ?? ""])));
       setSaved(true); setTimeout(() => setSaved(false), 2000);
-    } catch (e) { setErr(e instanceof ApiError ? e.detail : "Ошибка"); }
+    } catch (e) { setErr(e instanceof ApiError ? e.detail : translate("adm.menu.err_generic")); }
     finally { setSaving(false); }
   };
 
@@ -641,16 +656,15 @@ function BotButtonColors() {
   return (
     <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
       <div className="mb-1 flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-fg">Дополнительные кнопки</h2>
+        <h2 className="text-sm font-semibold text-fg">{t("adm.menu.extra_title")}</h2>
         <button onClick={save} disabled={saving}
           className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg hover:opacity-90 disabled:opacity-60">
           {saved ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
-          {saved ? "Сохранено" : saving ? "…" : "Сохранить"}
+          {saved ? t("adm.menu.saved") : saving ? "…" : t("adm.menu.save")}
         </button>
       </div>
       <p className="mb-3 text-xs text-fg-muted">
-        Ваши дополнительные кнопки в меню бота (1–6): реклама, соглашения, свои
-        разделы. Нажмите на кнопку, чтобы изменить текст, эмодзи и цвет.
+        {t("adm.menu.extra_hint")}
       </p>
       {err && <p className="mb-2 text-xs text-danger">{err}</p>}
       <div className="space-y-1.5">
@@ -669,7 +683,7 @@ function BotButtonColors() {
               >
                 <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${m.dot}`} />
                 <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">
-                  {text || `Кнопка ${b.index}`}
+                  {text || t("adm.menu.button_n", { n: b.index })}
                 </span>
                 <ChevronDown className={clsx("h-4 w-4 shrink-0 text-fg-muted transition-transform", isOpen && "rotate-180")} />
               </button>
@@ -682,7 +696,7 @@ function BotButtonColors() {
                       <input
                         value={text}
                         onChange={(e) => setBtnText(b.index, e.target.value)}
-                        placeholder={`Кнопка ${b.index}`}
+                        placeholder={t("adm.menu.button_n", { n: b.index })}
                         className="w-full rounded-lg border border-[var(--border)] bg-bg-subtle px-2.5 py-1.5 text-sm text-fg outline-none focus:border-accent"
                       />
                       <span className="pointer-events-none absolute right-2 text-[10px] tabular-nums text-fg-subtle">
@@ -691,7 +705,7 @@ function BotButtonColors() {
                     </div>
                     <button
                       type="button"
-                      aria-label="Добавить эмодзи"
+                      aria-label={t("adm.menu.add_emoji")}
                       onClick={() => setEmojiOpen((v) => !v)}
                       className={clsx(
                         "shrink-0 rounded-lg border p-1.5 transition-colors",
@@ -708,11 +722,11 @@ function BotButtonColors() {
                     <div className="mt-2 space-y-2 rounded-lg border border-[var(--border)] bg-bg-subtle p-2">
                       <EmojiPicker onPick={(em) => addEmoji(b.index, em)} disabled={len >= 32} />
                       <div className="border-t border-[var(--border)] pt-2">
-                        <p className="mb-1.5 text-[11px] font-semibold text-fg-muted">Премиум-эмодзи (Telegram Premium)</p>
+                        <p className="mb-1.5 text-[11px] font-semibold text-fg-muted">{t("adm.menu.premium_title")}</p>
                         {hasPremiumEmoji(text) ? (
                           <div className="flex items-center justify-between gap-2 text-xs">
-                            <span className="text-success">✓ добавлен · остальные видят fallback</span>
-                            <button type="button" onClick={() => clearPremium(b.index)} className="font-medium text-danger hover:underline">Убрать</button>
+                            <span className="text-success">{t("adm.menu.premium_added")}</span>
+                            <button type="button" onClick={() => clearPremium(b.index)} className="font-medium text-danger hover:underline">{t("adm.menu.premium_remove")}</button>
                           </div>
                         ) : (
                           <div className="flex flex-wrap items-center gap-1.5">
@@ -724,12 +738,12 @@ function BotButtonColors() {
                               className="h-7 w-20 rounded-md border border-[var(--border)] bg-bg px-2 text-xs text-fg outline-none focus:border-accent" />
                             <button type="button" onClick={() => addPremium(b.index)} disabled={!/^\d+$/.test(premiumId)}
                               className="h-7 rounded-md border border-accent bg-accent/10 px-2.5 text-xs font-medium text-accent disabled:opacity-40">
-                              Вставить
+                              {t("adm.menu.insert")}
                             </button>
                           </div>
                         )}
                         <p className="mt-1 text-[10px] leading-snug text-fg-subtle">
-                          emoji-id: перешлите премиум-эмодзи боту @userinfobot. В веб-кабинете и у не-Premium — fallback.
+                          {t("adm.menu.premium_hint_short")}
                         </p>
                       </div>
                     </div>
@@ -749,7 +763,7 @@ function BotButtonColors() {
                               : "border-[var(--border)] text-fg-muted hover:text-fg",
                           )}>
                           <span className={`h-2.5 w-2.5 rounded-full ${cm.dot}`} />
-                          {cm.label}
+                          {t(cm.label)}
                         </button>
                       );
                     })}

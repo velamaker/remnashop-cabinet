@@ -315,7 +315,19 @@ async def get_current_subscription(
     if not current_subscription:
         return None
 
-    remna_user = await remnawave.get_user_by_uuid(current_subscription.user_remna_id)
+    # Панель моргнула — это НЕ «подписки нет». Раньше исключение отсюда доезжало до
+    # кабинета пятисоткой, а кабинет трактует неудачу как отсутствие подписки: платящий
+    # человек видел «подписки нет» в момент, когда у него всё оплачено. Расход и
+    # последний онлайн живут только в панели, поэтому при её молчании отдаём подписку
+    # без них — ровно так же, как когда панель ответила «пользователя нет».
+    try:
+        remna_user = await remnawave.get_user_by_uuid(current_subscription.user_remna_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            f"/subscription/current: панель не ответила (user_id={user.id}): {exc}. "
+            "Отдаю подписку без данных панели."
+        )
+        remna_user = None
 
     return SubscriptionInfoResponse(
         user_remna_id=str(current_subscription.user_remna_id),

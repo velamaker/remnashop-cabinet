@@ -2,6 +2,10 @@ import { useEffect, useState } from "react";
 import { Save, CheckCircle2, Star, Smartphone, Plus, Trash2, RefreshCw, Link2, Pencil } from "lucide-react";
 import { appsAdminApi, type CustomApp, type ManualLinks, type AppLinkMetaMap } from "@/api/apps";
 import { APPS, PLATFORMS, DEFAULT_PRIORITY } from "@/data/apps";
+import { useI18n } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
+import { activeLocale } from "@/lib/format";
+import { pluralFor } from "@/lib/pluralRu";
 import { ApiError } from "@/types/api";
 
 const APP_NAME: Record<string, string> = Object.fromEntries(APPS.map((a) => [a.id, a.name]));
@@ -16,6 +20,7 @@ const RECOMMENDED_LINKS_SOURCE =
   "https://raw.githubusercontent.com/remnawave/subscription-page/main/frontend/public/assets/app-config.json";
 
 export default function AdminAppsPage() {
+  const { lang, t } = useI18n();
   const [enabled, setEnabled] = useState<Set<string>>(new Set());
   const [priority, setPriority] = useState<string | null>(null);
   const [custom, setCustom] = useState<CustomApp[]>([]);
@@ -52,7 +57,7 @@ export default function AdminAppsPage() {
         setLinkMeta(cfg.link_meta ?? {});
         setLinkMissing(cfg.link_missing ?? []);
       })
-      .catch((e) => setError(e instanceof ApiError ? e.detail : "Ошибка загрузки"))
+      .catch((e) => setError(e instanceof ApiError ? e.detail : translate("adm.apps.err_load")))
       .finally(() => setLoading(false));
   }, []);
 
@@ -64,8 +69,12 @@ export default function AdminAppsPage() {
       const r = await appsAdminApi.refreshLinks(linksSourceUrl.trim() || undefined);
       setLinksUpdatedAt(r.updated_at);
       setLinkMissing(r.missing ?? []);
-      let msg = `Обновлено ссылок для ${r.count} приложений: ${r.apps.join(", ")}`;
-      if (r.missing && r.missing.length > 0) msg += ` · без рабочей ссылки: ${r.missing.join(", ")}`;
+      let msg = t(
+        pluralFor(lang, r.count, "adm.apps.refreshed_one", "adm.apps.refreshed_few", "adm.apps.refreshed_many"),
+        { n: r.count, apps: r.apps.join(", ") },
+      );
+      if (r.missing && r.missing.length > 0)
+        msg += ` · ${t("adm.apps.refresh_missing", { list: r.missing.join(", ") })}`;
       setRefreshMsg(msg);
       // Перечитываем конфиг, чтобы обновить таблицу статуса (link_meta/version).
       appsAdminApi.get().then((cfg) => {
@@ -73,7 +82,7 @@ export default function AdminAppsPage() {
         setLinkMissing(cfg.link_missing ?? []);
       }).catch(() => {});
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Не удалось обновить ссылки");
+      setError(e instanceof ApiError ? e.detail : t("adm.apps.err_refresh"));
     } finally {
       setRefreshing(false);
     }
@@ -88,7 +97,7 @@ export default function AdminAppsPage() {
   const addCustom = () => {
     const name = draft.name.trim();
     const deep = draft.deep_link.trim();
-    if (!name || !deep) { setError("Укажите название и deep-link (со вставкой {sub})"); return; }
+    if (!name || !deep) { setError(t("adm.apps.err_custom_required")); return; }
     setError(null);
     setCustom((prev) => [
       ...prev,
@@ -110,7 +119,7 @@ export default function AdminAppsPage() {
     const app = mlApp.trim().toLowerCase();
     const url = mlUrl.trim();
     if (!app || !mlPlatform || !/^https?:\/\//.test(url)) {
-      setError("Выберите приложение, платформу и корректную ссылку (http/https)");
+      setError(t("adm.apps.err_manual_invalid"));
       return;
     }
     setError(null);
@@ -190,7 +199,7 @@ export default function AdminAppsPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.apps.err_save"));
     } finally {
       setSaving(false);
     }
@@ -211,7 +220,7 @@ export default function AdminAppsPage() {
       <div className="sticky top-0 z-10 -mx-5 flex items-center justify-between border-b border-border-subtle bg-bg/80 px-5 py-3 backdrop-blur-md md:-mx-8 md:px-8">
         <h1 className="flex items-center gap-2 text-xl font-bold text-fg md:text-2xl">
           <Smartphone className="h-5 w-5 text-accent" />
-          Приложения
+          {t("adm.apps.title")}
         </h1>
         <button
           onClick={save}
@@ -219,16 +228,11 @@ export default function AdminAppsPage() {
           className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-accent-fg transition-opacity hover:opacity-90 disabled:opacity-60"
         >
           {saved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
-          {saved ? "Сохранено" : saving ? "Сохранение…" : "Сохранить"}
+          {saved ? t("adm.apps.saved") : saving ? t("adm.apps.saving") : t("adm.apps.save")}
         </button>
       </div>
 
-      <p className="text-sm text-fg-muted">
-        Отметьте приложения, которые показывать пользователям на странице
-        «Подключить устройство». Звёздочкой выберите{" "}
-        <span className="text-fg">приоритетное</span> — оно встанет первым и с
-        пометкой «Рекомендуем».
-      </p>
+      <p className="text-sm text-fg-muted">{t("adm.apps.intro")}</p>
 
       {error && <p className="text-sm text-danger">{error}</p>}
 
@@ -257,12 +261,12 @@ export default function AdminAppsPage() {
                     {isPriority && (
                       <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-accent/30 bg-accent-subtle px-2 py-0.5 text-[10px] font-medium text-accent">
                         <Star className="h-3 w-3" />
-                        Рекомендуем
+                        {t("adm.apps.recommended")}
                       </span>
                     )}
                   </div>
                   <p className="mt-0.5 truncate text-xs text-fg-muted">
-                    {app.desc} · {app.platforms.join(", ")}
+                    {t(app.desc)} · {app.platforms.join(", ")}
                   </p>
                 </div>
               </label>
@@ -272,7 +276,7 @@ export default function AdminAppsPage() {
                 type="button"
                 onClick={() => on && setPriority(app.id)}
                 disabled={!on}
-                title={on ? "Сделать приоритетным" : "Сначала включите приложение"}
+                title={on ? t("adm.apps.make_priority") : t("adm.apps.enable_first")}
                 className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg border transition-colors ${
                   isPriority
                     ? "border-accent bg-accent-subtle text-accent"
@@ -286,24 +290,15 @@ export default function AdminAppsPage() {
         })}
       </div>
 
-      <p className="text-xs text-fg-subtle">
-        Если не отмечено ни одно приложение, у пользователей будет пусто — оставьте
-        хотя бы одно.
-      </p>
+      <p className="text-xs text-fg-subtle">{t("adm.apps.none_hint")}</p>
 
       {/* Авто-подтяжка ссылок установки */}
       <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
         <h2 className="flex items-center gap-2 text-sm font-semibold text-fg">
           <Link2 className="h-4 w-4 text-accent" />
-          Актуальные ссылки установки
+          {t("adm.apps.links_title")}
         </h2>
-        <p className="mt-0.5 text-xs text-fg-muted">
-          Ссылки на скачивание (особенно iOS App Store) меняются при переиздании
-          приложения в сторе. Источник <span className="font-mono">app-config.json</span>{" "}
-          от Remnawave подтягивается автоматически (раз в сутки) и заменяет устаревшие
-          встроенные ссылки по совпадающим приложениям (Happ, Streisand, Shadowrocket
-          и др.). По умолчанию — официальный репозиторий Remnawave; можно указать свой.
-        </p>
+        <p className="mt-0.5 text-xs text-fg-muted">{t("adm.apps.links_hint")}</p>
 
         <div className="mt-4 flex flex-col gap-2 sm:flex-row">
           <input
@@ -319,14 +314,14 @@ export default function AdminAppsPage() {
             className="inline-flex items-center justify-center gap-2 rounded-xl border border-border-subtle bg-bg px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-overlay disabled:opacity-50"
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-            {refreshing ? "Обновление…" : "Обновить сейчас"}
+            {refreshing ? t("adm.apps.refreshing") : t("adm.apps.refresh_now")}
           </button>
         </div>
 
         <p className="mt-2 text-xs text-fg-subtle">
           {linksUpdatedAt
-            ? `Ссылки обновлены: ${new Date(linksUpdatedAt).toLocaleString("ru")}`
-            : "Ссылки ещё не подтягивались — сохраните URL и нажмите «Обновить сейчас»."}
+            ? t("adm.apps.links_updated", { date: new Date(linksUpdatedAt).toLocaleString(activeLocale()) })
+            : t("adm.apps.links_never")}
         </p>
         {refreshMsg && <p className="mt-1 text-xs text-success">{refreshMsg}</p>}
 
@@ -336,11 +331,11 @@ export default function AdminAppsPage() {
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-left text-fg-muted">
-                  <th className="py-1 pr-3 font-medium">Приложение</th>
-                  <th className="py-1 pr-3 font-medium">Платформа</th>
-                  <th className="py-1 pr-3 font-medium">Версия</th>
-                  <th className="py-1 pr-3 font-medium">Источник</th>
-                  <th className="py-1 font-medium">Статус</th>
+                  <th className="py-1 pr-3 font-medium">{t("adm.apps.col_app")}</th>
+                  <th className="py-1 pr-3 font-medium">{t("adm.apps.col_platform")}</th>
+                  <th className="py-1 pr-3 font-medium">{t("adm.apps.col_version")}</th>
+                  <th className="py-1 pr-3 font-medium">{t("adm.apps.col_source")}</th>
+                  <th className="py-1 font-medium">{t("adm.apps.col_status")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -351,20 +346,15 @@ export default function AdminAppsPage() {
                     <td className="py-1 pr-3 font-mono text-fg-muted">{r.version || "—"}</td>
                     <td className="py-1 pr-3 font-mono text-fg-subtle">{r.source || "—"}</td>
                     <td className="py-1">
-                      {r.status === "ok" && <span className="text-success">🟢 родной стор</span>}
-                      {r.status === "degraded" && <span className="text-warning">🟡 не в родном сторе</span>}
-                      {r.status === "missing" && <span className="text-danger">🔴 нет ссылки</span>}
+                      {r.status === "ok" && <span className="text-success">{t("adm.apps.st_ok")}</span>}
+                      {r.status === "degraded" && <span className="text-warning">{t("adm.apps.st_degraded")}</span>}
+                      {r.status === "missing" && <span className="text-danger">{t("adm.apps.st_missing")}</span>}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            <p className="mt-2 text-xs text-fg-subtle">
-              🟡 приложение снято из родного (RU) стора — открыть можно только Apple ID
-              того региона. 🔴 рабочая ссылка не найдена ни одним резолвером — замените
-              вручную ниже. При новой деградации/смерти основной ссылки бот присылает
-              владельцу уведомление.
-            </p>
+            <p className="mt-2 text-xs text-fg-subtle">{t("adm.apps.links_legend")}</p>
           </div>
         )}
       </section>
@@ -373,20 +363,17 @@ export default function AdminAppsPage() {
       <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
         <h2 className="flex items-center gap-2 text-sm font-semibold text-fg">
           <Pencil className="h-4 w-4 text-accent" />
-          Заменить ссылку вручную
+          {t("adm.apps.manual_title")}
         </h2>
-        <p className="mt-0.5 text-xs text-fg-muted">
-          Ручная ссылка <span className="text-fg">побеждает</span> авто-подтяжку и
-          снимает пометку «недоступно». Пригодится, когда приложение вернулось в
-          стор под новой ссылкой (напр. Happ снова в RU App Store) — вставьте её здесь.
-        </p>
+        <p className="mt-0.5 text-xs text-fg-muted">{t("adm.apps.manual_hint")}</p>
 
         {degradedRows.length > 0 && (
           <div className="mt-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-fg">
-            Сейчас недоступны в родном сторе (стоит заменить):{" "}
-            <span className="font-medium">
-              {degradedRows.map((r) => `${APP_NAME[r.app] || r.app} · ${PLAT_LABEL[r.plat] || r.plat}`).join(", ")}
-            </span>
+            {t("adm.apps.manual_degraded", {
+              list: degradedRows
+                .map((r) => `${APP_NAME[r.app] || r.app} · ${PLAT_LABEL[r.plat] || r.plat}`)
+                .join(", "),
+            })}
           </div>
         )}
 
@@ -436,20 +423,16 @@ export default function AdminAppsPage() {
             onClick={addManual}
             className="inline-flex w-fit items-center gap-1.5 rounded-lg border border-border-subtle bg-bg-subtle px-3 py-1.5 text-sm font-medium text-fg hover:bg-bg-overlay sm:col-span-2"
           >
-            <Plus className="h-4 w-4" /> Добавить / заменить
+            <Plus className="h-4 w-4" /> {t("adm.apps.manual_add")}
           </button>
         </div>
-        <p className="mt-2 text-[11px] text-fg-subtle">Не забудьте «Сохранить» вверху.</p>
+        <p className="mt-2 text-[11px] text-fg-subtle">{t("adm.apps.remember_save")}</p>
       </section>
 
       {/* Свои приложения */}
       <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
-        <h2 className="text-sm font-semibold text-fg">Свои приложения</h2>
-        <p className="mt-0.5 text-xs text-fg-muted">
-          Добавьте собственный клиент. В <span className="text-fg">deep-link</span> вставьте{" "}
-          <span className="text-fg font-mono">{"{sub}"}</span> — туда подставится ссылка подписки
-          (напр. <span className="font-mono">myvpn://add/{"{sub}"}</span>).
-        </p>
+        <h2 className="text-sm font-semibold text-fg">{t("adm.apps.custom_title")}</h2>
+        <p className="mt-0.5 text-xs text-fg-muted">{t("adm.apps.custom_hint")}</p>
 
         {/* Список добавленных */}
         {custom.length > 0 && (
@@ -477,14 +460,14 @@ export default function AdminAppsPage() {
         {/* Форма добавления */}
         <div className="mt-4 space-y-2 rounded-xl border border-border-subtle bg-bg p-4">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <input className="input" placeholder="Название (напр. MyVPN)" value={draft.name}
+            <input className="input" placeholder={t("adm.apps.ph_name")} value={draft.name}
               onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
-            <input className="input" placeholder="Описание (необязательно)" value={draft.desc}
+            <input className="input" placeholder={t("adm.apps.ph_desc")} value={draft.desc}
               onChange={(e) => setDraft({ ...draft, desc: e.target.value })} />
           </div>
           <input className="input font-mono" placeholder="deep-link: myvpn://add/{sub}" value={draft.deep_link}
             onChange={(e) => setDraft({ ...draft, deep_link: e.target.value })} />
-          <input className="input" placeholder="Ссылка установки (необязательно)" value={draft.install_url}
+          <input className="input" placeholder={t("adm.apps.ph_install_url")} value={draft.install_url}
             onChange={(e) => setDraft({ ...draft, install_url: e.target.value })} />
           <div className="flex flex-wrap gap-2 pt-1">
             {PLATFORMS.map((p) => (
@@ -498,15 +481,15 @@ export default function AdminAppsPage() {
               </button>
             ))}
             <span className="self-center text-[11px] text-fg-subtle">
-              {draft.platforms.length ? "" : "не выбрано = все платформы"}
+              {draft.platforms.length ? "" : t("adm.apps.platforms_all_hint")}
             </span>
           </div>
           <button type="button" onClick={addCustom}
             className="inline-flex items-center gap-1.5 rounded-lg border border-border-subtle bg-bg-subtle px-3 py-1.5 text-sm font-medium text-fg hover:bg-bg-overlay">
-            <Plus className="h-4 w-4" /> Добавить приложение
+            <Plus className="h-4 w-4" /> {t("adm.apps.custom_add")}
           </button>
         </div>
-        <p className="mt-2 text-[11px] text-fg-subtle">Не забудьте «Сохранить» вверху.</p>
+        <p className="mt-2 text-[11px] text-fg-subtle">{t("adm.apps.remember_save")}</p>
       </section>
     </div>
   );
