@@ -7,6 +7,7 @@ import {
 } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { useI18n } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
 import { pluralFor } from "@/lib/pluralRu";
 import { formatAdminMoney } from "@/lib/adminMoney";
 
@@ -128,9 +129,11 @@ export function AdminExtraTrafficPage() {
         setForm(res.config);
       })
       .catch((e) =>
-        setError(e instanceof ApiError ? e.detail : t("adm.extratraffic.load_failed")),
+        setError(e instanceof ApiError ? e.detail : translate("adm.extratraffic.load_failed")),
       );
-  }, [t]);
+    // translate, а не t: иначе смена языка перезагружает данные и стирает
+    // несохранённую правку формы.
+  }, []);
 
   const save = async () => {
     if (!form) return;

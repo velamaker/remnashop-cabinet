@@ -27,7 +27,12 @@ vi.mock("@/api/info", async (orig) => ({
   },
 }));
 
-let branding: { appearance: Appearance | null } = { appearance: null };
+// `can` в подделке обязателен: вкладки языков закрыты ДВУМЯ механизмами — токеном
+// нашего бота и признаком возможности, который выключает адаптер чужого бэкенда.
+let branding: { appearance: Appearance | null; can: (k: string) => boolean } = {
+  appearance: null,
+  can: () => true,
+};
 vi.mock("@/contexts/BrandingContext", () => ({ useBranding: () => branding }));
 
 const AdminInfoPage = (await import("./AdminInfoPage")).default;
@@ -76,13 +81,22 @@ beforeEach(() => {
   update.mockImplementation(async (data: Partial<typeof RU>, lang?: string) =>
     answer({ lang: lang ?? "ru", own: lang && lang !== "ru" ? data : {} }),
   );
-  branding = { appearance: newBot() };
+  branding = { appearance: newBot(), can: () => true };
 });
 afterEach(() => cleanup());
 
 describe("редактор «Информации»: языки", () => {
+  it("чужой бэкенд выключил возможность — вкладок нет, даже если бот «умеет»", async () => {
+    // Поверх «Бедолаги» тексты живут в ИХ CMS со своим языком по умолчанию: наш
+    // параметр языка она не знает, и сохранение перевода затёрло бы основной текст.
+    branding = { appearance: newBot(), can: () => false };
+    renderPage();
+    await waitFor(() => expect(screen.getByText(ru("adm.info.tab_faq"))).toBeTruthy());
+    expect(screen.queryByText(ru("adm.info.lang_label"))).toBeNull();
+  });
+
   it("со старым ботом вкладок языков нет вовсе", async () => {
-    branding = { appearance: oldBot() };
+    branding = { appearance: oldBot(), can: () => true };
     renderPage();
     await waitFor(() => expect(screen.getByText(ru("adm.info.tab_faq"))).toBeTruthy());
     expect(screen.queryByText(ru("adm.info.lang_label"))).toBeNull();

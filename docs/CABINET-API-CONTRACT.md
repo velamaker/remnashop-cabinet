@@ -97,7 +97,7 @@
 |---|---|---|---|
 | GET | `/api/info` | Тексты страницы «Информация» (FAQ, правила, оферта, политика, расшифровка статусов) в markdown. `?lang=xx` — перевод с полевым фолбэком на русский | faq[{q,a}], rules, privacy, offer, statuses, lang, translated_langs |
 | GET | `/api/apps` | Конфиг подключения (ConnectGuide): какие приложения показывать, приоритетное, ссылки установки и deep-link с {sub} | priority, enabled[], custom[{id,name,desc,platforms,deep_link,install_url}], link_overrides, link_meta, link_missing, manual_links, links_updated_at |
-| GET | `/api/balance` | Кошелёк и баллы в кабинете | balance, points, point_value_rub, total_spent, total_purchases, autopay_enabled |
+| GET | `/api/balance` | Кошелёк и баллы в кабинете | balance, points, point_value_rub, total_spent, total_purchases, autopay_enabled, autopay_days_before, autopay_price (₽, null — если посчитать нельзя) |
 | GET | `/api/balance/transactions?limit&offset` | История платежей пользователя | total, limit, offset, items[{payment_id,status,gateway_type,gateway_display_name,purchase_type,plan_name,original_amount,discount_percent,final_amount,currency,is_free,is_test,created_at}] |
 | GET | `/api/balance/topup/config` | Условия пополнения баланса: лимиты, бонус, пресеты, доступные шлюзы | enabled, bonus_percent, min_amount, max_amount, presets[], gateways[{gateway_type,name,currency_symbol}] |
 | POST | `/api/balance/topup` | Создать платёж на пополнение | {amount,gateway_type} → {payment_id, payment_url, amount, bonus, total} |

@@ -416,6 +416,11 @@ CASES: list[Case] = [
             "total_spent": F("num", req=False, null=True, unit=RUB),
             "total_purchases": F("int", req=False, null=True),
             "autopay_enabled": F("bool", req=False, null=True),
+            # За сколько дней до конца спишет автопродление и сколько именно.
+            # Кабинет обещает человеку эту сумму словами, поэтому единицы важны:
+            # рубли ЧИСЛОМ, а не копейки и не строка. Старый бот полей не шлёт.
+            "autopay_days_before": F("int", req=False, null=True),
+            "autopay_price": F("num", req=False, null=True, unit=RUB, why="сумма автосписания"),
         },
     ),
     Case(

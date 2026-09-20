@@ -220,11 +220,24 @@ function TopupCard({ onPaid, initial }: { onPaid: () => void; initial?: string }
       .topupConfig()
       .then((c) => {
         setCfg(c);
-        if (c.presets[0]) setAmount(String(c.presets[0]));
+        // Пришли по ссылке «пополнить на столько-то» — сумму НЕ затираем первым
+        // пресетом (раньше именно так и было, и ссылка теряла смысл). Только
+        // подтягиваем её в допустимые границы: иначе кнопка оплаты осталась бы
+        // недоступной, а человек не понял бы почему.
+        if (initial) {
+          const want = Number(initial);
+          if (Number.isFinite(want) && want > 0) {
+            setAmount(String(Math.ceil(Math.min(Math.max(want, c.min_amount), c.max_amount))));
+          } else if (c.presets[0]) {
+            setAmount(String(c.presets[0]));
+          }
+        } else if (c.presets[0]) {
+          setAmount(String(c.presets[0]));
+        }
         if (c.gateways[0]) setGateway(c.gateways[0].gateway_type);
       })
       .catch(() => {});
-  }, []);
+  }, [initial]);
 
   if (!cfg || !cfg.enabled || cfg.gateways.length === 0) return null;
 

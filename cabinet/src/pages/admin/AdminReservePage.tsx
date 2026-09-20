@@ -4,6 +4,7 @@ import { reserveAdminApi, type ReserveGrants } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { formatDate } from "@/lib/format";
 import { useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
 import { ReserveCard } from "./AdminSettingsPage";
 
 // «Резервный доступ истёкшим» — вынесен из «Настроек».
@@ -49,10 +50,12 @@ function ReserveGrantsCard() {
       })
       .catch((e) => {
         if (e instanceof ApiError && (e.status === 404 || e.status === 501)) setHidden(true);
-        else setError(e instanceof ApiError ? e.detail : t("adm.reserve.load_error"));
+        else setError(e instanceof ApiError ? e.detail : translate("adm.reserve.load_error"));
       })
       .finally(() => setLoading(false));
-  }, [t]);
+    // translate, а не t: иначе смена языка перезагружает данные и стирает
+    // несохранённую правку формы.
+  }, []);
 
   useEffect(load, [load]);
 

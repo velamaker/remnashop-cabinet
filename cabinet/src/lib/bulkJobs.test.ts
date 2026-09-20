@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import type { BulkJob } from "@/api/admin";
+import { setActiveLang, translate } from "@/i18n/translate";
 import { compensationText, estimateMinutes, isActive, jobCounters, newRequestId, skippedLines } from "./bulkJobs";
 
 const job = (over: Partial<BulkJob> = {}): BulkJob => ({
@@ -25,12 +26,20 @@ const job = (over: Partial<BulkJob> = {}): BulkJob => ({
   ...over,
 });
 
+// Подписи живут в словаре (ключи adm.bulk.*), а не в коде: сверяемся с тем же
+// словарём по-русски, иначе тест проверял бы копию строки, а не помощника.
+const ru = (key: string, vars: Record<string, string | number> = {}) => translate(key, vars, "ru");
+
+beforeEach(() => {
+  setActiveLang("ru"); // помощники чистые и берут язык модульно
+});
+
 describe("массовые задачи: помощники", () => {
   it("«Не получат» не выводит нулевые категории и подсказывает про галочки", () => {
     expect(skippedLines({ NO_SUBSCRIPTION: 780, EXPIRED: 0, RESERVE: 1, LIMITED: 1, STAFF: 0 })).toEqual([
-      "без подписки — 780",
-      "на резервном доступе (не оплачено) — 1",
-      "исчерпан трафик — 1 (включите галочку выше, чтобы добавить)",
+      ru("adm.bulk.skip_no_subscription", { n: 780 }),
+      ru("adm.bulk.skip_reserve", { n: 1 }),
+      ru("adm.bulk.skip_limited", { n: 1 }),
     ]);
     expect(skippedLines(undefined)).toEqual([]);
   });
@@ -50,15 +59,26 @@ describe("массовые задачи: помощники", () => {
   });
 
   it("счётчики задачи: неизвестные и «проверить вручную» — только когда есть", () => {
-    expect(jobCounters(job())).toBe("добавлено 6 · пропущено 3 · ошибок 1");
+    expect(jobCounters(job())).toBe(
+      [ru("adm.bulk.cnt_applied", { n: 6 }), ru("adm.bulk.cnt_skipped", { n: 3 }), ru("adm.bulk.cnt_failed", { n: 1 })].join(" · "),
+    );
     expect(jobCounters(job({ kind: "message", unknown: 2, verify_flagged: 1 }))).toBe(
-      "доставлено 6 · пропущено 3 · ошибок 1 · неизвестно 2 · проверить вручную: 1",
+      [
+        ru("adm.bulk.cnt_delivered", { n: 6 }),
+        ru("adm.bulk.cnt_skipped", { n: 3 }),
+        ru("adm.bulk.cnt_failed", { n: 1 }),
+        ru("adm.bulk.cnt_unknown", { n: 2 }),
+        ru("adm.bulk.cnt_verify", { n: 1 }),
+      ].join(" · "),
     );
   });
 
-  it("текст компенсации склоняет дни", () => {
-    expect(compensationText(1)).toContain("добавили 1 день к вашей подписке");
-    expect(compensationText(3)).toContain("добавили 3 дня к вашей подписке");
+  it("текст компенсации склоняет дни по языку", () => {
+    const text = (days: string, lang: "ru" | "en") => translate("adm.bulk.compensation", { days }, lang);
+    expect(compensationText(1, "ru")).toBe(text(ru("adm.bulk.days_one", { n: 1 }), "ru"));
+    expect(compensationText(3, "ru")).toBe(text(ru("adm.bulk.days_few", { n: 3 }), "ru"));
+    // По-английски правило другое: «1 day», но «3 days», а не «3 день».
+    expect(compensationText(3, "en")).toBe(text(translate("adm.bulk.days_many", { n: 3 }, "en"), "en"));
   });
 
   it("request_id — uuid и каждый раз новый", () => {

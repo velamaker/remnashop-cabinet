@@ -13,6 +13,7 @@ BACKUP_MAX_AGE_HOURS (порог свежести, 26), BACKUP_MIN_BYTES (мин
 BACKUP_GLOB (маска файлов, backup-*.sql.gz).
 """
 
+import json
 import os
 import time
 from glob import glob

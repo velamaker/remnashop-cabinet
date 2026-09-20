@@ -146,6 +146,14 @@ def _update_translation(body: InfoUpdate, code: str) -> dict[str, Any]:
 async def update_info_admin(
     body: InfoUpdate, _admin: AdminUser, lang: Optional[str] = None
 ) -> dict[str, Any]:
+    # Непонятный код языка — ОТКАЗ, а не «пиши в русский». Иначе опечатка в
+    # параметре («en-US», «eng», «рус») молча перезаписала бы основной текст
+    # переводом, и заметили бы это только читатели.
+    if lang is not None and str(lang).strip() and normalize_lang(lang) is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Непонятный код языка: {lang}. Ожидается двухбуквенный код, например en.",
+        )
     code = normalize_lang(lang) or BASE_LANG
     if code != BASE_LANG:
         return _update_translation(body, code)

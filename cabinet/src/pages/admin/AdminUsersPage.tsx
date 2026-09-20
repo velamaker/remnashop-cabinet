@@ -1471,9 +1471,11 @@ export default function AdminUsersPage() {
   const bulkStarted = useCallback(() => {
     setBulkDialog(null);
     setMessageSource(null);
-    setBulkMsg(t("adm.users.bulk_started"));
+    // translate, а не t: колбэк уходит в зависимости других хуков, и с t они
+    // пересоздавались бы при каждой смене языка.
+    setBulkMsg(translate("adm.users.bulk_started"));
     setJobsRefresh(n => n + 1);
-  }, [t]);
+  }, []);
   // «Не умею» от ручки массовой задачи — пункт исчезает, диалог закрывается.
   const bulkUnsupported = useCallback((key: string) => {
     disable(key);

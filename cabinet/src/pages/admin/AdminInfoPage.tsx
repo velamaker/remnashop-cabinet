@@ -53,11 +53,14 @@ function ownContent(data: AdminInfoResponse): InfoContent {
 
 export default function AdminInfoPage() {
   const t = useT();
-  const { appearance } = useBranding();
+  const { appearance, can } = useBranding();
   // Переводы понимает только бот новее 1.4.6. Со старым бот сохранит присланный
   // текст как РУССКИЙ: вкладки языков там показывать нельзя — одно «Сохранить»
   // подменило бы русскую страницу английской.
-  const canTranslate = botHas(appearance, "info_i18n");
+  // botHas отвечает «да» ЛЮБОМУ чужому бэкенду (у него есть features), поэтому
+  // одного токена мало: поверх «Бедолаги» вкладки закрывает признак возможности,
+  // который их адаптер выключает.
+  const canTranslate = botHas(appearance, "info_i18n") && can("info_i18n");
 
   const [lang, setLang] = useState<string>(BASE_LANG);
   const [content, setContent] = useState<InfoContent | null>(null);

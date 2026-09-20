@@ -152,13 +152,21 @@ async def _alert_admins_balance(message: str, title: str = "⚠️ Продле�
 
 
 class RenewalQuote(NamedTuple):
-    """Во сколько обойдётся продление текущего тарифа и чем платить."""
+    """Во сколько обойдётся продление текущего тарифа и чем платить.
+
+    ВСЁ, что нужно списанию, лежит ЗДЕСЬ. Когда расчёт выносили из денежного пути,
+    `pricing` и `matched` остались за кадром, а тело продолжало их читать — каждое
+    автосписание снимало деньги, падало на NameError и возвращало их обратно, так и
+    не продлив подписку. Поэтому квота отдаёт и расчёт цены, и найденный тариф.
+    """
 
     price: Decimal
     days: int
     gateway: Any
     duration: Any
     current: Any
+    pricing: Any
+    matched: Any
 
 
 async def renewal_quote(
@@ -203,6 +211,8 @@ async def renewal_quote(
         gateway=gateway,
         duration=duration,
         current=current,
+        pricing=pricing,
+        matched=matched,
     )
 
 
@@ -233,6 +243,7 @@ async def renew_current_from_balance(
     if not quote:
         return None
     current, days, duration, gateway = quote.current, quote.days, quote.duration, quote.gateway
+    pricing, matched = quote.pricing, quote.matched
 
     # Срок ДО списания: по нему потом узнаем, выдалась подписка или нет.
     expire_before = getattr(current, "expire_at", None)

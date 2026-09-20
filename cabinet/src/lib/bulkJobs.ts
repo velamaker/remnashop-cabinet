@@ -2,28 +2,31 @@
  * Массовые задачи «Пользователей» («+N дней», «Написать») — чистые помощники.
  *
  * Логика «кому» живёт на бэкенде (services/overlay_bulk.py); здесь только то, как
- * её цифры показать админу. Админка только на русском, поэтому строки — прямо тут.
+ * её цифры показать админу. Строки — из словаря по ключам adm.bulk.*: функции
+ * чистые, поэтому переводит их translate, а не хук.
  */
 import type { BulkJob, BulkJobStatus } from "@/api/admin";
-import { pluralRu } from "@/lib/pluralRu";
+import type { Lang } from "@/i18n/config";
+import { getActiveLang, translate } from "@/i18n/translate";
+import { pluralFor } from "@/lib/pluralRu";
 
-/** Кто не получит дни — порядок и подписи блока «Не получат». */
-export const SKIP_LINES: { key: string; label: string; hint?: string }[] = [
-  { key: "NO_SUBSCRIPTION", label: "без подписки" },
-  { key: "EXPIRED", label: "подписка истекла" },
-  { key: "RESERVE", label: "на резервном доступе (не оплачено)" },
-  { key: "DISABLED", label: "подписка отключена" },
-  { key: "UNLIMITED", label: "бессрочная подписка" },
-  { key: "TRIAL", label: "пробная подписка", hint: "включите галочку выше, чтобы добавить" },
-  { key: "LIMITED", label: "исчерпан трафик", hint: "включите галочку выше, чтобы добавить" },
-  { key: "BLOCKED", label: "заблокированы" },
+/** Кто не получит дни — порядок и ключи подписей блока «Не получат». */
+export const SKIP_LINES: { key: string; label: string }[] = [
+  { key: "NO_SUBSCRIPTION", label: "adm.bulk.skip_no_subscription" },
+  { key: "EXPIRED", label: "adm.bulk.skip_expired" },
+  { key: "RESERVE", label: "adm.bulk.skip_reserve" },
+  { key: "DISABLED", label: "adm.bulk.skip_disabled" },
+  { key: "UNLIMITED", label: "adm.bulk.skip_unlimited" },
+  { key: "TRIAL", label: "adm.bulk.skip_trial" },
+  { key: "LIMITED", label: "adm.bulk.skip_limited" },
+  { key: "BLOCKED", label: "adm.bulk.skip_blocked" },
 ];
 
 /** Строки «Не получат»: нулевые категории не показываем — это шум. */
 export function skippedLines(skipped: Record<string, number> | undefined): string[] {
   if (!skipped) return [];
-  return SKIP_LINES.filter(({ key }) => (skipped[key] ?? 0) > 0).map(({ key, label, hint }) =>
-    hint ? `${label} — ${skipped[key]} (${hint})` : `${label} — ${skipped[key]}`,
+  return SKIP_LINES.filter(({ key }) => (skipped[key] ?? 0) > 0).map(({ key, label }) =>
+    translate(label, { n: skipped[key] ?? 0 }),
   );
 }
 
@@ -36,18 +39,19 @@ export function estimateMinutes(kind: "days" | "message", people: number): numbe
   return Math.max(1, Math.ceil((people * perPerson) / 60));
 }
 
-const STATUS_LABELS: Record<BulkJobStatus, string> = {
-  QUEUED: "в очереди",
-  PROCESSING: "идёт",
-  PAUSED: "на паузе",
-  CANCELING: "останавливается",
-  COMPLETED: "готово",
-  CANCELED: "остановлена",
-  ERROR: "ошибка",
+const STATUS_KEYS: Record<BulkJobStatus, string> = {
+  QUEUED: "adm.bulk.status_queued",
+  PROCESSING: "adm.bulk.status_processing",
+  PAUSED: "adm.bulk.status_paused",
+  CANCELING: "adm.bulk.status_canceling",
+  COMPLETED: "adm.bulk.status_completed",
+  CANCELED: "adm.bulk.status_canceled",
+  ERROR: "adm.bulk.status_error",
 };
 
 export function jobStatusLabel(status: BulkJobStatus): string {
-  return STATUS_LABELS[status] ?? status;
+  const key = STATUS_KEYS[status];
+  return key ? translate(key) : status;
 }
 
 /** Задача ещё может что-то поменять у людей — опрашиваем её прогресс. */
@@ -56,27 +60,30 @@ export function isActive(status: BulkJobStatus): boolean {
 }
 
 export function jobKindLabel(kind: BulkJob["kind"]): string {
-  return kind === "days" ? "Добавление дней" : "Сообщение";
+  return translate(kind === "days" ? "adm.bulk.kind_days" : "adm.bulk.kind_message");
 }
 
 /** «добавлено 20 · пропущено 3 · ошибок 0» с хвостом про неизвестные и ручную проверку. */
 export function jobCounters(job: BulkJob): string {
-  const parts =
-    job.kind === "days"
-      ? [`добавлено ${job.applied}`, `пропущено ${job.skipped}`, `ошибок ${job.failed}`]
-      : [`доставлено ${job.applied}`, `пропущено ${job.skipped}`, `ошибок ${job.failed}`];
-  if (job.unknown > 0) parts.push(`неизвестно ${job.unknown}`);
-  if (job.verify_flagged > 0) parts.push(`проверить вручную: ${job.verify_flagged}`);
+  const parts = [
+    translate(job.kind === "days" ? "adm.bulk.cnt_applied" : "adm.bulk.cnt_delivered", { n: job.applied }),
+    translate("adm.bulk.cnt_skipped", { n: job.skipped }),
+    translate("adm.bulk.cnt_failed", { n: job.failed }),
+  ];
+  if (job.unknown > 0) parts.push(translate("adm.bulk.cnt_unknown", { n: job.unknown }));
+  if (job.verify_flagged > 0) parts.push(translate("adm.bulk.cnt_verify", { n: job.verify_flagged }));
   return parts.join(" · ");
 }
 
 /** Текст компенсации по умолчанию — чтобы не сочинять его в спешке во время простоя. */
-export function compensationText(days: number): string {
-  return (
-    "Приносим извинения за недавние перебои в работе сервиса. В качестве компенсации мы добавили " +
-    `${days} ${pluralRu(days, "день", "дня", "дней")} к вашей подписке — делать ничего не нужно, ` +
-    "срок уже продлён. Спасибо, что остаётесь с нами!"
+export function compensationText(days: number, lang?: Lang): string {
+  const l = lang ?? getActiveLang();
+  const daysLabel = translate(
+    pluralFor(l, days, "adm.bulk.days_one", "adm.bulk.days_few", "adm.bulk.days_many"),
+    { n: days },
+    l,
   );
+  return translate("adm.bulk.compensation", { days: daysLabel }, l);
 }
 
 /** Идентификатор запуска. Один на набор параметров: повтор после обрыва сети уходит
