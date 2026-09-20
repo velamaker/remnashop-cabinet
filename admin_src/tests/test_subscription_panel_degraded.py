@@ -18,8 +18,10 @@ REL = "overlay_patches/public_subscription.py"
 
 
 def _source() -> str:
+    """Исходник правки: в образе он лежит в корне, в репозитории — в admin_src."""
     for base in (
-        Path(__file__).resolve().parents[1],  # admin_src/
+        Path("/opt/remnashop"),  # внутри образа (так гоняет CI)
+        Path(__file__).resolve().parents[1],  # admin_src/ при запуске из репозитория
         Path("/opt/remnashop/admin_src"),
     ):
         path = base / REL
