@@ -397,6 +397,9 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
         {danger.length > 0 && (
         <div className="rounded-xl border border-[var(--border)] p-4">
           <p className="mb-2 text-xs font-semibold text-fg-subtle">{t("adm.users.danger_title")}</p>
+          {/* Без подписки отключать и удалять нечего — говорим это, а не молчим
+              неактивными кнопками: их читают как «удаление пользователя сломалось». */}
+          {!sub && <p className="mb-2 text-xs text-fg-muted">{t("adm.users.danger_no_sub")}</p>}
           <div className="flex flex-wrap gap-2">
             {can("sub.reset-trial") && (
             <button
@@ -411,6 +414,7 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
             <button
               onClick={() => run(() => subscriptionsAdminApi.disable(userId), "disable", "sub.disable")}
               disabled={action !== null || !sub}
+              title={!sub ? t("adm.users.danger_no_sub") : undefined}
               className="flex items-center gap-1 rounded-lg border border-warning/20 bg-warning/8 px-2.5 py-1.5 text-xs text-warning hover:bg-warning/15 disabled:opacity-40 transition-colors"
             >
               <Ban className="h-3 w-3" />{action === "disable" ? "…" : t("adm.users.btn_disable")}
@@ -420,6 +424,7 @@ function SubscriptionPanel({ userId, points, balance, onUpdated }: { userId: num
             <button
               onClick={() => { if (confirm(t("adm.users.confirm_delete_sub"))) run(() => subscriptionsAdminApi.delete(userId), "delete", "sub.delete"); }}
               disabled={action !== null || !sub}
+              title={!sub ? t("adm.users.danger_no_sub") : undefined}
               className="flex items-center gap-1 rounded-lg border border-danger/20 bg-danger/8 px-2.5 py-1.5 text-xs text-danger hover:bg-danger/15 disabled:opacity-40 transition-colors"
             >
               <Trash2 className="h-3 w-3" />{action === "delete" ? "…" : t("adm.users.btn_delete")}
