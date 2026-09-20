@@ -933,7 +933,7 @@ function ReferralsBlock({ userId, onOpenUser }: { userId: number; onOpenUser?: (
 
 // ─── Traffic by node ───────────────────────────────────────────────────────
 
-function fmtBytesRu(n: number): string {
+function fmtBytes(n: number): string {
   if (n >= 1e12) return translate("adm.users.unit_tb", { v: (n / 1e12).toFixed(2) });
   if (n >= 1e9) return translate("adm.users.unit_gb", { v: (n / 1e9).toFixed(1) });
   if (n >= 1e6) return translate("adm.users.unit_mb", { v: (n / 1e6).toFixed(0) });
@@ -966,7 +966,7 @@ function TrafficByNodeBlock({ userId }: { userId: number }) {
       <button onClick={() => setOpen(!open)} className="flex w-full items-center justify-between gap-2 text-xs font-semibold text-fg">
         <span className="flex items-center gap-1.5"><Gauge className="h-3.5 w-3.5 text-accent" />{t("adm.users.traffic_title")}</span>
         <span className="font-normal text-fg-subtle">
-          {data ? t("adm.users.traffic_summary", { v: fmtBytesRu(data.total), n: data.days }) : t("adm.users.loading_lc")}
+          {data ? t("adm.users.traffic_summary", { v: fmtBytes(data.total), n: data.days }) : t("adm.users.loading_lc")}
           <ChevronDown className={`ml-1 inline h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
         </span>
       </button>
@@ -994,7 +994,7 @@ function TrafficByNodeBlock({ userId }: { userId: number }) {
                       <span className="truncate text-fg">
                         {n.country_code && <span className="mr-1 text-fg-muted">{n.country_code}</span>}{n.name}
                       </span>
-                      <span className="flex-shrink-0 font-medium text-fg">{fmtBytesRu(n.total)}</span>
+                      <span className="flex-shrink-0 font-medium text-fg">{fmtBytes(n.total)}</span>
                     </div>
                     <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-bg-subtle">
                       <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
