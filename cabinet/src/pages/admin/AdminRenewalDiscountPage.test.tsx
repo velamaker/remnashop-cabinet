@@ -4,7 +4,12 @@ import { ApiError } from "@/types/api";
 import type { RenewalDiscountConfig, RenewalDiscountPreview, RenewalDiscountStats } from "@/api/admin";
 import { I18nProvider } from "@/i18n/I18nContext";
 import { STORAGE_KEY } from "@/i18n/config";
-import { setActiveLang } from "@/i18n/translate";
+import { setActiveLang, translate } from "@/i18n/translate";
+
+// Подписи страницы — из словаря: сверяем не с русским текстом, а с тем, что даёт
+// перевод. Иначе тест ловил бы правку формулировки, а не поломку страницы.
+const ru = (key: string, vars?: Record<string, string | number>) =>
+  translate(`adm.renewaldiscount.${key}`, vars, "ru");
 
 // Страница «Скидка до окончания подписки». Заперто то, что защищает от раздачи
 // скидок вслепую:
@@ -106,11 +111,15 @@ describe("Скидка до окончания подписки: страниц�
     preview.mockResolvedValue(previewData);
     renderPage();
 
-    expect(screen.getByText(/Ничего не выдаётся и не отправляется/)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Горизонт"), { target: { value: "60" } });
-    fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+    expect(
+      screen.getByText(ru("preview_hint", { days: ru("days_many", { n: 30 }) })),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(ru("horizon")), { target: { value: "60" } });
+    fireEvent.click(screen.getByRole("button", { name: ru("check") }));
 
-    await waitFor(() => expect(screen.getByText(/Осмотрено 3, получат скидку 1/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(ru("summary", { examined: 3, granted: 1 }))).toBeInTheDocument(),
+    );
     expect(preview).toHaveBeenCalledWith(60);
     expect(screen.getByText("ни разу не платил (подарок, промокод, импорт) — 2")).toBeInTheDocument();
     expect(screen.getByText(/Скидка 10% на продление/)).toBeInTheDocument();
@@ -119,29 +128,27 @@ describe("Скидка до окончания подписки: страниц�
   it("«Отозвать» без второго нажатия API не зовёт", async () => {
     revokeActive.mockResolvedValue({ revoked: 2 });
     renderPage();
-    const revoke = await screen.findByRole("button", { name: "Отозвать активные скидки" });
+    const revoke = await screen.findByRole("button", { name: ru("revoke") });
 
     fireEvent.click(revoke);
     expect(revokeActive).not.toHaveBeenCalled();
-    expect(screen.getByText(/Отозвать 2 активные скидки\?/)).toBeInTheDocument();
+    expect(screen.getByText(ru("revoke_confirm_few", { n: 2 }))).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Отмена" }));
+    fireEvent.click(screen.getByRole("button", { name: ru("cancel") }));
     expect(revokeActive).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Отозвать активные скидки" }));
-    fireEvent.click(screen.getByRole("button", { name: "Да, отозвать" }));
+    fireEvent.click(screen.getByRole("button", { name: ru("revoke") }));
+    fireEvent.click(screen.getByRole("button", { name: ru("revoke_yes") }));
     await waitFor(() => expect(revokeActive).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByText("Отозвано: 2")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(ru("revoked", { n: 2 }))).toBeInTheDocument());
   });
 
   it("пример себе прямо говорит, что скидка не выдана", async () => {
     testSend.mockResolvedValue({ telegram: "sent", push: 0 });
     renderPage();
 
-    fireEvent.click(screen.getByRole("button", { name: "Прислать пример себе" }));
-    await waitFor(() =>
-      expect(screen.getByText("Пример отправлен вам в Telegram. Скидка не выдана.")).toBeInTheDocument(),
-    );
+    fireEvent.click(screen.getByRole("button", { name: ru("send_example") }));
+    await waitFor(() => expect(screen.getByText(ru("example_sent"))).toBeInTheDocument());
   });
 
   it("бэкенд без этой механики (501) — блоков нет, ошибок тоже", async () => {
@@ -150,10 +157,12 @@ describe("Скидка до окончания подписки: страниц�
     renderPage();
 
     await new Promise((r) => setTimeout(r, 0));
-    await waitFor(() => expect(screen.queryByText(/Итоги за/)).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByText(ru("stats_title", { days: ru("days_many", { n: 90 }) }))).toBeNull(),
+    );
     expect(screen.queryByText("Не удалось загрузить")).toBeNull();
-    expect(screen.queryByText("Не удалось загрузить итоги")).toBeNull();
+    expect(screen.queryByText(ru("stats_error"))).toBeNull();
     // Заголовок страницы и настройки: карточка настроек скрыта (есть только h1).
-    expect(screen.getAllByText("Скидка до окончания подписки")).toHaveLength(1);
+    expect(screen.getAllByText(ru("title"))).toHaveLength(1);
   });
 });

@@ -8,6 +8,8 @@ import {
 } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { TopupSettingsCard } from "./AdminSettingsPage";
+import { useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
 
 // Раздел «Пополнение баланса» — вынесен из «Настроек» в отдельный пункт панели.
 //
@@ -17,6 +19,7 @@ import { TopupSettingsCard } from "./AdminSettingsPage";
 // поверх чужого бота). У нашего собственного этой ручки нет вовсе — она отвечает
 // 404, карточка не показывается, и раздел выглядит ровно как до этой правки.
 export default function AdminTopupPage() {
+  const t = useT();
   const [data, setData] = useState<TopupMethodsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Сводную карточку рисуем только ПОСЛЕ этого запроса: именно он приносит карту
@@ -35,7 +38,7 @@ export default function AdminTopupPage() {
       // просто не будет. Всё остальное — настоящая ошибка, и о ней надо сказать.
       .catch((e) => {
         if (e instanceof ApiError && (e.status === 404 || e.status === 501)) return;
-        setError(e instanceof ApiError ? e.detail : "Не удалось загрузить способы оплаты");
+        setError(e instanceof ApiError ? e.detail : translate("adm.topup.load_error"));
       })
       .finally(() => setProbed(true));
   }, []);
@@ -44,7 +47,7 @@ export default function AdminTopupPage() {
     <div className="space-y-5">
       <div className="flex items-center gap-2 px-1 pt-1">
         <Coins className="h-[18px] w-[18px] text-accent" />
-        <h1 className="text-lg font-bold text-fg md:text-xl">Пополнение баланса</h1>
+        <h1 className="text-lg font-bold text-fg md:text-xl">{t("adm.topup.title")}</h1>
       </div>
       {probed && <TopupSettingsCard applicability={data?.summary} />}
       {error && (
@@ -71,14 +74,15 @@ const money = (value: number) => String(value);
 const presetsText = (values: number[]) => values.map(money).join(", ");
 
 function StatusBadge({ item }: { item: TopupMethodRules }) {
+  const t = useT();
   // Три состояния, а не два: «выключен» и «включён, но провайдер не настроен» —
   // разные новости. Во втором случае способ включён, а покупатель его всё равно
   // не увидит, и молчать об этом нельзя.
   const [text, cls] = !item.is_active
-    ? ["Выключен", "border-border-subtle bg-bg text-fg-muted"]
+    ? [t("adm.topup.status_off"), "border-border-subtle bg-bg text-fg-muted"]
     : item.is_configured
-      ? ["Включён", "border-success/30 bg-success/10 text-success"]
-      : ["Включён, но не настроен", "border-warning/30 bg-warning/10 text-warning"];
+      ? [t("adm.topup.status_on"), "border-success/30 bg-success/10 text-success"]
+      : [t("adm.topup.status_unconfigured"), "border-warning/30 bg-warning/10 text-warning"];
   return <span className={`shrink-0 rounded-lg border px-2 py-0.5 text-[11px] ${cls}`}>{text}</span>;
 }
 
@@ -89,6 +93,7 @@ function MethodRow({
   item: TopupMethodRules;
   onSaved: (fresh: TopupMethodRules) => void;
 }) {
+  const t = useT();
   // Пустое поле = «как у бота по умолчанию». Именно поэтому в поле кладём пустую
   // строку, когда своего значения нет: цифра в поле читалась бы как своя
   // настройка, и владелец «сохранял» бы умолчание себе в переопределение.
@@ -123,7 +128,7 @@ function MethodRow({
     try {
       apply(await topupMethodsAdminApi.update(item.method_id, body));
     } catch (e) {
-      setErr(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setErr(e instanceof ApiError ? e.detail : t("adm.topup.save_error"));
     } finally {
       setSaving(false);
     }
@@ -145,7 +150,7 @@ function MethodRow({
     if (dirty.min) {
       const value = amount(min);
       if (value === undefined) {
-        setErr("Мин. сумма: нужно число в рублях");
+        setErr(t("adm.topup.err_min"));
         return;
       }
       body.min_amount = value;
@@ -153,7 +158,7 @@ function MethodRow({
     if (dirty.max) {
       const value = amount(max);
       if (value === undefined) {
-        setErr("Макс. сумма: нужно число в рублях");
+        setErr(t("adm.topup.err_max"));
         return;
       }
       body.max_amount = value;
@@ -167,7 +172,7 @@ function MethodRow({
         .filter(Boolean)
         .map(Number);
       if (amounts.some((n) => !Number.isFinite(n))) {
-        setErr("Быстрые суммы: только числа через запятую");
+        setErr(t("adm.topup.err_presets"));
         return;
       }
       body.presets = amounts;
@@ -195,23 +200,23 @@ function MethodRow({
 
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Мин. сумма, ₽</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.topup.min_label")}</label>
           <input
             type="text"
             inputMode="decimal"
             value={min}
-            placeholder={`${money(item.min_default)} (по умолчанию)`}
+            placeholder={t("adm.topup.placeholder_default", { value: money(item.min_default) })}
             onChange={(e) => setMin(e.target.value)}
             className={inputCls}
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Макс. сумма, ₽</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.topup.max_label")}</label>
           <input
             type="text"
             inputMode="decimal"
             value={max}
-            placeholder={`${money(item.max_default)} (по умолчанию)`}
+            placeholder={t("adm.topup.placeholder_default", { value: money(item.max_default) })}
             onChange={(e) => setMax(e.target.value)}
             className={inputCls}
           />
@@ -219,28 +224,27 @@ function MethodRow({
       </div>
 
       <div className="mt-3">
-        <label className="mb-1 block text-xs text-fg-muted">Быстрые суммы, ₽ (через запятую)</label>
+        <label className="mb-1 block text-xs text-fg-muted">{t("adm.topup.presets_label")}</label>
         <input
           type="text"
           value={presets}
-          placeholder={`${presetsText(item.presets_default)} (по умолчанию)`}
+          placeholder={t("adm.topup.placeholder_default", { value: presetsText(item.presets_default) })}
           onChange={(e) => setPresets(e.target.value)}
           className={inputCls}
         />
         <p className="mt-1 text-[11px] leading-snug text-fg-muted">
           {item.presets_custom && item.presets.length === 0
-            ? "Сейчас кнопок нет. "
+            ? t("adm.topup.presets_hint_none")
             : item.presets_custom
-              ? ""
-              : "Сейчас используются кнопки бота по умолчанию. "}
-          Пустое поле — кнопок не будет вовсе; чтобы вернуть кнопки бота, нажмите «По умолчанию».
+              ? t("adm.topup.presets_hint_custom")
+              : t("adm.topup.presets_hint_default")}
         </p>
       </div>
 
       <div className="mt-3 flex items-center justify-between gap-3">
         <span className="text-xs">
           {err && <span className="text-danger">{err}</span>}
-          {saved && !err && <span className="text-success">Сохранено</span>}
+          {saved && !err && <span className="text-success">{t("adm.topup.saved")}</span>}
         </span>
         <div className="flex items-center gap-2">
           {(item.min_custom || item.max_custom || item.presets_custom) && (
@@ -249,7 +253,7 @@ function MethodRow({
               disabled={saving}
               className="inline-flex items-center gap-1.5 rounded-xl border border-border-subtle px-3 py-2 text-sm text-fg-muted hover:bg-bg-subtle disabled:opacity-50"
             >
-              <RotateCcw className="h-3.5 w-3.5" /> По умолчанию
+              <RotateCcw className="h-3.5 w-3.5" /> {t("adm.topup.reset")}
             </button>
           )}
           <button
@@ -257,7 +261,7 @@ function MethodRow({
             disabled={saving || !changed}
             className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50"
           >
-            <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+            <Save className="h-4 w-4" /> {saving ? "…" : t("adm.topup.save")}
           </button>
         </div>
       </div>
@@ -266,6 +270,7 @@ function MethodRow({
 }
 
 function TopupMethodsCard({ data }: { data: TopupMethodsResponse }) {
+  const t = useT();
   const [items, setItems] = useState(data.items);
   const [showAll, setShowAll] = useState(false);
 
@@ -282,10 +287,9 @@ function TopupMethodsCard({ data }: { data: TopupMethodsResponse }) {
   return (
     <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
       <div className="mb-4">
-        <h3 className="text-sm font-semibold text-fg">Правила по способам оплаты</h3>
+        <h3 className="text-sm font-semibold text-fg">{t("adm.topup.methods_title")}</h3>
         <p className="mt-0.5 text-xs text-fg-muted">
-          {data.note ??
-            "Минимум, максимум и быстрые суммы у каждого способа оплаты свои. Это настройки бота — экран правит их напрямую."}
+          {data.note ?? t("adm.topup.methods_note")}
         </p>
         {/* «Правится не отсюда» — один раз над списком, а не в каждой из двух
             десятков строк: повторённая двадцать раз причина перестаёт читаться. */}
@@ -295,7 +299,7 @@ function TopupMethodsCard({ data }: { data: TopupMethodsResponse }) {
       </div>
       <div className="space-y-3">
         {shown.length === 0 && (
-          <p className="text-sm text-fg-muted">Ни один способ оплаты не включён.</p>
+          <p className="text-sm text-fg-muted">{t("adm.topup.empty")}</p>
         )}
         {shown.map((item) => (
           <MethodRow key={item.method_id} item={item} onSaved={onSaved} />
@@ -305,7 +309,9 @@ function TopupMethodsCard({ data }: { data: TopupMethodsResponse }) {
             onClick={() => setShowAll((v) => !v)}
             className="w-full rounded-xl border border-border-subtle px-4 py-2.5 text-sm text-fg-muted hover:bg-bg"
           >
-            {showAll ? "Скрыть выключенные способы" : `Показать выключенные способы (${rest.length})`}
+            {showAll
+              ? t("adm.topup.hide_disabled")
+              : t("adm.topup.show_disabled", { n: rest.length })}
           </button>
         )}
       </div>

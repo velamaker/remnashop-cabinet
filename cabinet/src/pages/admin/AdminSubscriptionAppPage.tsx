@@ -12,6 +12,9 @@ import {
 import { subscriptionAppAdminApi, type SubscriptionAppSettings } from "@/api/admin";
 import { useBranding } from "@/contexts/BrandingContext";
 import { buildHappTheme, cabinetColors } from "@/lib/happTheme";
+import { useI18n, useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
+import { pluralFor } from "@/lib/pluralRu";
 
 // Заголовки, под которые в форме есть отдельные поля. Остальное показываем
 // как произвольные пары ключ/значение (providerId, hide-settings и т.п.).
@@ -33,11 +36,29 @@ const NAMED_KEYS = [
   COLOR_PROFILE,
 ];
 
-const INFO_COLORS: { value: string; label: string }[] = [
-  { value: "blue", label: "Синяя" },
-  { value: "green", label: "Зелёная" },
-  { value: "red", label: "Красная" },
+// В константе — КЛЮЧИ перевода: текст берётся в рендере, иначе подпись
+// застынет на языке первого рендера.
+const INFO_COLORS: { value: string; labelKey: string }[] = [
+  { value: "blue", labelKey: "adm.subapp.color_blue" },
+  { value: "green", labelKey: "adm.subapp.color_green" },
+  { value: "red", labelKey: "adm.subapp.color_red" },
 ];
+
+// Одна фраза — один ключ: чип с deep-link <code>…</code> живёт ВНУТРИ перевода,
+// чтобы предложение не собиралось из кусков.
+function withMarkup(s: string) {
+  return s
+    .split(/(<code>.*?<\/code>)/g)
+    .map((part, i) =>
+      part.startsWith("<code>") ? (
+        <code key={i} className="font-mono">
+          {part.slice(6, -7)}
+        </code>
+      ) : (
+        part
+      ),
+    );
+}
 
 function Switch({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -75,6 +96,8 @@ const inputCls =
 // Раздел «Подписка в приложении»: настройки панели Remnawave, которые Happ читает
 // при импорте ссылки — брендинг, плашки, тема оформления и маршрутизация.
 export default function AdminSubscriptionAppPage() {
+  const t = useT();
+  const { lang } = useI18n();
   const { brandName } = useBranding();
   const [cfg, setCfg] = useState<SubscriptionAppSettings | null>(null);
   const [headers, setHeaders] = useState<Record<string, string>>({});
@@ -93,7 +116,7 @@ export default function AdminSubscriptionAppPage() {
         setHeaders(all);
         setExtra(Object.entries(all).filter(([k]) => !NAMED_KEYS.includes(k)));
       })
-      .catch(() => setError("Не удалось загрузить настройки панели"))
+      .catch(() => setError(translate("adm.subapp.load_error")))
       .finally(() => setLoading(false));
   }, []);
 
@@ -146,7 +169,7 @@ export default function AdminSubscriptionAppPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Не удалось сохранить");
+      setError(e instanceof Error ? e.message : t("adm.subapp.save_error"));
     } finally {
       setSaving(false);
     }
@@ -160,26 +183,34 @@ export default function AdminSubscriptionAppPage() {
     <div className="space-y-5">
       <div className="flex items-center gap-2 px-1 pt-1">
         <Smartphone className="h-[18px] w-[18px] text-accent" />
-        <h1 className="text-lg font-bold text-fg md:text-xl">Подписка в приложении</h1>
+        <h1 className="text-lg font-bold text-fg md:text-xl">{t("adm.subapp.title")}</h1>
       </div>
 
-      <p className="px-1 text-xs text-fg-muted">
-        Панель отдаёт эти поля вместе со ссылкой подписки, а Happ читает их при импорте:
-        название сервиса, объявление, плашку, тему оформления и правила маршрутизации.
-        Изменения приложение подхватит при следующем обновлении подписки (или по кнопке
-        обновления в приложении).
-      </p>
+      <p className="px-1 text-xs text-fg-muted">{t("adm.subapp.intro")}</p>
 
       {loading ? (
-        <p className="px-1 text-sm text-fg-muted">Загрузка…</p>
+        <p className="px-1 text-sm text-fg-muted">{t("adm.subapp.loading")}</p>
       ) : !cfg ? (
-        <p className="px-1 text-sm text-danger">{error ?? "Ошибка"}</p>
+        <p className="px-1 text-sm text-danger">{error ?? t("adm.subapp.error")}</p>
       ) : (
         <>
           <section className="space-y-4 rounded-2xl border border-border-subtle bg-bg-subtle p-5">
-            <h3 className="text-sm font-semibold text-fg">Брендинг</h3>
+            <h3 className="text-sm font-semibold text-fg">{t("adm.subapp.branding")}</h3>
 
-            <Field label="Название сервиса" sub={`Как подписка подписана в приложении. До ${cfg.limits.title} символов.`}>
+            {/* «1 символ / 2 символа / 5 символов»: форму выбирает pluralFor ПО ЯЗЫКУ. */}
+            <Field
+              label={t("adm.subapp.service_name")}
+              sub={t(
+                pluralFor(
+                  lang,
+                  cfg.limits.title,
+                  "adm.subapp.service_name_hint_one",
+                  "adm.subapp.service_name_hint_few",
+                  "adm.subapp.service_name_hint_many",
+                ),
+                { n: cfg.limits.title },
+              )}
+            >
               <div className="flex gap-2">
                 <input
                   className={inputCls}
@@ -194,13 +225,13 @@ export default function AdminSubscriptionAppPage() {
                     onClick={() => patch({ profile_title: brandName.slice(0, cfg.limits.title) })}
                     className="shrink-0 rounded-xl border border-border-subtle px-3 text-xs text-fg-muted transition-colors hover:text-fg"
                   >
-                    Взять бренд
+                    {t("adm.subapp.use_brand")}
                   </button>
                 )}
               </div>
             </Field>
 
-            <Field label="Ссылка поддержки" sub="Иконка поддержки в приложении.">
+            <Field label={t("adm.subapp.support_link")} sub={t("adm.subapp.support_link_hint")}>
               <input
                 className={inputCls}
                 value={cfg.support_link ?? ""}
@@ -210,22 +241,31 @@ export default function AdminSubscriptionAppPage() {
             </Field>
 
             <Field
-              label="Объявление"
-              sub={`Строка под подпиской в приложении: акция, новости, предупреждение. Осталось ${announceLeft} симв.`}
+              label={t("adm.subapp.announce")}
+              sub={t(
+                pluralFor(
+                  lang,
+                  announceLeft,
+                  "adm.subapp.announce_hint_one",
+                  "adm.subapp.announce_hint_few",
+                  "adm.subapp.announce_hint_many",
+                ),
+                { n: announceLeft },
+              )}
             >
               <textarea
                 className={`${inputCls} min-h-[72px] resize-y`}
                 maxLength={cfg.limits.announce}
                 value={cfg.happ_announce ?? ""}
                 onChange={(e) => patch({ happ_announce: e.target.value })}
-                placeholder={`Добро пожаловать в ${brandName}!`}
+                placeholder={t("adm.subapp.announce_placeholder", { brand: brandName })}
               />
             </Field>
 
             <div className="flex items-center justify-between gap-4 rounded-xl bg-bg px-4 py-3">
               <div className="min-w-0">
-                <p className="text-sm font-medium text-fg">Кнопка сайта в приложении</p>
-                <p className="mt-0.5 text-xs text-fg-muted">Открывает страницу подписки из приложения.</p>
+                <p className="text-sm font-medium text-fg">{t("adm.subapp.site_button")}</p>
+                <p className="mt-0.5 text-xs text-fg-muted">{t("adm.subapp.site_button_hint")}</p>
               </div>
               <Switch
                 checked={!!cfg.is_profile_webpage_url_enabled}
@@ -233,7 +273,7 @@ export default function AdminSubscriptionAppPage() {
               />
             </div>
 
-            <Field label="Интервал обновления, часов" sub="Как часто приложение перечитывает подписку.">
+            <Field label={t("adm.subapp.update_interval")} sub={t("adm.subapp.update_interval_hint")}>
               <input
                 type="number"
                 min={1}
@@ -247,26 +287,22 @@ export default function AdminSubscriptionAppPage() {
 
           <section className="space-y-4 rounded-2xl border border-border-subtle bg-bg-subtle p-5">
             <div>
-              <h3 className="text-sm font-semibold text-fg">Плашка в приложении</h3>
-              <p className="mt-0.5 text-xs text-fg-muted">
-                Цветной блок с кнопкой над списком серверов — например «Продлите подписку» со
-                ссылкой в кабинет. Русский текст можно писать как есть: он кодируется
-                автоматически.
-              </p>
+              <h3 className="text-sm font-semibold text-fg">{t("adm.subapp.banner")}</h3>
+              <p className="mt-0.5 text-xs text-fg-muted">{t("adm.subapp.banner_hint")}</p>
             </div>
 
-            <Field label="Текст плашки" sub="Пусто — плашки нет. До 200 символов.">
+            <Field label={t("adm.subapp.banner_text")} sub={t("adm.subapp.banner_text_hint")}>
               <input
                 className={inputCls}
                 maxLength={200}
                 value={headers[SUB_INFO_TEXT] ?? ""}
                 onChange={(e) => setHeader(SUB_INFO_TEXT, e.target.value)}
-                placeholder="Продлите подписку со скидкой"
+                placeholder={t("adm.subapp.banner_text_placeholder")}
               />
             </Field>
 
             <div className="grid gap-4 md:grid-cols-2">
-              <Field label="Цвет плашки">
+              <Field label={t("adm.subapp.banner_color")}>
                 <select
                   className={inputCls}
                   value={headers[SUB_INFO_COLOR] ?? "blue"}
@@ -274,24 +310,24 @@ export default function AdminSubscriptionAppPage() {
                 >
                   {INFO_COLORS.map((c) => (
                     <option key={c.value} value={c.value}>
-                      {c.label}
+                      {t(c.labelKey)}
                     </option>
                   ))}
                 </select>
               </Field>
 
-              <Field label="Текст кнопки" sub="До 25 символов.">
+              <Field label={t("adm.subapp.banner_btn_text")} sub={t("adm.subapp.banner_btn_text_hint")}>
                 <input
                   className={inputCls}
                   maxLength={25}
                   value={headers[SUB_INFO_BTN_TEXT] ?? ""}
                   onChange={(e) => setHeader(SUB_INFO_BTN_TEXT, e.target.value)}
-                  placeholder="Продлить"
+                  placeholder={t("adm.subapp.banner_btn_text_placeholder")}
                 />
               </Field>
             </div>
 
-            <Field label="Ссылка кнопки">
+            <Field label={t("adm.subapp.banner_btn_link")}>
               <input
                 className={inputCls}
                 value={headers[SUB_INFO_BTN_LINK] ?? ""}
@@ -303,19 +339,16 @@ export default function AdminSubscriptionAppPage() {
 
           <section className="space-y-4 rounded-2xl border border-border-subtle bg-bg-subtle p-5">
             <div>
-              <h3 className="text-sm font-semibold text-fg">Окончание подписки</h3>
-              <p className="mt-0.5 text-xs text-fg-muted">
-                Приложение само предупредит пользователя, что подписка заканчивается, и покажет
-                кнопку продления.
-              </p>
+              <h3 className="text-sm font-semibold text-fg">{t("adm.subapp.expire")}</h3>
+              <p className="mt-0.5 text-xs text-fg-muted">{t("adm.subapp.expire_hint")}</p>
             </div>
 
             <div className="flex items-center justify-between gap-4 rounded-xl bg-bg px-4 py-3">
-              <p className="text-sm font-medium text-fg">Предупреждать об окончании</p>
+              <p className="text-sm font-medium text-fg">{t("adm.subapp.expire_toggle")}</p>
               <Switch checked={expireOn} onChange={(v) => setHeader(SUB_EXPIRE, v ? "true" : "")} />
             </div>
 
-            <Field label="Ссылка кнопки продления" sub="Куда ведёт кнопка: страница оплаты в кабинете или бот.">
+            <Field label={t("adm.subapp.expire_link")} sub={t("adm.subapp.expire_link_hint")}>
               <input
                 className={inputCls}
                 value={headers[SUB_EXPIRE_LINK] ?? ""}
@@ -327,11 +360,8 @@ export default function AdminSubscriptionAppPage() {
 
           <section className="space-y-4 rounded-2xl border border-border-subtle bg-bg-subtle p-5">
             <div>
-              <h3 className="text-sm font-semibold text-fg">Тема оформления (iOS)</h3>
-              <p className="mt-0.5 text-xs text-fg-muted">
-                Перекрашивает приложение под ваш бренд: фон, кнопка включения, строки серверов.
-                Работает в Happ на iOS; на других платформах игнорируется.
-              </p>
+              <h3 className="text-sm font-semibold text-fg">{t("adm.subapp.theme")}</h3>
+              <p className="mt-0.5 text-xs text-fg-muted">{t("adm.subapp.theme_hint")}</p>
             </div>
 
             <div className="flex flex-wrap gap-2">
@@ -340,14 +370,14 @@ export default function AdminSubscriptionAppPage() {
                 onClick={generateTheme}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-accent/90"
               >
-                <Palette className="h-4 w-4" /> Собрать из цветов кабинета
+                <Palette className="h-4 w-4" /> {t("adm.subapp.theme_build")}
               </button>
               <button
                 type="button"
                 onClick={() => setHeader(COLOR_PROFILE, "resetcolors")}
                 className="rounded-xl border border-border-subtle px-3 py-2 text-xs font-medium text-fg-muted transition-colors hover:text-fg"
               >
-                Сбросить к стандартной
+                {t("adm.subapp.theme_reset")}
               </button>
               {themeValue && (
                 <button
@@ -355,15 +385,12 @@ export default function AdminSubscriptionAppPage() {
                   onClick={() => setHeader(COLOR_PROFILE, "")}
                   className="rounded-xl border border-border-subtle px-3 py-2 text-xs font-medium text-fg-muted transition-colors hover:text-danger"
                 >
-                  Не отдавать тему
+                  {t("adm.subapp.theme_clear")}
                 </button>
               )}
             </div>
 
-            <Field
-              label="Тема (JSON)"
-              sub="Можно вставить свою: в Happ удерживайте «Theme Design» → отредактируйте → «Экспорт в буфер»."
-            >
+            <Field label={t("adm.subapp.theme_json")} sub={t("adm.subapp.theme_json_hint")}>
               <textarea
                 className={`${inputCls} min-h-[120px] resize-y font-mono text-xs`}
                 value={themeValue}
@@ -375,15 +402,11 @@ export default function AdminSubscriptionAppPage() {
 
           <section className="space-y-4 rounded-2xl border border-border-subtle bg-bg-subtle p-5">
             <div>
-              <h3 className="text-sm font-semibold text-fg">Маршрутизация (routing)</h3>
-              <p className="mt-0.5 text-xs text-fg-muted">
-                Правила, что идёт через VPN, а что напрямую (например российские сайты — мимо
-                туннеля). Вставьте deep-link <code className="font-mono">happ://routing/onadd/…</code>{" "}
-                или ссылку на файл с ним — ссылку мы развернём сами.
-              </p>
+              <h3 className="text-sm font-semibold text-fg">{t("adm.subapp.routing")}</h3>
+              <p className="mt-0.5 text-xs text-fg-muted">{withMarkup(t("adm.subapp.routing_hint"))}</p>
             </div>
 
-            <Field label="Конфиг маршрутизации">
+            <Field label={t("adm.subapp.routing_config")}>
               <textarea
                 className={`${inputCls} min-h-[72px] resize-y break-all font-mono text-xs`}
                 value={cfg.happ_routing ?? ""}
@@ -401,7 +424,7 @@ export default function AdminSubscriptionAppPage() {
                 }}
                 className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-accent/90"
               >
-                Базовый профиль: РФ-сайты напрямую
+                {t("adm.subapp.routing_default")}
               </button>
               {cfg.happ_routing && (
                 <button
@@ -409,7 +432,7 @@ export default function AdminSubscriptionAppPage() {
                   onClick={() => patch({ happ_routing: "" })}
                   className="rounded-xl border border-border-subtle px-3 py-2 text-xs font-medium text-fg-muted transition-colors hover:text-danger"
                 >
-                  Убрать маршрутизацию
+                  {t("adm.subapp.routing_clear")}
                 </button>
               )}
             </div>
@@ -420,18 +443,15 @@ export default function AdminSubscriptionAppPage() {
               rel="noreferrer"
               className="inline-flex items-center gap-1.5 text-xs font-medium text-accent hover:underline"
             >
-              Собрать свои правила в конструкторе Happ Routing Builder
+              {t("adm.subapp.routing_builder")}
               <ExternalLink className="h-3.5 w-3.5" />
             </a>
           </section>
 
           <section className="space-y-4 rounded-2xl border border-border-subtle bg-bg-subtle p-5">
             <div>
-              <h3 className="text-sm font-semibold text-fg">Дополнительные заголовки</h3>
-              <p className="mt-0.5 text-xs text-fg-muted">
-                Для остальных возможностей приложения: <code className="font-mono">providerId</code>{" "}
-                (статистика), <code className="font-mono">hide-settings</code> и т.п.
-              </p>
+              <h3 className="text-sm font-semibold text-fg">{t("adm.subapp.headers")}</h3>
+              <p className="mt-0.5 text-xs text-fg-muted">{withMarkup(t("adm.subapp.headers_hint"))}</p>
             </div>
 
             <div className="space-y-2">
@@ -451,13 +471,13 @@ export default function AdminSubscriptionAppPage() {
                     onChange={(e) =>
                       setExtra((h) => h.map((row, j) => (j === i ? [row[0], e.target.value] : row)))
                     }
-                    placeholder="значение"
+                    placeholder={t("adm.subapp.header_value_placeholder")}
                   />
                   <button
                     type="button"
                     onClick={() => setExtra((h) => h.filter((_, j) => j !== i))}
                     className="shrink-0 rounded-xl border border-border-subtle px-3 text-fg-muted transition-colors hover:text-danger"
-                    aria-label="Удалить заголовок"
+                    aria-label={t("adm.subapp.header_delete")}
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -469,7 +489,7 @@ export default function AdminSubscriptionAppPage() {
                 onClick={() => setExtra((h) => [...h, ["", ""]])}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-border-subtle px-3 py-2 text-xs font-medium text-fg-muted transition-colors hover:text-fg"
               >
-                <Plus className="h-4 w-4" /> Добавить заголовок
+                <Plus className="h-4 w-4" /> {t("adm.subapp.header_add")}
               </button>
             </div>
           </section>
@@ -488,7 +508,7 @@ export default function AdminSubscriptionAppPage() {
               className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent/90 disabled:opacity-60"
             >
               {saved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
-              {saved ? "Сохранено" : saving ? "Сохранение…" : "Сохранить"}
+              {saved ? t("adm.subapp.saved") : saving ? t("adm.subapp.saving") : t("adm.subapp.save")}
             </button>
           </div>
         </>

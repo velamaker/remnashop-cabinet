@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Activity, Save, AlertCircle, CheckCircle2, ShieldCheck } from "lucide-react";
 import { serverStatusAdminApi, type ServerStatusConfig, type AdminPanelNode } from "@/api/admin";
 import { Flag } from "@/components/Flag";
+import { useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
 
 // Тумблер — тот же вид, что в остальных админ-разделах.
 function Switch({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
@@ -54,6 +56,7 @@ function Row({
 
 // Раздел «Статус сервиса» — управление блоком серверов в кабинете пользователя.
 export default function AdminServerStatusPage() {
+  const t = useT();
   const [cfg, setCfg] = useState<ServerStatusConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -71,7 +74,7 @@ export default function AdminServerStatusPage() {
         setCfg(c);
         setManual((c.visible_nodes?.length ?? 0) > 0);
       })
-      .catch(() => setError("Не удалось загрузить"))
+      .catch(() => setError(translate("adm.serverstatus.load_error")))
       .finally(() => setLoading(false));
     serverStatusAdminApi
       .nodes()
@@ -114,7 +117,7 @@ export default function AdminServerStatusPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch {
-      setError("Не удалось сохранить");
+      setError(t("adm.serverstatus.save_error"));
     } finally {
       setSaving(false);
     }
@@ -124,40 +127,37 @@ export default function AdminServerStatusPage() {
     <div className="space-y-5">
       <div className="flex items-center gap-2 px-1 pt-1">
         <Activity className="h-[18px] w-[18px] text-accent" />
-        <h1 className="text-lg font-bold text-fg md:text-xl">Статус сервиса</h1>
+        <h1 className="text-lg font-bold text-fg md:text-xl">{t("adm.serverstatus.title")}</h1>
       </div>
 
       <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
         <div className="mb-4">
-          <h3 className="text-sm font-semibold text-fg">Блок серверов в кабинете</h3>
-          <p className="mt-0.5 text-xs text-fg-muted">
-            Список серверов со статусом онлайн/офлайн на главной кабинета и на публичной
-            странице статуса.
-          </p>
+          <h3 className="text-sm font-semibold text-fg">{t("adm.serverstatus.block_title")}</h3>
+          <p className="mt-0.5 text-xs text-fg-muted">{t("adm.serverstatus.block_hint")}</p>
         </div>
 
         {loading ? (
-          <p className="text-sm text-fg-muted">Загрузка…</p>
+          <p className="text-sm text-fg-muted">{t("adm.serverstatus.loading")}</p>
         ) : !cfg ? (
-          <p className="text-sm text-danger">{error ?? "Ошибка"}</p>
+          <p className="text-sm text-danger">{error ?? t("adm.serverstatus.error")}</p>
         ) : (
           <div className="space-y-2.5">
             <Row
-              label="Показывать блок статуса"
-              sub="Общий переключатель. Выключено — блок скрыт везде, публичный статус ничего не отдаёт."
+              label={t("adm.serverstatus.enabled")}
+              sub={t("adm.serverstatus.enabled_hint")}
               checked={cfg.enabled}
               onChange={(v) => patch({ enabled: v })}
             />
             <Row
-              label="Привязка по подписке"
-              sub="Вошедший пользователь видит только серверы своей подписки (свои сквады), а не все ноды панели."
+              label={t("adm.serverstatus.bind")}
+              sub={t("adm.serverstatus.bind_hint")}
               checked={cfg.bind_to_subscription}
               disabled={!cfg.enabled}
               onChange={(v) => patch({ bind_to_subscription: v })}
             />
             <Row
-              label="Показывать невошедшим"
-              sub="Блок на публичной странице статуса (без входа). Адреса серверов там не раскрываются и пинг не меряется."
+              label={t("adm.serverstatus.guest")}
+              sub={t("adm.serverstatus.guest_hint")}
               checked={cfg.guest_visible}
               disabled={!cfg.enabled}
               onChange={(v) => patch({ guest_visible: v })}
@@ -166,8 +166,8 @@ export default function AdminServerStatusPage() {
             {/* Какие ноды показывать */}
             <div className={`rounded-xl bg-bg px-4 py-3 ${!cfg.enabled ? "opacity-50" : ""}`}>
               <Row
-                label="Показывать все серверы"
-                sub="Выключите, чтобы выбрать вручную, какие ноды видны в статусе (остальные скрыты)."
+                label={t("adm.serverstatus.all_nodes")}
+                sub={t("adm.serverstatus.all_nodes_hint")}
                 checked={showAllNodes}
                 disabled={!cfg.enabled}
                 onChange={(v) => setShowAllNodes(v)}
@@ -176,9 +176,9 @@ export default function AdminServerStatusPage() {
               {!showAllNodes && (
                 <div className="mt-3 border-t border-border-subtle pt-3">
                   {nodes === null ? (
-                    <p className="text-sm text-fg-muted">Загрузка серверов…</p>
+                    <p className="text-sm text-fg-muted">{t("adm.serverstatus.nodes_loading")}</p>
                   ) : nodes.length === 0 ? (
-                    <p className="text-sm text-fg-muted">Ноды не найдены (панель недоступна?).</p>
+                    <p className="text-sm text-fg-muted">{t("adm.serverstatus.nodes_empty")}</p>
                   ) : (
                     <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
                       {nodes.map((n) => {
@@ -201,27 +201,31 @@ export default function AdminServerStatusPage() {
                               className={`h-2 w-2 shrink-0 rounded-full ${
                                 n.disabled ? "bg-border" : n.online ? "bg-success" : "bg-danger"
                               }`}
-                              title={n.disabled ? "Отключена в панели" : n.online ? "Онлайн" : "Офлайн"}
+                              title={
+                                n.disabled
+                                  ? t("adm.serverstatus.node_disabled")
+                                  : n.online
+                                    ? t("adm.serverstatus.node_online")
+                                    : t("adm.serverstatus.node_offline")
+                              }
                             />
                           </label>
                         );
                       })}
                     </div>
                   )}
-                  <p className="mt-2 text-xs text-fg-subtle">
-                    Отмеченные серверы видны в статусе. Отключённые в панели ноды не показываются в любом случае.
-                  </p>
+                  <p className="mt-2 text-xs text-fg-subtle">{t("adm.serverstatus.nodes_hint")}</p>
                 </div>
               )}
             </div>
 
             {/* Сервисные хосты-заглушки */}
             <div className={`rounded-xl bg-bg px-4 py-3 ${!cfg.enabled ? "opacity-50" : ""}`}>
-              <p className="text-sm font-medium text-fg">Сервисные хосты (заглушки)</p>
+              <p className="text-sm font-medium text-fg">{t("adm.serverstatus.service_hosts")}</p>
               <p className="mt-0.5 text-xs text-fg-muted">
-                Слова из названий хостов-заглушек (через запятую): «ПОДПИСКА, Продлите, Оплата, Резерв,
-                Автовыбор». Такие хосты скрыты у активных подписчиков и показываются только тем, у кого
-                подписка кончилась. Пусто — ничего не прячем.
+                {t("adm.serverstatus.service_hosts_hint", {
+                  examples: t("adm.serverstatus.service_hosts_placeholder"),
+                })}
               </p>
               <input
                 value={(cfg.service_keywords ?? []).join(", ")}
@@ -234,18 +238,14 @@ export default function AdminServerStatusPage() {
                       .filter(Boolean),
                   })
                 }
-                placeholder="ПОДПИСКА, Продлите, Оплата, Резерв, Автовыбор"
+                placeholder={t("adm.serverstatus.service_hosts_placeholder")}
                 className="mt-2 w-full rounded-lg border border-border-subtle bg-bg-subtle px-3 py-2 text-sm text-fg outline-none focus:border-accent"
               />
             </div>
 
             <div className="flex items-start gap-2 rounded-xl border border-success/20 bg-success/5 px-4 py-3 text-xs text-fg-muted">
               <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-success" />
-              <span>
-                Приватность: адрес (host) сервера уходит в браузер только вошедшему владельцу —
-                для замера пинга. На публичном статусе адресов нет, поэтому IP серверов не
-                утекает.
-              </span>
+              <span>{t("adm.serverstatus.privacy")}</span>
             </div>
 
             {error && (
@@ -262,7 +262,11 @@ export default function AdminServerStatusPage() {
                 className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent/90 disabled:opacity-60"
               >
                 {saved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
-                {saved ? "Сохранено" : saving ? "Сохранение…" : "Сохранить"}
+                {saved
+                  ? t("adm.serverstatus.saved")
+                  : saving
+                    ? t("adm.serverstatus.saving")
+                    : t("adm.serverstatus.save")}
               </button>
             </div>
           </div>

@@ -10,7 +10,9 @@ import {
 import { ApiError } from "@/types/api";
 import { formatDate } from "@/lib/format";
 import { formatAdminMoney } from "@/lib/adminMoney";
-import { pluralRu, ruDays } from "@/lib/pluralRu";
+import { pluralFor } from "@/lib/pluralRu";
+import { useI18n, useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
 
 // Горизонт предпросмотра и период итогов — короткими списками: админу нужен ответ
 // «что будет в ближайший месяц», а не конструктор дат.
@@ -23,27 +25,54 @@ const BUTTON =
 const SELECT =
   "rounded-xl border border-border-subtle bg-bg px-3 py-2 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
 
+type Translate = (key: string, vars?: Record<string, string | number>) => string;
+
 const errorText = (e: unknown, fallback: string) => (e instanceof ApiError ? e.detail : fallback);
 
+// «7 дней» и «7 days»: форму счётного слова выбирает pluralFor ПО ЯЗЫКУ, сам текст —
+// из словаря. Через pluralRu на английском выходило бы «21 day».
+function daysLabel(t: Translate, lang: string, n: number): string {
+  return t(
+    pluralFor(
+      lang,
+      n,
+      "adm.renewaldiscount.days_one",
+      "adm.renewaldiscount.days_few",
+      "adm.renewaldiscount.days_many",
+    ),
+    { n },
+  );
+}
+
 /** Ответ на «Прислать пример себе». Скидку пример не выдаёт — говорим это явно. */
-function exampleText(telegram: RenewalDiscountTelegramOutcome, push: number): string {
-  const pushNote = push > 0 ? ` Push: ${push}.` : "";
+function exampleKey(telegram: RenewalDiscountTelegramOutcome, push: number): string {
+  const withPush = push > 0;
   switch (telegram) {
     case "sent":
-      return `Пример отправлен вам в Telegram. Скидка не выдана.${pushNote}`;
+      return withPush ? "adm.renewaldiscount.example_sent_push" : "adm.renewaldiscount.example_sent";
     case "no_telegram":
-      return `У вашего аккаунта нет Telegram — отправить пример некуда.${pushNote}`;
+      return withPush
+        ? "adm.renewaldiscount.example_no_telegram_push"
+        : "adm.renewaldiscount.example_no_telegram";
     case "blocked":
-      return `Telegram не доставил пример: бот у вас заблокирован или чата с ним нет. Скидка не выдана.${pushNote}`;
+      return withPush
+        ? "adm.renewaldiscount.example_blocked_push"
+        : "adm.renewaldiscount.example_blocked";
     default:
-      return `Отправить пример в Telegram не удалось. Скидка не выдана.${pushNote}`;
+      return withPush ? "adm.renewaldiscount.example_failed_push" : "adm.renewaldiscount.example_failed";
   }
 }
 
-const CHANNEL_NAMES: Record<string, string> = { telegram: "Telegram", push: "push", email: "письмо" };
+// Подписи каналов — ключами, а не текстом: незнакомый канал печатаем как пришёл.
+const CHANNEL_KEYS: Record<string, string> = {
+  telegram: "adm.renewaldiscount.channel_telegram",
+  push: "adm.renewaldiscount.channel_push",
+  email: "adm.renewaldiscount.channel_email",
+};
 
 /** Холостой прогон и «пример себе»: проверить фичу, не раздав ни одной скидки. */
 function PreviewCard() {
+  const { t, lang } = useI18n();
   const [horizon, setHorizon] = useState(30);
   const [data, setData] = useState<RenewalDiscountPreview | null>(null);
   const [checking, setChecking] = useState(false);
@@ -60,7 +89,7 @@ function PreviewCard() {
     } catch (e) {
       setData(null);
       if (e instanceof ApiError && e.status === 501) setUnsupported(true);
-      else setError(errorText(e, "Не удалось проверить"));
+      else setError(errorText(e, t("adm.renewaldiscount.check_error")));
     } finally {
       setChecking(false);
     }
@@ -71,9 +100,9 @@ function PreviewCard() {
     setExample(null);
     try {
       const res = await renewalDiscountAdminApi.testSend();
-      setExample(exampleText(res.telegram, res.push));
+      setExample(t(exampleKey(res.telegram, res.push), { push: res.push }));
     } catch (e) {
-      setExample(errorText(e, "Не удалось отправить пример"));
+      setExample(errorText(e, t("adm.renewaldiscount.example_error")));
     } finally {
       setSending(false);
     }
@@ -86,15 +115,15 @@ function PreviewCard() {
   return (
     <section className={SECTION}>
       <div className="mb-4">
-        <h3 className="text-sm font-semibold text-fg">Проверка без отправки</h3>
+        <h3 className="text-sm font-semibold text-fg">{t("adm.renewaldiscount.preview_title")}</h3>
         <p className="mt-0.5 text-xs text-fg-muted">
-          Кому выдалась бы скидка в ближайшие {ruDays(horizon)}, если включить сейчас. Ничего не выдаётся и не отправляется.
+          {t("adm.renewaldiscount.preview_hint", { days: daysLabel(t, lang, horizon) })}
         </p>
       </div>
       <div className="flex flex-wrap items-end gap-2">
         <div>
           <label htmlFor="renewal-horizon" className="mb-1 block text-xs text-fg-muted">
-            Горизонт
+            {t("adm.renewaldiscount.horizon")}
           </label>
           <select
             id="renewal-horizon"
@@ -104,16 +133,16 @@ function PreviewCard() {
           >
             {HORIZONS.map((d) => (
               <option key={d} value={d}>
-                {ruDays(d)}
+                {daysLabel(t, lang, d)}
               </option>
             ))}
           </select>
         </div>
         <button onClick={check} disabled={checking} className={BUTTON}>
-          {checking ? "…" : "Проверить"}
+          {checking ? "…" : t("adm.renewaldiscount.check")}
         </button>
         <button onClick={sendExample} disabled={sending} className={BUTTON}>
-          {sending ? "…" : "Прислать пример себе"}
+          {sending ? "…" : t("adm.renewaldiscount.send_example")}
         </button>
       </div>
       {example && <p className="mt-3 text-xs text-fg">{example}</p>}
@@ -121,8 +150,12 @@ function PreviewCard() {
       {data && (
         <div className="mt-4 space-y-3 text-xs text-fg-muted">
           <p className="text-sm text-fg">
-            Осмотрено {data.examined}, получат скидку {data.would_grant}
-            {data.truncated ? " (показана первая часть — кандидатов больше)" : ""}
+            {t(
+              data.truncated
+                ? "adm.renewaldiscount.summary_truncated"
+                : "adm.renewaldiscount.summary",
+              { examined: data.examined, granted: data.would_grant },
+            )}
           </p>
           {Object.keys(data.skipped).length > 0 && (
             <ul className="space-y-0.5">
@@ -140,11 +173,11 @@ function PreviewCard() {
               <table className="w-full text-left">
                 <thead className="text-fg-subtle">
                   <tr>
-                    <th className="py-1 pr-3 font-medium">Кто</th>
-                    <th className="py-1 pr-3 font-medium">Конец подписки</th>
-                    <th className="py-1 pr-3 font-medium">Выдача</th>
-                    <th className="py-1 pr-3 font-medium">Куда</th>
-                    <th className="py-1 font-medium">Итог</th>
+                    <th className="py-1 pr-3 font-medium">{t("adm.renewaldiscount.col_who")}</th>
+                    <th className="py-1 pr-3 font-medium">{t("adm.renewaldiscount.col_expire")}</th>
+                    <th className="py-1 pr-3 font-medium">{t("adm.renewaldiscount.col_grant")}</th>
+                    <th className="py-1 pr-3 font-medium">{t("adm.renewaldiscount.col_channel")}</th>
+                    <th className="py-1 font-medium">{t("adm.renewaldiscount.col_outcome")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -156,11 +189,13 @@ function PreviewCard() {
                       <td className="py-1 pr-3">
                         {Object.entries(row.channels)
                           .filter(([, on]) => on)
-                          .map(([name]) => CHANNEL_NAMES[name] ?? name)
+                          .map(([name]) => (CHANNEL_KEYS[name] ? t(CHANNEL_KEYS[name]) : name))
                           .join(", ") || "—"}
                       </td>
                       <td className={`py-1 ${row.would_grant ? "text-success" : ""}`}>
-                        {row.would_grant ? "получит" : (labels[row.reason ?? ""] ?? row.reason)}
+                        {row.would_grant
+                          ? t("adm.renewaldiscount.outcome_grant")
+                          : (labels[row.reason ?? ""] ?? row.reason)}
                       </td>
                     </tr>
                   ))}
@@ -169,7 +204,7 @@ function PreviewCard() {
             </div>
           )}
           <div>
-            <p className="mb-1 text-fg-subtle">Так выглядит сообщение в Telegram:</p>
+            <p className="mb-1 text-fg-subtle">{t("adm.renewaldiscount.message_preview")}</p>
             <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg bg-bg p-3 text-[11px] leading-relaxed text-fg">
               {data.message.telegram_html.replace(/<[^>]+>/g, "")}
             </pre>
@@ -180,8 +215,19 @@ function PreviewCard() {
   );
 }
 
+// Плитки итогов держат КЛЮЧИ подписей: текст берётся при рендере, по текущему языку.
+const STATS_TILES = [
+  "adm.renewaldiscount.tile_granted",
+  "adm.renewaldiscount.tile_used",
+  "adm.renewaldiscount.tile_paid",
+  "adm.renewaldiscount.tile_given",
+  "adm.renewaldiscount.tile_expired",
+  "adm.renewaldiscount.tile_tg_failed",
+] as const;
+
 /** Итоги и отзыв открытых скидок. */
 function StatsCard() {
+  const { t, lang } = useI18n();
   const [days, setDays] = useState(90);
   const [stats, setStats] = useState<RenewalDiscountStats | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -197,7 +243,8 @@ function StatsCard() {
       .then(setStats)
       .catch((e) => {
         if (e instanceof ApiError && e.status === 501) setUnsupported(true);
-        else setError(errorText(e, "Не удалось загрузить итоги"));
+        // .catch живёт вне рендера — перевод берём модульным translate, не хуком.
+        else setError(errorText(e, translate("adm.renewaldiscount.stats_error")));
       });
   }, [days]);
 
@@ -215,10 +262,10 @@ function StatsCard() {
     setRevoking(true);
     try {
       const res = await renewalDiscountAdminApi.revokeActive();
-      setRevokeMsg(`Отозвано: ${res.revoked}`);
+      setRevokeMsg(t("adm.renewaldiscount.revoked", { n: res.revoked }));
       load();
     } catch (e) {
-      setRevokeMsg(errorText(e, "Не удалось отозвать"));
+      setRevokeMsg(errorText(e, t("adm.renewaldiscount.revoke_error")));
     } finally {
       setRevoking(false);
       setConfirming(false);
@@ -230,23 +277,30 @@ function StatsCard() {
   const active = stats?.active ?? 0;
   const tiles: [string, string | number][] = stats
     ? [
-        ["Выдано", stats.granted],
-        ["Воспользовались", stats.used],
-        ["Оплачено со скидкой, ₽", formatAdminMoney("RUB", stats.paid_rub)],
-        ["Отдано скидкой, ₽", formatAdminMoney("RUB", stats.discount_given_rub)],
-        ["Сгорело без покупки", stats.expired],
-        ["Не доставлено в Telegram", stats.tg_failed],
+        [STATS_TILES[0], stats.granted],
+        [STATS_TILES[1], stats.used],
+        [STATS_TILES[2], formatAdminMoney("RUB", stats.paid_rub)],
+        [STATS_TILES[3], formatAdminMoney("RUB", stats.discount_given_rub)],
+        [STATS_TILES[4], stats.expired],
+        [STATS_TILES[5], stats.tg_failed],
       ]
     : [];
 
   return (
     <section className={SECTION}>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-fg">Итоги за {ruDays(days)}</h3>
-        <select aria-label="Период итогов" value={days} onChange={(e) => setDays(Number(e.target.value))} className={SELECT}>
+        <h3 className="text-sm font-semibold text-fg">
+          {t("adm.renewaldiscount.stats_title", { days: daysLabel(t, lang, days) })}
+        </h3>
+        <select
+          aria-label={t("adm.renewaldiscount.stats_period")}
+          value={days}
+          onChange={(e) => setDays(Number(e.target.value))}
+          className={SELECT}
+        >
           {STATS_PERIODS.map((d) => (
             <option key={d} value={d}>
-              {ruDays(d)}
+              {daysLabel(t, lang, d)}
             </option>
           ))}
         </select>
@@ -255,22 +309,28 @@ function StatsCard() {
       {stats && (
         <>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {tiles.map(([label, value]) => (
-              <div key={label} className="rounded-xl bg-bg px-3 py-2.5">
+            {tiles.map(([key, value]) => (
+              <div key={key} className="rounded-xl bg-bg px-3 py-2.5">
                 <p className="text-lg font-bold text-fg">{value}</p>
-                <p className="text-xs text-fg-muted">{label}</p>
+                <p className="text-xs text-fg-muted">{t(key)}</p>
               </div>
             ))}
           </div>
-          <p className="mt-2 text-xs text-fg-subtle">
-            Считаются только оплаты клиентов: покупки персонала и тестовые платежи исключены.
-          </p>
+          <p className="mt-2 text-xs text-fg-subtle">{t("adm.renewaldiscount.clients_only")}</p>
           <div className="mt-4 space-y-2 rounded-xl border border-border-subtle bg-bg px-4 py-3">
-            <p className="text-xs text-fg-muted">Сейчас действует: {active}</p>
+            <p className="text-xs text-fg-muted">{t("adm.renewaldiscount.active_now", { n: active })}</p>
             {confirming && (
               <p className="text-xs text-danger">
-                Отозвать {active} {pluralRu(active, "активную скидку", "активные скидки", "активных скидок")}? Людям
-                ничего не придёт, но при оплате скидки уже не будет.
+                {t(
+                  pluralFor(
+                    lang,
+                    active,
+                    "adm.renewaldiscount.revoke_confirm_one",
+                    "adm.renewaldiscount.revoke_confirm_few",
+                    "adm.renewaldiscount.revoke_confirm_many",
+                  ),
+                  { n: active },
+                )}
               </p>
             )}
             <div className="flex flex-wrap gap-2">
@@ -279,11 +339,15 @@ function StatsCard() {
                 disabled={revoking || (!confirming && active === 0)}
                 className={`${BUTTON} ${confirming ? "border-danger text-danger" : ""}`}
               >
-                {revoking ? "…" : confirming ? "Да, отозвать" : "Отозвать активные скидки"}
+                {revoking
+                  ? "…"
+                  : confirming
+                    ? t("adm.renewaldiscount.revoke_yes")
+                    : t("adm.renewaldiscount.revoke")}
               </button>
               {confirming && (
                 <button onClick={() => setConfirming(false)} className={BUTTON}>
-                  Отмена
+                  {t("adm.renewaldiscount.cancel")}
                 </button>
               )}
             </div>
@@ -298,11 +362,12 @@ function StatsCard() {
 // «Скидка до окончания подписки» — раздел Маркетинг. Настройки + проверка на
 // сухую + итоги; на бэкенде без этой механики (501) блоки просто не рисуются.
 export default function AdminRenewalDiscountPage() {
+  const t = useT();
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-2 px-1 pt-1">
         <BadgePercent className="h-[18px] w-[18px] text-accent" />
-        <h1 className="text-lg font-bold text-fg md:text-xl">Скидка до окончания подписки</h1>
+        <h1 className="text-lg font-bold text-fg md:text-xl">{t("adm.renewaldiscount.title")}</h1>
       </div>
       <RenewalDiscountCard />
       <PreviewCard />
