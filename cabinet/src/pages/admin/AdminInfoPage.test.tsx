@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Appearance } from "@/api/appearance";
 import type { AdminInfoResponse } from "@/api/info";
+import { I18nProvider } from "@/i18n/I18nContext";
+import { STORAGE_KEY } from "@/i18n/config";
+import { setActiveLang, translate } from "@/i18n/translate";
 
 /**
  * Редактор «Информации» с языками.
@@ -49,10 +52,24 @@ function answer(over: Partial<AdminInfoResponse> = {}): AdminInfoResponse {
   } as AdminInfoResponse;
 }
 
+// Экран больше не хранит русский текст в коде: подписи приходят из словаря по
+// ключам adm.info.*. Тест сверяется с тем же словарём (и держит кабинет на
+// русском), иначе он проверял бы не интерфейс, а копию строки.
+const ru = (key: string, vars?: Record<string, string | number>) => translate(key, vars, "ru");
+
+const renderPage = () =>
+  render(
+    <I18nProvider>
+      <AdminInfoPage />
+    </I18nProvider>,
+  );
+
 const oldBot = () => ({ brand_name: "X" }) as Appearance;
 const newBot = () => ({ brand_name: "X", bot_capabilities: ["info_i18n"] }) as Appearance;
 
 beforeEach(() => {
+  localStorage.setItem(STORAGE_KEY, "ru");
+  setActiveLang("ru");
   get.mockReset();
   update.mockReset();
   get.mockResolvedValue(answer());
@@ -66,15 +83,15 @@ afterEach(() => cleanup());
 describe("редактор «Информации»: языки", () => {
   it("со старым ботом вкладок языков нет вовсе", async () => {
     branding = { appearance: oldBot() };
-    render(<AdminInfoPage />);
-    await waitFor(() => expect(screen.getByText("FAQ")).toBeTruthy());
-    expect(screen.queryByText("Язык текстов")).toBeNull();
+    renderPage();
+    await waitFor(() => expect(screen.getByText(ru("adm.info.tab_faq"))).toBeTruthy());
+    expect(screen.queryByText(ru("adm.info.lang_label"))).toBeNull();
     expect(screen.queryByText("English")).toBeNull();
   });
 
   it("с новым ботом язык выбирается, и контент запрашивается на нём", async () => {
-    render(<AdminInfoPage />);
-    await waitFor(() => expect(screen.getByText("Язык текстов")).toBeTruthy());
+    renderPage();
+    await waitFor(() => expect(screen.getByText(ru("adm.info.lang_label"))).toBeTruthy());
     expect(get).toHaveBeenCalledWith("ru");
 
     get.mockResolvedValue(answer({ lang: "en", own: {}, translated_langs: [] }));
@@ -83,31 +100,31 @@ describe("редактор «Информации»: языки", () => {
   });
 
   it("непереведённый раздел показывается пустым, а не русским текстом", async () => {
-    render(<AdminInfoPage />);
-    await waitFor(() => expect(screen.getByText("Язык текстов")).toBeTruthy());
+    renderPage();
+    await waitFor(() => expect(screen.getByText(ru("adm.info.lang_label"))).toBeTruthy());
 
     get.mockResolvedValue(answer({ lang: "en", own: {} }));
     fireEvent.click(screen.getByText("English"));
-    await waitFor(() => expect(screen.getByText("Нет перевода — покажем русский")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(ru("adm.info.no_translation"))).toBeTruthy());
 
-    fireEvent.click(screen.getByText("Правила"));
+    fireEvent.click(screen.getByText(ru("adm.info.tab_rules")));
     const area = document.querySelector("textarea") as HTMLTextAreaElement;
     expect(area.value).toBe(""); // пусто = «не переводили»
     expect(area.placeholder).toBe("Русские правила"); // русский — подсказкой
   });
 
   it("сохранение перевода уходит с кодом языка", async () => {
-    render(<AdminInfoPage />);
-    await waitFor(() => expect(screen.getByText("Язык текстов")).toBeTruthy());
+    renderPage();
+    await waitFor(() => expect(screen.getByText(ru("adm.info.lang_label"))).toBeTruthy());
 
     get.mockResolvedValue(answer({ lang: "en", own: {} }));
     fireEvent.click(screen.getByText("English"));
     await waitFor(() => expect(get).toHaveBeenCalledWith("en"));
 
-    fireEvent.click(screen.getByText("Правила"));
+    fireEvent.click(screen.getByText(ru("adm.info.tab_rules")));
     const area = document.querySelector("textarea") as HTMLTextAreaElement;
     fireEvent.change(area, { target: { value: "English rules" } });
-    fireEvent.click(screen.getByText("Сохранить"));
+    fireEvent.click(screen.getByText(ru("adm.info.save")));
 
     await waitFor(() => expect(update).toHaveBeenCalled());
     const [data, lang] = update.mock.calls[0]!;
@@ -116,26 +133,26 @@ describe("редактор «Информации»: языки", () => {
   });
 
   it("«Вставить русский текст» переносит оригинал в поле перевода", async () => {
-    render(<AdminInfoPage />);
-    await waitFor(() => expect(screen.getByText("Язык текстов")).toBeTruthy());
+    renderPage();
+    await waitFor(() => expect(screen.getByText(ru("adm.info.lang_label"))).toBeTruthy());
     get.mockResolvedValue(answer({ lang: "en", own: {} }));
     fireEvent.click(screen.getByText("English"));
-    await waitFor(() => expect(screen.getByText("Вставить русский текст")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(ru("adm.info.paste_base"))).toBeTruthy());
 
-    fireEvent.click(screen.getByText("Оферта"));
-    fireEvent.click(screen.getByText("Вставить русский текст"));
+    fireEvent.click(screen.getByText(ru("adm.info.tab_offer")));
+    fireEvent.click(screen.getByText(ru("adm.info.paste_base")));
     const area = document.querySelector("textarea") as HTMLTextAreaElement;
     expect(area.value).toBe("Русская оферта");
   });
 
   it("русская вкладка правится как раньше: сохраняем без языка", async () => {
-    render(<AdminInfoPage />);
-    await waitFor(() => expect(screen.getByText("Язык текстов")).toBeTruthy());
-    fireEvent.click(screen.getByText("Правила"));
+    renderPage();
+    await waitFor(() => expect(screen.getByText(ru("adm.info.lang_label"))).toBeTruthy());
+    fireEvent.click(screen.getByText(ru("adm.info.tab_rules")));
     const area = document.querySelector("textarea") as HTMLTextAreaElement;
     expect(area.value).toBe("Русские правила");
     fireEvent.change(area, { target: { value: "Новые правила" } });
-    fireEvent.click(screen.getByText("Сохранить"));
+    fireEvent.click(screen.getByText(ru("adm.info.save")));
     await waitFor(() => expect(update).toHaveBeenCalled());
     expect(update.mock.calls[0]![1]).toBe("ru");
   });

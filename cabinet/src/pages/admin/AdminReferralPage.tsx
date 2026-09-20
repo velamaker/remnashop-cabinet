@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Gift, Save, AlertCircle, CheckCircle2, Coins, Plus, Trash2 } from "lucide-react";
 import { settingsAdminApi, cashbackAdminApi, type AdminSettings, type CashbackConfig } from "@/api/admin";
+import { useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
 import { ApiError } from "@/types/api";
 
 function Field({ label, value, onChange, type = "number" }: { label: string; value: string; onChange: (v: string) => void; type?: string }) {
@@ -26,6 +28,7 @@ function Select({ label, value, onChange, options }: { label: string; value: str
 }
 
 export default function AdminReferralPage() {
+  const t = useT();
   const [s, setS] = useState<AdminSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -33,14 +36,14 @@ export default function AdminReferralPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    settingsAdminApi.get().then(setS).catch((e) => setError(e instanceof ApiError ? e.detail : "Ошибка")).finally(() => setLoading(false));
+    settingsAdminApi.get().then(setS).catch((e) => setError(e instanceof ApiError ? e.detail : translate("adm.referral.load_error"))).finally(() => setLoading(false));
   }, []);
 
   if (loading) {
     return <div className="flex min-h-64 items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-2 border-border border-t-accent" /></div>;
   }
   if (!s) {
-    return <div className="flex flex-col items-center gap-3 py-20 text-center"><AlertCircle className="h-10 w-10 text-danger" /><p className="text-fg-muted">{error ?? "Ошибка"}</p></div>;
+    return <div className="flex flex-col items-center gap-3 py-20 text-center"><AlertCircle className="h-10 w-10 text-danger" /><p className="text-fg-muted">{error ?? t("adm.referral.load_error")}</p></div>;
   }
 
   const r = s.referral;
@@ -48,7 +51,9 @@ export default function AdminReferralPage() {
   const l1 = Number(cfg["1"] ?? cfg["FIRST"] ?? 0);
   const l2 = Number(cfg["2"] ?? cfg["SECOND"] ?? 0);
   const isDays = r.reward.type === "EXTRA_DAYS";
-  const unit = r.reward.strategy === "PERCENT" ? "%" : isDays ? "дней" : "баллов";
+  const unit = r.reward.strategy === "PERCENT"
+    ? t("adm.referral.unit_percent")
+    : isDays ? t("adm.referral.unit_days") : t("adm.referral.unit_points");
   const twoLevels = Number(r.level) >= 2;
 
   const setRef = (patch: Partial<AdminSettings["referral"]>) => setS((p) => (p ? { ...p, referral: { ...p.referral, ...patch } } : p));
@@ -74,7 +79,7 @@ export default function AdminReferralPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.referral.save_error"));
     } finally {
       setSaving(false);
     }
@@ -84,24 +89,24 @@ export default function AdminReferralPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold text-fg"><Gift className="h-6 w-6 text-accent" /> Реферальная программа</h1>
-          <p className="mt-1 text-sm text-fg-muted">Награда за приглашённых. Тип «Баллы»: 1 балл = 7 ₽, юзер меняет баллы на баланс в кабинете.</p>
+          <h1 className="flex items-center gap-2 text-2xl font-bold text-fg"><Gift className="h-6 w-6 text-accent" /> {t("adm.referral.title")}</h1>
+          <p className="mt-1 text-sm text-fg-muted">{t("adm.referral.subtitle")}</p>
         </div>
         <button onClick={save} disabled={saving}
           className="btn-gradient inline-flex items-center gap-2 rounded-xl border-0 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
-          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+          <Save className="h-4 w-4" /> {saving ? "…" : t("adm.referral.save")}
         </button>
       </div>
 
       {error && <div className="flex items-center gap-2 rounded-xl bg-danger/10 px-4 py-3 text-sm text-danger"><AlertCircle className="h-4 w-4" />{error}</div>}
-      {saved && <div className="flex items-center gap-2 rounded-xl bg-success/10 px-4 py-3 text-sm text-success"><CheckCircle2 className="h-4 w-4" />Сохранено</div>}
+      {saved && <div className="flex items-center gap-2 rounded-xl bg-success/10 px-4 py-3 text-sm text-success"><CheckCircle2 className="h-4 w-4" />{t("adm.referral.saved")}</div>}
 
       <div className="space-y-4 rounded-2xl border border-border-subtle bg-bg-subtle p-5">
         <button type="button" onClick={() => setRef({ enable: !r.enable })}
           className={`flex w-full items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition-colors ${r.enable ? "border-accent/30 bg-accent/5" : "border-border-subtle bg-bg"}`}>
           <div>
-            <p className="text-sm font-medium text-fg">Реферальная программа</p>
-            <p className="mt-0.5 text-xs text-fg-muted">Включить начисление наград за приглашённых</p>
+            <p className="text-sm font-medium text-fg">{t("adm.referral.title")}</p>
+            <p className="mt-0.5 text-xs text-fg-muted">{t("adm.referral.toggle_hint")}</p>
           </div>
           <span className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${r.enable ? "bg-accent" : "bg-border"}`}>
             <span className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${r.enable ? "translate-x-[22px]" : "translate-x-0.5"}`} />
@@ -109,22 +114,22 @@ export default function AdminReferralPage() {
         </button>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <Select label="Тип награды" value={r.reward.type} onChange={(v) => setReward({ type: v })}
-            options={[{ value: "POINTS", label: "Баллы (1 балл = 7 ₽)" }, { value: "EXTRA_DAYS", label: "Дни подписки" }]} />
-          <Select label="Как считать" value={r.reward.strategy} onChange={(v) => setReward({ strategy: v })}
-            options={[{ value: "PERCENT", label: "% от суммы платежа" }, { value: "AMOUNT", label: "Фиксировано" }]} />
+          <Select label={t("adm.referral.reward_type")} value={r.reward.type} onChange={(v) => setReward({ type: v })}
+            options={[{ value: "POINTS", label: t("adm.referral.reward_type_points") }, { value: "EXTRA_DAYS", label: t("adm.referral.reward_type_days") }]} />
+          <Select label={t("adm.referral.strategy")} value={r.reward.strategy} onChange={(v) => setReward({ strategy: v })}
+            options={[{ value: "PERCENT", label: t("adm.referral.strategy_percent") }, { value: "AMOUNT", label: t("adm.referral.strategy_amount") }]} />
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label={`1-й уровень (${unit})`} value={String(l1)} onChange={(v) => setCfg(Number(v), l2)} />
-          {twoLevels && <Field label={`2-й уровень (${unit})`} value={String(l2)} onChange={(v) => setCfg(l1, Number(v))} />}
+          <Field label={t("adm.referral.level1", { unit })} value={String(l1)} onChange={(v) => setCfg(Number(v), l2)} />
+          {twoLevels && <Field label={t("adm.referral.level2", { unit })} value={String(l2)} onChange={(v) => setCfg(l1, Number(v))} />}
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <Select label="Уровни" value={String(Number(r.level) || 1)} onChange={(v) => setRef({ level: v })}
-            options={[{ value: "1", label: "Только прямые (1 уровень)" }, { value: "2", label: "Два уровня" }]} />
-          <Select label="Когда начислять" value={r.accrual_strategy} onChange={(v) => setRef({ accrual_strategy: v })}
-            options={[{ value: "ON_FIRST_PAYMENT", label: "За первый платёж реферала" }, { value: "ON_EACH_PAYMENT", label: "За каждый платёж реферала" }]} />
+          <Select label={t("adm.referral.levels")} value={String(Number(r.level) || 1)} onChange={(v) => setRef({ level: v })}
+            options={[{ value: "1", label: t("adm.referral.levels_one") }, { value: "2", label: t("adm.referral.levels_two") }]} />
+          <Select label={t("adm.referral.accrual")} value={r.accrual_strategy} onChange={(v) => setRef({ accrual_strategy: v })}
+            options={[{ value: "ON_FIRST_PAYMENT", label: t("adm.referral.accrual_first") }, { value: "ON_EACH_PAYMENT", label: t("adm.referral.accrual_each") }]} />
         </div>
       </div>
 
@@ -134,6 +139,7 @@ export default function AdminReferralPage() {
 }
 
 function CashbackCard() {
+  const t = useT();
   const [cfg, setCfg] = useState<CashbackConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -141,12 +147,12 @@ function CashbackCard() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    cashbackAdminApi.get().then(setCfg).catch(() => setError("Не удалось загрузить кэшбэк")).finally(() => setLoading(false));
+    cashbackAdminApi.get().then(setCfg).catch(() => setError(translate("adm.referral.cashback_load_error"))).finally(() => setLoading(false));
   }, []);
 
   const patch = (p: Partial<CashbackConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
   const setTier = (i: number, field: "min_days" | "percent", v: number) =>
-    setCfg((c) => (c ? { ...c, tiers: c.tiers.map((t, j) => (j === i ? { ...t, [field]: v } : t)) } : c));
+    setCfg((c) => (c ? { ...c, tiers: c.tiers.map((t2, j) => (j === i ? { ...t2, [field]: v } : t2)) } : c));
   const addTier = () => setCfg((c) => (c ? { ...c, tiers: [...c.tiers, { min_days: 30, percent: 1 }] } : c));
   const removeTier = (i: number) => setCfg((c) => (c ? { ...c, tiers: c.tiers.filter((_, j) => j !== i) } : c));
 
@@ -159,8 +165,8 @@ function CashbackCard() {
         enabled: cfg.enabled,
         point_value_rub: Number(cfg.point_value_rub) || 1,
         tiers: cfg.tiers
-          .map((t) => ({ min_days: Number(t.min_days) || 0, percent: Number(t.percent) || 0 }))
-          .filter((t) => t.min_days >= 1 && t.percent >= 1 && t.percent <= 100)
+          .map((t2) => ({ min_days: Number(t2.min_days) || 0, percent: Number(t2.percent) || 0 }))
+          .filter((t2) => t2.min_days >= 1 && t2.percent >= 1 && t2.percent <= 100)
           .sort((a, b) => a.min_days - b.min_days),
       };
       const updated = await cashbackAdminApi.update(clean);
@@ -168,7 +174,7 @@ function CashbackCard() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.referral.save_error"));
     } finally {
       setSaving(false);
     }
@@ -183,23 +189,23 @@ function CashbackCard() {
     <div className="space-y-4 rounded-2xl border border-border-subtle bg-bg-subtle p-5">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="flex items-center gap-2 text-lg font-bold text-fg"><Coins className="h-5 w-5 text-accent" /> Кэшбэк баллами</h2>
-          <p className="mt-1 text-sm text-fg-muted">Начисляется покупателю за каждую оплату (только ₽). % зависит от срока тарифа; баллы = округл(сумма × % / {cfg.point_value_rub}).</p>
+          <h2 className="flex items-center gap-2 text-lg font-bold text-fg"><Coins className="h-5 w-5 text-accent" /> {t("adm.referral.cashback_title")}</h2>
+          <p className="mt-1 text-sm text-fg-muted">{t("adm.referral.cashback_hint", { rate: cfg.point_value_rub })}</p>
         </div>
         <button onClick={save} disabled={saving}
           className="btn-gradient inline-flex shrink-0 items-center gap-2 rounded-xl border-0 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
-          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+          <Save className="h-4 w-4" /> {saving ? "…" : t("adm.referral.save")}
         </button>
       </div>
 
       {error && <div className="flex items-center gap-2 rounded-xl bg-danger/10 px-4 py-3 text-sm text-danger"><AlertCircle className="h-4 w-4" />{error}</div>}
-      {saved && <div className="flex items-center gap-2 rounded-xl bg-success/10 px-4 py-3 text-sm text-success"><CheckCircle2 className="h-4 w-4" />Сохранено</div>}
+      {saved && <div className="flex items-center gap-2 rounded-xl bg-success/10 px-4 py-3 text-sm text-success"><CheckCircle2 className="h-4 w-4" />{t("adm.referral.saved")}</div>}
 
       <button type="button" onClick={() => patch({ enabled: !cfg.enabled })}
         className={`flex w-full items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition-colors ${cfg.enabled ? "border-accent/30 bg-accent/5" : "border-border-subtle bg-bg"}`}>
         <div>
-          <p className="text-sm font-medium text-fg">Кэшбэк баллами</p>
-          <p className="mt-0.5 text-xs text-fg-muted">Начислять покупателю баллы за оплату</p>
+          <p className="text-sm font-medium text-fg">{t("adm.referral.cashback_title")}</p>
+          <p className="mt-0.5 text-xs text-fg-muted">{t("adm.referral.cashback_toggle_hint")}</p>
         </div>
         <span className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${cfg.enabled ? "bg-accent" : "bg-border"}`}>
           <span className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${cfg.enabled ? "translate-x-[22px]" : "translate-x-0.5"}`} />
@@ -207,23 +213,23 @@ function CashbackCard() {
       </button>
 
       <div className="max-w-xs">
-        <label className="mb-1 block text-xs font-medium text-fg-muted">Курс: 1 балл = … ₽</label>
+        <label className="mb-1 block text-xs font-medium text-fg-muted">{t("adm.referral.point_rate")}</label>
         <input type="number" min={1} value={String(cfg.point_value_rub)}
           onChange={(e) => patch({ point_value_rub: Number(e.target.value) })} className={inputCls} />
       </div>
 
       <div className="space-y-2">
-        <p className="text-xs font-medium text-fg-muted">Ступени: срок тарифа (дней) → процент кэшбэка. Берётся максимальная подходящая.</p>
-        {cfg.tiers.map((t, i) => (
+        <p className="text-xs font-medium text-fg-muted">{t("adm.referral.tiers_hint")}</p>
+        {cfg.tiers.map((tier, i) => (
           <div key={i} className="flex items-end gap-2">
             <div className="flex-1">
-              <label className="mb-1 block text-[11px] text-fg-muted">от скольких дней</label>
-              <input type="number" min={1} value={String(t.min_days)}
+              <label className="mb-1 block text-[11px] text-fg-muted">{t("adm.referral.tier_min_days")}</label>
+              <input type="number" min={1} value={String(tier.min_days)}
                 onChange={(e) => setTier(i, "min_days", Number(e.target.value))} className={inputCls} />
             </div>
             <div className="flex-1">
-              <label className="mb-1 block text-[11px] text-fg-muted">процент (%)</label>
-              <input type="number" min={1} max={100} value={String(t.percent)}
+              <label className="mb-1 block text-[11px] text-fg-muted">{t("adm.referral.tier_percent")}</label>
+              <input type="number" min={1} max={100} value={String(tier.percent)}
                 onChange={(e) => setTier(i, "percent", Number(e.target.value))} className={inputCls} />
             </div>
             <button type="button" onClick={() => removeTier(i)}
@@ -234,7 +240,7 @@ function CashbackCard() {
         ))}
         <button type="button" onClick={addTier}
           className="inline-flex items-center gap-2 rounded-xl border border-border-subtle px-3 py-2 text-sm text-fg-muted hover:text-fg">
-          <Plus className="h-4 w-4" /> Добавить ступень
+          <Plus className="h-4 w-4" /> {t("adm.referral.tier_add")}
         </button>
       </div>
     </div>

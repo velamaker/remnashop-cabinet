@@ -2,9 +2,11 @@ import { useRef, useState } from "react";
 import { Download, Upload, Database, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
 import { settingsIoAdminApi, type SettingsBundle } from "@/api/admin";
 import { ApiError } from "@/types/api";
+import { useT } from "@/i18n/I18nContext";
 
 // Импорт/экспорт настроек инсталляции (только владелец). Бэкап конфигурации одним файлом.
 export default function AdminBackupPage() {
+  const t = useT();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -25,9 +27,9 @@ export default function AdminBackupPage() {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      setMsg(`Экспортировано разделов: ${Object.keys(bundle.assets || {}).length}`);
+      setMsg(t("adm.backup.export_ok", { n: Object.keys(bundle.assets || {}).length }));
     } catch (e) {
-      setErr(e instanceof ApiError ? e.detail : "Ошибка экспорта");
+      setErr(e instanceof ApiError ? e.detail : t("adm.backup.export_error"));
     } finally {
       setBusy(false);
     }
@@ -41,34 +43,52 @@ export default function AdminBackupPage() {
       const text = await file.text();
       const bundle = JSON.parse(text) as SettingsBundle;
       if (!bundle || typeof bundle !== "object" || !bundle.assets) {
-        throw new Error("Файл не похож на бэкап настроек");
+        throw new Error(t("adm.backup.not_a_backup"));
       }
-      if (!confirm("Импортировать настройки из файла? Текущие конфиги будут перезаписаны.")) {
+      if (!confirm(t("adm.backup.import_confirm"))) {
         setBusy(false);
         return;
       }
       const res = await settingsIoAdminApi.import(bundle);
-      setMsg(`Восстановлено разделов: ${res.count}${res.skipped.length ? `, пропущено: ${res.skipped.length}` : ""}. Обновите страницу (иногда нужен hard-reload).`);
+      setMsg(
+        res.skipped.length
+          ? t("adm.backup.import_ok_skipped", { n: res.count, skipped: res.skipped.length })
+          : t("adm.backup.import_ok", { n: res.count }),
+      );
     } catch (e) {
-      setErr(e instanceof ApiError ? e.detail : e instanceof Error ? e.message : "Ошибка импорта");
+      setErr(
+        e instanceof ApiError
+          ? e.detail
+          : e instanceof Error
+            ? e.message
+            : t("adm.backup.import_error"),
+      );
     } finally {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = "";
     }
   };
 
+  // Вводный абзац — один ключ: {owner} внутри перевода помечает место жирного
+  // «Только владелец», чтобы порядок слов задавал переводчик, а не вёрстка.
+  const intro = t("adm.backup.intro").split("{owner}");
+
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-2 px-1 pt-1">
         <Database className="h-[18px] w-[18px] text-accent" />
-        <h1 className="text-lg font-bold text-fg md:text-xl">Импорт / экспорт настроек</h1>
+        <h1 className="text-lg font-bold text-fg md:text-xl">{t("adm.backup.title")}</h1>
       </div>
 
       <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
         <p className="text-sm text-fg-muted">
-          Бэкап всей конфигурации инсталляции одним файлом: оформление, приложения, меню, почта,
-          вход, все настройки фич. <b className="text-fg">Только владелец.</b> Файл содержит секреты
-          (SMTP/OIDC) — храните безопасно. Рантайм-данные и приватный push-ключ в бэкап не входят.
+          {intro[0]}
+          {intro.length > 1 && (
+            <>
+              <b className="text-fg">{t("adm.backup.intro_owner_only")}</b>
+              {intro[1]}
+            </>
+          )}
         </p>
 
         <div className="mt-4 flex flex-wrap gap-3">
@@ -79,7 +99,7 @@ export default function AdminBackupPage() {
             className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50"
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-            Экспортировать
+            {t("adm.backup.export")}
           </button>
 
           <button
@@ -89,7 +109,7 @@ export default function AdminBackupPage() {
             className="inline-flex items-center gap-2 rounded-xl border border-border-subtle bg-bg px-4 py-2.5 text-sm font-medium text-fg hover:bg-bg-raised disabled:opacity-50"
           >
             <Upload className="h-4 w-4" />
-            Импортировать из файла
+            {t("adm.backup.import")}
           </button>
           <input
             ref={fileRef}

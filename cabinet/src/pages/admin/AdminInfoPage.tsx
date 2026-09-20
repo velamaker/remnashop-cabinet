@@ -5,15 +5,19 @@ import { Button } from "@/components/ui/Button";
 import { infoAdminApi, type AdminInfoResponse, type InfoContent } from "@/api/info";
 import { useBranding } from "@/contexts/BrandingContext";
 import { LANGUAGES } from "@/i18n/config";
+import { useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
 import { botHas } from "@/lib/botCapabilities";
 import { ApiError } from "@/types/api";
 
+// Подписи вкладок — КЛЮЧИ, а не готовый текст: список модульный, а переводится
+// он в компоненте, где известен язык.
 const SECTIONS = [
-  { id: "faq", label: "FAQ" },
-  { id: "rules", label: "Правила" },
-  { id: "privacy", label: "Конфиденциальность" },
-  { id: "offer", label: "Оферта" },
-  { id: "statuses", label: "Статусы" },
+  { id: "faq", labelKey: "adm.info.tab_faq" },
+  { id: "rules", labelKey: "adm.info.tab_rules" },
+  { id: "privacy", labelKey: "adm.info.tab_privacy" },
+  { id: "offer", labelKey: "adm.info.tab_offer" },
+  { id: "statuses", labelKey: "adm.info.tab_statuses" },
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]["id"];
@@ -23,6 +27,15 @@ const BASE_LANG = "ru";
 
 const textInput =
   "w-full rounded-lg border border-[var(--border)] bg-bg px-3 py-2 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent";
+
+// Одна фраза — один ключ: чипы с примерами markdown <code>…</code> живут ВНУТРИ
+// перевода. Так переводчик сам решает порядок слов, а предложение не собирается
+// из кусков.
+function withMarkup(s: string) {
+  return s
+    .split(/(<code>.*?<\/code>)/g)
+    .map((part, i) => (part.startsWith("<code>") ? <code key={i}>{part.slice(6, -7)}</code> : part));
+}
 
 /** Пустой перевод: показываем ровно то, что сохранено, без русского фолбэка. */
 function ownContent(data: AdminInfoResponse): InfoContent {
@@ -39,6 +52,7 @@ function ownContent(data: AdminInfoResponse): InfoContent {
 }
 
 export default function AdminInfoPage() {
+  const t = useT();
   const { appearance } = useBranding();
   // Переводы понимает только бот новее 1.4.6. Со старым бот сохранит присланный
   // текст как РУССКИЙ: вкладки языков там показывать нельзя — одно «Сохранить»
@@ -66,7 +80,14 @@ export default function AdminInfoPage() {
     infoAdminApi
       .get(lang)
       .then(apply)
-      .catch((e) => setMsg({ type: "error", text: e instanceof ApiError ? e.detail : "Ошибка" }))
+      // translate, а не t: иначе t попал бы в зависимости эффекта и смена языка
+      // кабинета перезапрашивала бы контент.
+      .catch((e) =>
+        setMsg({
+          type: "error",
+          text: e instanceof ApiError ? e.detail : translate("adm.info.err_generic"),
+        }),
+      )
       .finally(() => setLoading(false));
   }, [lang, apply]);
 
@@ -77,9 +98,9 @@ export default function AdminInfoPage() {
     try {
       const saved = await infoAdminApi.update(content, lang);
       apply(saved);
-      setMsg({ type: "success", text: "Сохранено" });
+      setMsg({ type: "success", text: t("adm.info.saved") });
     } catch (e) {
-      setMsg({ type: "error", text: e instanceof ApiError ? e.detail : "Не удалось сохранить" });
+      setMsg({ type: "error", text: e instanceof ApiError ? e.detail : t("adm.info.save_error") });
     } finally {
       setSaving(false);
     }
@@ -120,23 +141,19 @@ export default function AdminInfoPage() {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight text-fg">Информация</h1>
+        <h1 className="text-2xl font-bold tracking-tight text-fg">{t("adm.info.title")}</h1>
         <Button onClick={save} isLoading={saving} disabled={!content}>
           <Save className="mr-1.5 h-4 w-4" />
-          Сохранить
+          {t("adm.info.save")}
         </Button>
       </div>
-      <p className="text-sm text-fg-muted">
-        Контент страницы «Информация» в кабинете. Тексты — в формате markdown:{" "}
-        <code>## Заголовок</code>, <code>- пункт списка</code>, <code>**жирный**</code>, пустая
-        строка — новый абзац. Вкладка «Серверы» формируется автоматически из Remnawave.
-      </p>
+      <p className="text-sm text-fg-muted">{withMarkup(t("adm.info.intro"))}</p>
 
       {canTranslate && (
         <div className="rounded-xl border border-[var(--border)] bg-bg-subtle p-3">
           <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-fg">
             <Languages className="h-3.5 w-3.5" />
-            Язык текстов
+            {t("adm.info.lang_label")}
           </div>
           <div className="scrollbar-hide flex gap-1.5 overflow-x-auto pb-1">
             {LANGUAGES.map((l) => {
@@ -152,7 +169,7 @@ export default function AdminInfoPage() {
                         ? "border-[var(--border)] bg-bg text-fg hover:bg-bg-raised"
                         : "border-dashed border-[var(--border)] bg-bg text-fg-subtle hover:text-fg"
                   }`}
-                  title={done ? "Переведено" : "Нет перевода — покажем русский"}
+                  title={done ? t("adm.info.translated") : t("adm.info.no_translation")}
                 >
                   {l.label}
                 </button>
@@ -160,9 +177,7 @@ export default function AdminInfoPage() {
             })}
           </div>
           <p className="mt-2 text-xs text-fg-muted">
-            {isBase
-              ? "Русский — основной текст. Разделы без перевода показываются по-русски на любом языке."
-              : "Пустой раздел — это «не переведено»: человеку покажем русский текст. Очистите поле, чтобы снять перевод."}
+            {isBase ? t("adm.info.base_note") : t("adm.info.translation_note")}
           </p>
         </div>
       )}
@@ -189,7 +204,7 @@ export default function AdminInfoPage() {
                 : "border-[var(--border)] bg-bg-subtle text-fg-muted hover:bg-bg-raised hover:text-fg"
             }`}
           >
-            {s.label}
+            {t(s.labelKey)}
           </button>
         ))}
       </div>
@@ -198,7 +213,7 @@ export default function AdminInfoPage() {
         <div className="flex flex-wrap items-center gap-2">
           {sectionEmpty && (
             <span className="rounded-lg bg-amber-500/10 px-2.5 py-1 text-xs text-amber-600 dark:text-amber-400">
-              Нет перевода — покажем русский
+              {t("adm.info.no_translation")}
             </span>
           )}
           <button
@@ -206,7 +221,7 @@ export default function AdminInfoPage() {
             className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-bg-subtle px-2.5 py-1 text-xs font-medium text-fg hover:bg-bg-raised"
           >
             <ClipboardCopy className="h-3.5 w-3.5" />
-            Вставить русский текст
+            {t("adm.info.paste_base")}
           </button>
         </div>
       )}
@@ -217,24 +232,26 @@ export default function AdminInfoPage() {
             <Card key={i} variant="bordered">
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-fg-subtle">Вопрос {i + 1}</span>
+                  <span className="text-xs font-medium text-fg-subtle">
+                    {t("adm.info.question_n", { n: i + 1 })}
+                  </span>
                   <button
                     onClick={() => removeFaq(i)}
                     className="flex items-center gap-1 rounded-lg border border-danger/20 bg-danger/8 px-2 py-1 text-xs text-danger hover:bg-danger/15"
                   >
                     <Trash2 className="h-3 w-3" />
-                    Удалить
+                    {t("adm.info.delete")}
                   </button>
                 </div>
                 <input
                   className={textInput}
-                  placeholder={isBase ? "Вопрос" : base?.faq[i]?.q || "Вопрос"}
+                  placeholder={isBase ? t("adm.info.q_placeholder") : base?.faq[i]?.q || t("adm.info.q_placeholder")}
                   value={item.q}
                   onChange={(e) => setFaq(i, "q", e.target.value)}
                 />
                 <textarea
                   className={`${textInput} min-h-[80px] resize-y`}
-                  placeholder={isBase ? "Ответ" : base?.faq[i]?.a || "Ответ"}
+                  placeholder={isBase ? t("adm.info.a_placeholder") : base?.faq[i]?.a || t("adm.info.a_placeholder")}
                   value={item.a}
                   onChange={(e) => setFaq(i, "a", e.target.value)}
                 />
@@ -243,14 +260,14 @@ export default function AdminInfoPage() {
           ))}
           <Button variant="secondary" onClick={addFaq}>
             <Plus className="mr-1.5 h-4 w-4" />
-            Добавить вопрос
+            {t("adm.info.add_question")}
           </Button>
         </div>
       )}
 
       {content && active !== "faq" && (
         <Card variant="bordered">
-          <CardHeader title={SECTIONS.find((s) => s.id === active)?.label ?? ""} />
+          <CardHeader title={t(SECTIONS.find((s) => s.id === active)?.labelKey ?? "")} />
           <textarea
             className={`${textInput} min-h-[420px] resize-y font-mono leading-relaxed`}
             placeholder={isBase ? "" : base?.[active as TextSection]}

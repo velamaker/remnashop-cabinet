@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, waitFor } from "@testing-library/react";
 import type { Appearance } from "@/api/appearance";
 import { BOT_CAPABILITIES, type BotCap } from "@/lib/botCapabilities";
+import { I18nProvider } from "@/i18n/I18nContext";
+import { STORAGE_KEY } from "@/i18n/config";
+import { setActiveLang, translate } from "@/i18n/translate";
 
 // «Обновления»: владелец, обновивший только кабинет, ищет здесь, куда пропали
 // функции. Карточка перечисляет скрытое и команду обновления бота — только по
@@ -22,12 +25,24 @@ const { default: AdminUpdatesPage } = await import("./AdminUpdatesPage");
 const ALL = Object.keys(BOT_CAPABILITIES) as BotCap[];
 const card = () => screen.queryByTestId("bot-behind-cabinet");
 
+// Экран больше не хранит русский текст в коде: подписи приходят из словаря по
+// ключам adm.updates.*. Тест сверяется с тем же словарём (и держит кабинет на
+// русском), иначе он проверял бы не интерфейс, а копию строки. Подписи скрытых
+// функций — исключение: они из манифеста BOT_CAPABILITIES, его читает update.sh.
+const ru = (key: string, vars?: Record<string, string | number>) => translate(key, vars, "ru");
+
 async function show() {
-  render(<AdminUpdatesPage />);
-  await screen.findByText(/Установлена последняя версия/);
+  render(
+    <I18nProvider>
+      <AdminUpdatesPage />
+    </I18nProvider>,
+  );
+  await screen.findByText(ru("adm.updates.up_to_date", { version: "1.3.8" }));
 }
 
 beforeEach(() => {
+  localStorage.setItem(STORAGE_KEY, "ru");
+  setActiveLang("ru");
   branding = { appearance: null, loaded: false };
 });
 afterEach(() => cleanup());

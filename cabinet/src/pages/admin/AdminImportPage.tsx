@@ -1,11 +1,14 @@
 import { useEffect, useState, useCallback } from "react";
 import { DownloadCloud, UploadCloud, RefreshCw, Server, Database, CheckCircle2, AlertCircle } from "lucide-react";
 import { importAdminApi } from "@/api/admin";
+import { useI18n } from "@/i18n/I18nContext";
+import { pluralFor } from "@/lib/pluralRu";
 import { ApiError } from "@/types/api";
 
 type Msg = { ok: boolean; text: string } | null;
 
 export default function AdminImportPage() {
+  const { lang, t } = useI18n();
   const [status, setStatus] = useState<{ panel: boolean; bot: boolean; xui: boolean }>({ panel: false, bot: false, xui: false });
   const [squads, setSquads] = useState<{ uuid: string; name: string }[]>([]);
   const [selSquads, setSelSquads] = useState<Set<string>>(new Set());
@@ -31,9 +34,9 @@ export default function AdminImportPage() {
     setM(kind, null);
     try {
       const r = kind === "panel" ? await importAdminApi.syncPanel() : await importAdminApi.syncBot();
-      setM(kind, { ok: true, text: `Синхронизировано пользователей: ${r.synced}` });
+      setM(kind, { ok: true, text: t("adm.import.sync_ok", { n: r.synced }) });
     } catch (e) {
-      setM(kind, { ok: false, text: e instanceof ApiError ? e.detail : "Ошибка" });
+      setM(kind, { ok: false, text: e instanceof ApiError ? e.detail : t("adm.import.err_generic") });
     } finally {
       setBusy(null);
       loadStatus();
@@ -46,10 +49,18 @@ export default function AdminImportPage() {
     setM("xui", null);
     try {
       const r = await importAdminApi.xui(file, [...selSquads]);
-      setM("xui", { ok: true, text: `Найдено ${r.found} пользователей — импорт запущен в фоне` });
+      setM("xui", {
+        ok: true,
+        // «1 пользователь / 2 пользователя / 5 пользователей» и «1 user / 5 users»:
+        // форму счётного слова выбирает pluralFor ПО ЯЗЫКУ, текст — из словаря.
+        text: t(
+          pluralFor(lang, r.found, "adm.import.xui_ok_one", "adm.import.xui_ok_few", "adm.import.xui_ok_many"),
+          { n: r.found },
+        ),
+      });
       setFile(null);
     } catch (e) {
-      setM("xui", { ok: false, text: e instanceof ApiError ? e.detail : "Ошибка" });
+      setM("xui", { ok: false, text: e instanceof ApiError ? e.detail : t("adm.import.err_generic") });
     } finally {
       setBusy(null);
       loadStatus();
@@ -67,24 +78,24 @@ export default function AdminImportPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-fg">Импорт пользователей</h1>
-        <p className="mt-1 text-sm text-fg-muted">Синхронизация с панелью Remnawave и миграция из x-ui — как в боте.</p>
+        <h1 className="text-2xl font-bold text-fg">{t("adm.import.title")}</h1>
+        <p className="mt-1 text-sm text-fg-muted">{t("adm.import.subtitle")}</p>
       </div>
 
       {/* Синхронизация из панели */}
       <div className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
         <div className="mb-2 flex items-center gap-2">
           <DownloadCloud className="h-5 w-5 text-accent" />
-          <h2 className="text-base font-semibold text-fg">Из панели Remnawave → в бота</h2>
+          <h2 className="text-base font-semibold text-fg">{t("adm.import.panel_title")}</h2>
         </div>
-        <p className="mb-3 text-sm text-fg-muted">Подтянуть пользователей, которые есть в панели, но отсутствуют в базе бота.</p>
+        <p className="mb-3 text-sm text-fg-muted">{t("adm.import.panel_desc")}</p>
         <button
           onClick={() => runSync("panel")}
           disabled={busy !== null || status.panel}
           className="btn-gradient inline-flex items-center gap-2 rounded-xl border-0 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
         >
           <RefreshCw className={`h-4 w-4 ${busy === "panel" || status.panel ? "animate-spin" : ""}`} />
-          {busy === "panel" || status.panel ? "Синхронизация…" : "Синхронизировать из панели"}
+          {busy === "panel" || status.panel ? t("adm.import.syncing") : t("adm.import.panel_btn")}
         </button>
         <Result m={msg.panel ?? null} />
       </div>
@@ -93,16 +104,16 @@ export default function AdminImportPage() {
       <div className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
         <div className="mb-2 flex items-center gap-2">
           <UploadCloud className="h-5 w-5 text-accent" />
-          <h2 className="text-base font-semibold text-fg">Из бота → в панель Remnawave</h2>
+          <h2 className="text-base font-semibold text-fg">{t("adm.import.bot_title")}</h2>
         </div>
-        <p className="mb-3 text-sm text-fg-muted">Отправить пользователей бота в панель (создать недостающих).</p>
+        <p className="mb-3 text-sm text-fg-muted">{t("adm.import.bot_desc")}</p>
         <button
           onClick={() => runSync("bot")}
           disabled={busy !== null || status.bot}
           className="inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-accent-subtle px-4 py-2 text-sm font-semibold text-accent disabled:opacity-50"
         >
           <RefreshCw className={`h-4 w-4 ${busy === "bot" || status.bot ? "animate-spin" : ""}`} />
-          {busy === "bot" || status.bot ? "Синхронизация…" : "Синхронизировать в панель"}
+          {busy === "bot" || status.bot ? t("adm.import.syncing") : t("adm.import.bot_btn")}
         </button>
         <Result m={msg.bot ?? null} />
       </div>
@@ -111,13 +122,13 @@ export default function AdminImportPage() {
       <div className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
         <div className="mb-2 flex items-center gap-2">
           <Database className="h-5 w-5 text-accent" />
-          <h2 className="text-base font-semibold text-fg">Импорт из файла x-ui / 3x-ui</h2>
+          <h2 className="text-base font-semibold text-fg">{t("adm.import.xui_title")}</h2>
         </div>
-        <p className="mb-3 text-sm text-fg-muted">Загрузите файл БД x-ui (.db) — пользователи будут созданы в выбранных сквадах.</p>
+        <p className="mb-3 text-sm text-fg-muted">{t("adm.import.xui_desc")}</p>
 
         <div className="space-y-3">
           <div>
-            <label className="mb-1 block text-xs font-medium text-fg-muted">Файл БД x-ui</label>
+            <label className="mb-1 block text-xs font-medium text-fg-muted">{t("adm.import.xui_file_label")}</label>
             <input
               type="file"
               accept=".db,.sqlite,.sqlite3"
@@ -127,9 +138,9 @@ export default function AdminImportPage() {
           </div>
 
           <div>
-            <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-fg-muted"><Server className="h-3.5 w-3.5" /> Сквады (куда создать)</label>
+            <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-fg-muted"><Server className="h-3.5 w-3.5" /> {t("adm.import.squads_label")}</label>
             {squads.length === 0 ? (
-              <p className="text-sm text-fg-subtle">Сквады не найдены (проверьте связь с панелью).</p>
+              <p className="text-sm text-fg-subtle">{t("adm.import.squads_empty")}</p>
             ) : (
               <div className="flex flex-wrap gap-2">
                 {squads.map((s) => {
@@ -155,7 +166,7 @@ export default function AdminImportPage() {
             className="btn-gradient inline-flex items-center gap-2 rounded-xl border-0 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
           >
             <UploadCloud className="h-4 w-4" />
-            {busy === "xui" || status.xui ? "Импорт…" : "Импортировать"}
+            {busy === "xui" || status.xui ? t("adm.import.importing") : t("adm.import.xui_btn")}
           </button>
           <Result m={msg.xui ?? null} />
         </div>

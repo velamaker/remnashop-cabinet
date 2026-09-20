@@ -6,10 +6,30 @@ import { formatDate } from "@/lib/format";
 import { safeExternalUrl } from "@/lib/nav";
 import { useBranding } from "@/contexts/BrandingContext";
 import { BOT_CAPABILITIES, missingBotCaps } from "@/lib/botCapabilities";
+import { useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
+
+// Одна фраза — один ключ: номера версий <b>…</b> и жёлтые акценты <warn>…</warn>
+// живут ВНУТРИ перевода. Так переводчик сам решает порядок слов и что выделить, а
+// предложение не собирается из кусков.
+function withMarkup(s: string) {
+  return s.split(/(<b>.*?<\/b>|<warn>.*?<\/warn>)/g).map((part, i) =>
+    part.startsWith("<b>") ? (
+      <b key={i}>{part.slice(3, -4)}</b>
+    ) : part.startsWith("<warn>") ? (
+      <span key={i} className="font-semibold text-warning">
+        {part.slice(6, -7)}
+      </span>
+    ) : (
+      part
+    ),
+  );
+}
 
 /** Карточка одного релиза. Разметка та же, что была на этом экране всегда, —
  *  просто вынесена, чтобы её могли показать и старый вид, и блоки. */
 function ReleaseCard({ it }: { it: UpdateItem }) {
+  const t = useT();
   const isNew = it.installed === false; // версия новее установленной
   return (
     <div
@@ -22,7 +42,7 @@ function ReleaseCard({ it }: { it: UpdateItem }) {
           </span>
           {isNew && (
             <span className="rounded-md bg-warning/15 px-2 py-0.5 text-xs font-semibold text-warning">
-              🆕 Новое · не установлено
+              {t("adm.updates.badge_new")}
             </span>
           )}
           {it.name && it.name !== it.version && (
@@ -43,7 +63,7 @@ function ReleaseCard({ it }: { it: UpdateItem }) {
             rel="noreferrer"
             className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline"
           >
-            Что нового <ExternalLink className="h-3 w-3" />
+            {t("adm.updates.whats_new")} <ExternalLink className="h-3 w-3" />
           </a>
         )
       )}
@@ -55,6 +75,7 @@ function ReleaseCard({ it }: { it: UpdateItem }) {
  *  СВОЯ команда обновления — в этом весь смысл разделения: команда кабинета
  *  бота не обновляет, и наоборот. */
 function ChannelBlock({ ch }: { ch: UpdateChannel }) {
+  const t = useT();
   const [showAll, setShowAll] = useState(false);
   const visible = showAll ? ch.items : ch.items.slice(0, 5);
   const unknown = !ch.current; // версия бэкенду не видна — см. ch.note
@@ -75,31 +96,33 @@ function ChannelBlock({ ch }: { ch: UpdateChannel }) {
           <span
             className={`rounded-md px-2 py-0.5 text-sm font-semibold ${unknown ? "bg-bg-subtle text-fg-subtle" : "bg-accent/10 text-accent"}`}
           >
-            {ch.current ?? "версия неизвестна"}
+            {ch.current ?? t("adm.updates.version_unknown")}
           </span>
         </div>
 
         {ch.update_available ? (
           <p className="mt-2 text-sm text-fg">
-            <span className="font-semibold text-warning">Доступно обновление.</span> Установлена{" "}
-            <b>{ch.current}</b> → доступна <b>{ch.latest}</b>. Ниже отмечено
-            <span className="font-semibold text-warning"> «Новое»</span> — что изменится после обновления.
+            {withMarkup(
+              t("adm.updates.update_note", { current: ch.current ?? "", latest: ch.latest ?? "" }),
+            )}
           </p>
         ) : unknown ? (
           <p className="mt-2 flex items-start gap-2 text-sm text-fg-muted">
             <HelpCircle className="mt-0.5 h-4 w-4 shrink-0" />
             {/* Почему не видно — говорит бэкенд в note, здесь не повторяем. */}
             {ch.latest
-              ? <span>Какая версия стоит — не видно. Последняя вышедшая — <b>{ch.latest}</b>.</span>
-              : <span>Какая версия стоит — не видно.</span>}
+              ? <span>{withMarkup(t("adm.updates.unknown_with_latest", { latest: ch.latest }))}</span>
+              : <span>{t("adm.updates.unknown")}</span>}
           </p>
         ) : ch.latest ? (
           <p className="mt-2 flex items-center gap-2 text-sm font-medium text-success">
             <CheckCircle2 className="h-4 w-4" />
-            Установлена последняя версия ({ch.current}).
+            {t("adm.updates.up_to_date", { version: ch.current ?? "" })}
           </p>
         ) : (
-          <p className="mt-2 text-sm text-fg-muted">Установлена версия {ch.current}.</p>
+          <p className="mt-2 text-sm text-fg-muted">
+            {t("adm.updates.installed_version", { version: ch.current ?? "" })}
+          </p>
         )}
 
         {ch.note && <p className="mt-2 text-xs leading-relaxed text-fg-subtle">{ch.note}</p>}
@@ -123,27 +146,30 @@ function ChannelBlock({ ch }: { ch: UpdateChannel }) {
           onClick={() => setShowAll(true)}
           className="w-full rounded-2xl border border-border-subtle bg-bg-subtle px-4 py-2 text-sm font-medium text-fg-muted transition-colors hover:text-fg"
         >
-          Показать все релизы ({ch.items.length})
+          {t("adm.updates.show_all", { n: ch.items.length })}
         </button>
       )}
       {ch.items.length === 0 && (
-        <p className="py-4 text-center text-sm text-fg-muted">Релизы не найдены.</p>
+        <p className="py-4 text-center text-sm text-fg-muted">{t("adm.updates.no_releases")}</p>
       )}
     </section>
   );
 }
 
 export default function AdminUpdatesPage() {
+  const t = useT();
   const [data, setData] = useState<UpdatesInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // translate, а не t: иначе смена языка пересоздавала бы load и перезапрашивала
+  // обновления (а в .catch язык всё равно берётся актуальный, модульно).
   const load = (force = false) => {
     setLoading(true);
     updatesAdminApi
       .get(force)
       .then(setData)
-      .catch((e) => setError(e instanceof ApiError ? e.detail : "Не удалось загрузить обновления"))
+      .catch((e) => setError(e instanceof ApiError ? e.detail : translate("adm.updates.load_error")))
       .finally(() => setLoading(false));
   };
 
@@ -167,12 +193,12 @@ export default function AdminUpdatesPage() {
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-fg">
             <Sparkles className="h-5 w-5 text-accent" />
-            Обновления
+            {t("adm.updates.title")}
           </h1>
           <p className="mt-0.5 text-sm text-fg-muted">
             {channels.length > 0
-              ? "Кабинет и бот обновляются отдельно — у каждого своя версия и своя команда."
-              : "История релизов кабинета и админки."}
+              ? t("adm.updates.subtitle_channels")
+              : t("adm.updates.subtitle")}
           </p>
         </div>
         <button
@@ -181,7 +207,7 @@ export default function AdminUpdatesPage() {
           className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] bg-bg-raised px-3 py-2 text-sm font-medium text-fg-muted transition-colors hover:text-fg disabled:opacity-50"
         >
           <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          Проверить
+          {t("adm.updates.check")}
         </button>
       </div>
 
@@ -192,19 +218,16 @@ export default function AdminUpdatesPage() {
           data-testid="bot-behind-cabinet"
           className="rounded-2xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-fg"
         >
-          <p className="font-semibold text-warning">Кабинет новее бота</p>
-          <p className="mt-1 text-fg-muted">
-            Кабинет обновлён отдельно от бота. Пока бот не обновлён, в кабинете скрыто:
-          </p>
+          <p className="font-semibold text-warning">{t("adm.updates.bot_behind_title")}</p>
+          <p className="mt-1 text-fg-muted">{t("adm.updates.bot_behind_intro")}</p>
           <ul className="mt-2 list-disc space-y-0.5 pl-5">
+            {/* Подписи — из манифеста возможностей бота: его строки читает sed'ом
+                update.sh, поэтому они живут там, а не в словаре кабинета. */}
             {missing.map((cap) => (
               <li key={cap}>{BOT_CAPABILITIES[cap].label}</li>
             ))}
           </ul>
-          <p className="mt-2 text-fg-muted">
-            Обновите бота на его сервере — скрытое появится само при следующем открытии кабинета,
-            пересобирать кабинет не нужно:
-          </p>
+          <p className="mt-2 text-fg-muted">{t("adm.updates.bot_behind_howto")}</p>
           <p className="mt-1 flex items-start gap-2 overflow-x-auto rounded-lg bg-bg-raised px-3 py-2 font-mono text-xs text-fg-muted">
             <Terminal className="mt-px h-3.5 w-3.5 shrink-0" />
             <span className="whitespace-pre">./update.sh --with-bot</span>
@@ -233,10 +256,14 @@ export default function AdminUpdatesPage() {
             <div className={`rounded-2xl border p-4 ${data.update_available ? "border-warning/30 bg-warning/10" : "border-success/25 bg-success/8"}`}>
               {data.update_available ? (
                 <>
-                  <p className="text-sm font-semibold text-warning">Доступно обновление</p>
+                  <p className="text-sm font-semibold text-warning">{t("adm.updates.update_available_title")}</p>
                   <p className="mt-1 text-sm text-fg">
-                    Текущая версия <b>{data.current}</b> → доступна <b>{data.latest}</b>. Ниже отмечено
-                    <span className="font-semibold text-warning"> «Новое»</span> — что изменится после обновления.
+                    {withMarkup(
+                      t("adm.updates.update_available_body", {
+                        current: data.current,
+                        latest: data.latest ?? "",
+                      }),
+                    )}
                   </p>
                   <p className="mt-2 rounded-lg bg-bg-raised px-3 py-2 font-mono text-xs text-fg-muted">
                     cd /opt/remnashop &amp;&amp; ./update.sh
@@ -245,7 +272,7 @@ export default function AdminUpdatesPage() {
               ) : (
                 <p className="flex items-center gap-2 text-sm font-medium text-success">
                   <CheckCircle2 className="h-4 w-4" />
-                  Установлена последняя версия ({data.current}).
+                  {t("adm.updates.up_to_date", { version: data.current })}
                 </p>
               )}
             </div>
@@ -261,7 +288,7 @@ export default function AdminUpdatesPage() {
                 <ReleaseCard key={it.version} it={it} />
               ))}
               {data && data.items.length === 0 && (
-                <p className="py-8 text-center text-sm text-fg-muted">Релизы не найдены.</p>
+                <p className="py-8 text-center text-sm text-fg-muted">{t("adm.updates.no_releases")}</p>
               )}
             </div>
           )}
