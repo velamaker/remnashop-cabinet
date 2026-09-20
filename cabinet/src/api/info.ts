@@ -16,13 +16,33 @@ export interface InfoContent {
   statuses: string;
 }
 
+/**
+ * Ответ админской ручки: тот же контент в корне (так его читал кабинет до
+ * переводов) плюс язык и то, что реально сохранено именно для него.
+ *
+ * `own` — только сохранённое: редактор обязан отличать «перевели теми же словами»
+ * от «не переводили вовсе», иначе он подставит русский текст в поле перевода и
+ * первое же «Сохранить» превратит фолбэк в настоящий «перевод».
+ */
+export interface AdminInfoResponse extends InfoContent {
+  lang: string;
+  base_lang: string;
+  own: Partial<InfoContent>;
+  base: InfoContent;
+  translated_langs: string[];
+}
+
+const withLang = (path: string, lang?: string | null) =>
+  lang && lang !== "ru" ? `${path}?lang=${encodeURIComponent(lang)}` : path;
+
 // Публичное чтение (сохранённое или брендированные дефолты).
 export const infoApi = {
-  get: () => api.get<InfoContent>("/info"),
+  get: (lang?: string | null) => api.get<InfoContent>(withLang("/info", lang)),
 };
 
 // Редактирование — только для админов.
 export const infoAdminApi = {
-  get: () => adminApi.get<InfoContent>("/info"),
-  update: (data: Partial<InfoContent>) => adminApi.put<InfoContent>("/info", data),
+  get: (lang?: string | null) => adminApi.get<AdminInfoResponse>(withLang("/info", lang)),
+  update: (data: Partial<InfoContent>, lang?: string | null) =>
+    adminApi.put<AdminInfoResponse>(withLang("/info", lang), data),
 };

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { HelpCircle, FileText, Shield, ScrollText, Star, Activity } from "lucide-react";
 import { subscriptionApi } from "@/api/subscription";
 import { infoApi, type InfoContent, type FaqItem } from "@/api/info";
-import { useT } from "@/i18n/I18nContext";
+import { useI18n, useT } from "@/i18n/I18nContext";
 
 const tabs = [
   { id: "faq", label: "info.tabFaq", icon: HelpCircle },
@@ -217,17 +217,21 @@ function Faq({ items }: { items: FaqItem[] }) {
 
 export default function InfoPage() {
   const t = useT();
+  // Тексты «Информации» — контент владельца, а не строки интерфейса: язык
+  // спрашиваем у бэкенда. Раздел без перевода приедет по-русски (фолбэк там же).
+  const { lang } = useI18n();
   const [active, setActive] = useState<TabId>("faq");
   const [content, setContent] = useState<InfoContent | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
+    setLoaded(false);
     infoApi
-      .get()
+      .get(lang)
       .then(setContent)
       .catch(() => {})
       .finally(() => setLoaded(true));
-  }, []);
+  }, [lang]);
 
   const renderContent = () => {
     if (active === "service") return <ServiceStatus />;

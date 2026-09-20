@@ -8,10 +8,17 @@ JSON-файле в каталоге assets (том переживает пере
 
 Вкладка «Серверы» здесь НЕ хранится — она живая (ноды из Remnawave бота, см.
 service_status.py).
+
+ПЕРЕВОДЫ. Кабинет говорит на 12 языках, а «Информация» — единственный
+пользовательский текст, который иностранец читал по-русски: это не строки
+интерфейса, а контент, который правит владелец. Переводы лежат в том же файле,
+в ветке `i18n.<язык>`, и накрывают русский ПОЛЕ ЗА ПОЛЕМ: не перевели «Оферту» —
+покажем русскую, а не пустоту. Русский остаётся корнем файла, поэтому старый
+кабинет (и старый бот) видят ровно то же, что раньше.
 """
 
 import json
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter
 
@@ -24,6 +31,17 @@ INFO_PATH = ASSETS_DIR / "info_content.json"
 # Ключи редактируемых разделов. Тексты — в markdown (мини-рендер на фронте:
 # ## заголовок, - список, **жирный**, абзацы). FAQ — список {q, a}.
 TEXT_SECTIONS = ("rules", "privacy", "offer", "statuses")
+
+#: Язык контента по умолчанию: он же корень файла и фолбэк для остальных.
+BASE_LANG = "ru"
+#: Сколько языков вообще разрешаем хранить — защита от мусора в файле.
+MAX_LANGS = 24
+
+
+def normalize_lang(lang: Any) -> Optional[str]:
+    """«EN» → «en»; всё, что не двухбуквенный код, — None (значит русский)."""
+    code = str(lang or "").strip().lower()
+    return code if len(code) == 2 and code.isalpha() else None
 
 DEFAULT_FAQ: list[dict[str, str]] = [
     {"q": "Что такое {brand}?",
@@ -180,8 +198,57 @@ def load_stored() -> dict[str, Any]:
     return {}
 
 
-def effective_content() -> dict[str, Any]:
-    """Что реально показывать: сохранённое поверх брендированных дефолтов."""
+def _faq_list(raw: Any) -> Optional[list[dict[str, str]]]:
+    """Список вопросов из сырого значения. Пустой список — это «не переведено»."""
+    if not isinstance(raw, list):
+        return None
+    items = [
+        {"q": str(i.get("q", "")).strip(), "a": str(i.get("a", "")).strip()}
+        for i in raw
+        if isinstance(i, dict)
+    ]
+    items = [i for i in items if i["q"] and i["a"]]
+    return items or None
+
+
+def translations(stored: Optional[dict[str, Any]] = None) -> dict[str, dict[str, Any]]:
+    """Ветка переводов из файла: {'en': {...}, 'tr': {...}}. Мусор отбрасываем."""
+    data = load_stored() if stored is None else stored
+    raw = data.get("i18n")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for code, value in list(raw.items())[:MAX_LANGS]:
+        norm = normalize_lang(code)
+        if norm and norm != BASE_LANG and isinstance(value, dict):
+            out[norm] = value
+    return out
+
+
+def translated_langs() -> list[str]:
+    """Языки, для которых хоть что-то переведено (для админки и витрины)."""
+    return sorted(
+        code
+        for code, value in translations().items()
+        if _faq_list(value.get("faq")) or any(str(value.get(k, "")).strip() for k in TEXT_SECTIONS)
+    )
+
+
+def stored_for_lang(lang: Optional[str]) -> dict[str, Any]:
+    """ТОЛЬКО сохранённое для языка, без фолбэка (редактору — видеть пустоты)."""
+    code = normalize_lang(lang) or BASE_LANG
+    stored = load_stored()
+    if code == BASE_LANG:
+        return {k: v for k, v in stored.items() if k != "i18n"}
+    return dict(translations(stored).get(code) or {})
+
+
+def effective_content(lang: Optional[str] = None) -> dict[str, Any]:
+    """Что реально показывать: перевод поверх русского поверх дефолтов.
+
+    Фолбэк ПОЛЕВОЙ: раздел без перевода приезжает по-русски. Иначе человек с
+    турецким языком открыл бы пустую «Оферту» — хуже, чем чужой язык.
+    """
     data = _branded_defaults()
     stored = load_stored()
     if isinstance(stored.get("faq"), list):
@@ -193,10 +260,27 @@ def effective_content() -> dict[str, Any]:
     for key in TEXT_SECTIONS:
         if isinstance(stored.get(key), str):
             data[key] = stored[key]
+
+    code = normalize_lang(lang)
+    if code and code != BASE_LANG:
+        tr = translations(stored).get(code) or {}
+        faq = _faq_list(tr.get("faq"))
+        if faq:
+            data["faq"] = faq
+        for key in TEXT_SECTIONS:
+            value = tr.get(key)
+            if isinstance(value, str) and value.strip():
+                data[key] = value
     return data
 
 
 @router.get("")
-async def get_info() -> dict[str, Any]:
-    """Публично: контент страницы «Информация» (сохранённый или дефолтный)."""
-    return effective_content()
+async def get_info(lang: Optional[str] = None) -> dict[str, Any]:
+    """Публично: контент «Информации» на языке кабинета (с фолбэком на русский).
+
+    Без параметра — по-русски, как раньше: старый кабинет ничего не заметит.
+    """
+    content = effective_content(lang)
+    content["lang"] = normalize_lang(lang) or BASE_LANG
+    content["translated_langs"] = translated_langs()
+    return content

@@ -61,6 +61,7 @@ export const BOT_CAPABILITIES = {
   extra_device: { since: "1.4.0", label: "Докупка устройства к подписке: место на 30 дней с продлением" },
   extra_traffic: { since: "1.4.0", label: "Докупка трафика к подписке: +50 ГБ до ближайшего обновления" },
   payment_reminder: { since: "1.4.1", label: "Напоминание о незавершённой оплате" },
+  info_i18n: { since: "1.4.7", label: "Переводы страницы «Информация» на языки кабинета" },
 } as const;
 
 export type BotCap = keyof typeof BOT_CAPABILITIES;

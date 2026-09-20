@@ -1,8 +1,11 @@
-import { useEffect, useState } from "react";
-import { Plus, Trash2, Save } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Plus, Trash2, Save, Languages, ClipboardCopy } from "lucide-react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
-import { infoAdminApi, type InfoContent } from "@/api/info";
+import { infoAdminApi, type AdminInfoResponse, type InfoContent } from "@/api/info";
+import { useBranding } from "@/contexts/BrandingContext";
+import { LANGUAGES } from "@/i18n/config";
+import { botHas } from "@/lib/botCapabilities";
 import { ApiError } from "@/types/api";
 
 const SECTIONS = [
@@ -16,31 +19,64 @@ const SECTIONS = [
 type SectionId = (typeof SECTIONS)[number]["id"];
 type TextSection = Exclude<SectionId, "faq">;
 
+const BASE_LANG = "ru";
+
 const textInput =
   "w-full rounded-lg border border-[var(--border)] bg-bg px-3 py-2 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent";
 
+/** Пустой перевод: показываем ровно то, что сохранено, без русского фолбэка. */
+function ownContent(data: AdminInfoResponse): InfoContent {
+  if (data.lang === data.base_lang) {
+    return { faq: data.faq, rules: data.rules, privacy: data.privacy, offer: data.offer, statuses: data.statuses };
+  }
+  return {
+    faq: data.own.faq ?? [],
+    rules: data.own.rules ?? "",
+    privacy: data.own.privacy ?? "",
+    offer: data.own.offer ?? "",
+    statuses: data.own.statuses ?? "",
+  };
+}
+
 export default function AdminInfoPage() {
+  const { appearance } = useBranding();
+  // Переводы понимает только бот новее 1.4.6. Со старым бот сохранит присланный
+  // текст как РУССКИЙ: вкладки языков там показывать нельзя — одно «Сохранить»
+  // подменило бы русскую страницу английской.
+  const canTranslate = botHas(appearance, "info_i18n");
+
+  const [lang, setLang] = useState<string>(BASE_LANG);
   const [content, setContent] = useState<InfoContent | null>(null);
+  const [base, setBase] = useState<InfoContent | null>(null);
+  const [translated, setTranslated] = useState<string[]>([]);
   const [active, setActive] = useState<SectionId>("faq");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  const apply = useCallback((data: AdminInfoResponse) => {
+    setContent(ownContent(data));
+    setBase(data.base ?? null);
+    setTranslated(data.translated_langs ?? []);
+  }, []);
+
   useEffect(() => {
+    setLoading(true);
+    setMsg(null);
     infoAdminApi
-      .get()
-      .then(setContent)
+      .get(lang)
+      .then(apply)
       .catch((e) => setMsg({ type: "error", text: e instanceof ApiError ? e.detail : "Ошибка" }))
       .finally(() => setLoading(false));
-  }, []);
+  }, [lang, apply]);
 
   const save = async () => {
     if (!content) return;
     setSaving(true);
     setMsg(null);
     try {
-      const saved = await infoAdminApi.update(content);
-      setContent(saved);
+      const saved = await infoAdminApi.update(content, lang);
+      apply(saved);
       setMsg({ type: "success", text: "Сохранено" });
     } catch (e) {
       setMsg({ type: "error", text: e instanceof ApiError ? e.detail : "Не удалось сохранить" });
@@ -57,13 +93,23 @@ export default function AdminInfoPage() {
       c ? { ...c, faq: c.faq.map((it, j) => (j === i ? { ...it, [field]: value } : it)) } : c,
     );
 
-  const addFaq = () =>
-    setContent((c) => (c ? { ...c, faq: [...c.faq, { q: "", a: "" }] } : c));
+  const addFaq = () => setContent((c) => (c ? { ...c, faq: [...c.faq, { q: "", a: "" }] } : c));
 
   const removeFaq = (i: number) =>
     setContent((c) => (c ? { ...c, faq: c.faq.filter((_, j) => j !== i) } : c));
 
-  if (loading) {
+  /** Взять русский текст как заготовку перевода — переводить проще, чем писать с нуля. */
+  const copyBase = () => {
+    if (!base) return;
+    if (active === "faq") setContent((c) => (c ? { ...c, faq: base.faq.map((i) => ({ ...i })) } : c));
+    else setText(active as TextSection, base[active as TextSection]);
+  };
+
+  const isBase = lang === BASE_LANG;
+  const sectionEmpty =
+    !!content && (active === "faq" ? content.faq.length === 0 : !content[active as TextSection].trim());
+
+  if (loading && !content) {
     return (
       <div className="flex justify-center py-16">
         <div className="h-6 w-6 animate-spin rounded-full border-2 border-border border-t-accent" />
@@ -85,6 +131,41 @@ export default function AdminInfoPage() {
         <code>## Заголовок</code>, <code>- пункт списка</code>, <code>**жирный**</code>, пустая
         строка — новый абзац. Вкладка «Серверы» формируется автоматически из Remnawave.
       </p>
+
+      {canTranslate && (
+        <div className="rounded-xl border border-[var(--border)] bg-bg-subtle p-3">
+          <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-fg">
+            <Languages className="h-3.5 w-3.5" />
+            Язык текстов
+          </div>
+          <div className="scrollbar-hide flex gap-1.5 overflow-x-auto pb-1">
+            {LANGUAGES.map((l) => {
+              const done = l.code === BASE_LANG || translated.includes(l.code);
+              return (
+                <button
+                  key={l.code}
+                  onClick={() => setLang(l.code)}
+                  className={`flex-shrink-0 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                    lang === l.code
+                      ? "border-accent bg-accent text-accent-fg"
+                      : done
+                        ? "border-[var(--border)] bg-bg text-fg hover:bg-bg-raised"
+                        : "border-dashed border-[var(--border)] bg-bg text-fg-subtle hover:text-fg"
+                  }`}
+                  title={done ? "Переведено" : "Нет перевода — покажем русский"}
+                >
+                  {l.label}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-2 text-xs text-fg-muted">
+            {isBase
+              ? "Русский — основной текст. Разделы без перевода показываются по-русски на любом языке."
+              : "Пустой раздел — это «не переведено»: человеку покажем русский текст. Очистите поле, чтобы снять перевод."}
+          </p>
+        </div>
+      )}
 
       {msg && (
         <p
@@ -113,6 +194,23 @@ export default function AdminInfoPage() {
         ))}
       </div>
 
+      {!isBase && (
+        <div className="flex flex-wrap items-center gap-2">
+          {sectionEmpty && (
+            <span className="rounded-lg bg-amber-500/10 px-2.5 py-1 text-xs text-amber-600 dark:text-amber-400">
+              Нет перевода — покажем русский
+            </span>
+          )}
+          <button
+            onClick={copyBase}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-bg-subtle px-2.5 py-1 text-xs font-medium text-fg hover:bg-bg-raised"
+          >
+            <ClipboardCopy className="h-3.5 w-3.5" />
+            Вставить русский текст
+          </button>
+        </div>
+      )}
+
       {content && active === "faq" && (
         <div className="space-y-3">
           {content.faq.map((item, i) => (
@@ -130,13 +228,13 @@ export default function AdminInfoPage() {
                 </div>
                 <input
                   className={textInput}
-                  placeholder="Вопрос"
+                  placeholder={isBase ? "Вопрос" : base?.faq[i]?.q || "Вопрос"}
                   value={item.q}
                   onChange={(e) => setFaq(i, "q", e.target.value)}
                 />
                 <textarea
                   className={`${textInput} min-h-[80px] resize-y`}
-                  placeholder="Ответ"
+                  placeholder={isBase ? "Ответ" : base?.faq[i]?.a || "Ответ"}
                   value={item.a}
                   onChange={(e) => setFaq(i, "a", e.target.value)}
                 />
@@ -155,6 +253,7 @@ export default function AdminInfoPage() {
           <CardHeader title={SECTIONS.find((s) => s.id === active)?.label ?? ""} />
           <textarea
             className={`${textInput} min-h-[420px] resize-y font-mono leading-relaxed`}
+            placeholder={isBase ? "" : base?.[active as TextSection]}
             value={content[active as TextSection]}
             onChange={(e) => setText(active as TextSection, e.target.value)}
           />
