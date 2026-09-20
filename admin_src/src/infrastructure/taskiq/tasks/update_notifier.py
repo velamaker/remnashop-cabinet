@@ -44,17 +44,37 @@ def _parse(v: str) -> tuple[int, ...]:
     return tuple(int(x) for x in nums) or (0,)
 
 
-async def _latest_tag() -> str | None:
+async def _tags() -> list[str]:
+    """Теги выпусков с GitHub. Пустой список = не дозвонились/нет тегов."""
     try:
         async with httpx.AsyncClient(timeout=8, follow_redirects=True) as cli:
             resp = await cli.get(f"https://api.github.com/repos/{REPO}/tags")
         tags = resp.json()
         names = [t["name"] for t in tags if isinstance(t, dict) and t.get("name")]
-        sem = [n for n in names if re.match(r"^v?\d+(\.\d+)+$", n.strip())]
-        return max(sem, key=_parse) if sem else None
+        return [n.strip() for n in names if re.match(r"^v?\d+(\.\d+)+$", n.strip())]
     except Exception as e:  # noqa: BLE001
         logger.debug(f"update-notifier: не смог получить теги: {e}")
-        return None
+        return []
+
+
+async def _latest_tag() -> str | None:
+    tags = await _tags()
+    return max(tags, key=_parse) if tags else None
+
+
+def whats_new_url(local: str, latest: str, tags: list[str]) -> str:
+    """Ссылка «что нового».
+
+    Сравнение `compare/vA...vB` показывает ровно изменения между выпусками, но
+    работает, только пока СУЩЕСТВУЮТ оба тега. Номера выпусков иногда исчезают:
+    20.09 четыре выпуска слили в один, и теги 1.4.3–1.4.5 были удалены. У того, кто
+    сидит на таком номере, ссылка отдавала 404 — поэтому при отсутствии тега ведём
+    на ленту изменений, она есть всегда.
+    """
+    have = {t.lstrip("vV") for t in tags}
+    if local.lstrip("vV") in have:
+        return f"https://github.com/{REPO}/compare/v{local.lstrip('vV')}...{latest}"
+    return f"https://github.com/{REPO}/blob/main/CHANGELOG.md"
 
 
 def _load_state() -> dict:
@@ -84,7 +104,8 @@ async def check_update_and_notify() -> None:
         return
 
     local = _local_version()
-    latest = await _latest_tag()
+    tags = await _tags()
+    latest = max(tags, key=_parse) if tags else None
     if not latest or _parse(latest) <= _parse(local):
         return  # уже последняя / не удалось узнать
 
@@ -97,7 +118,7 @@ async def check_update_and_notify() -> None:
         f"Версия: {local} → {latest_clean}\n\n"
         "Как обновить (на сервере бота):\n"
         "  cd /opt/remnashop && ./update.sh\n\n"
-        f"Что нового: https://github.com/{REPO}/compare/v{local}...{latest}"
+        f"Что нового: {whats_new_url(local, latest, tags)}"
     )
 
     bot = Bot(token)
