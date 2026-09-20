@@ -7,6 +7,8 @@ export interface BalanceResponse {
   total_spent: number;
   total_purchases: number;
   autopay_enabled: boolean;
+  /** За сколько дней до конца спишем. Старый бот поля не шлёт. */
+  autopay_days_before?: number;
 }
 
 export interface BalanceTransaction {

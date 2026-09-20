@@ -1,3 +1,4 @@
+import os
 from decimal import Decimal
 from typing import Any
 
@@ -54,6 +55,14 @@ async def _get_balance(session: AsyncSession, user_id: int) -> Decimal:
     return Decimal(str(row)) if row is not None else Decimal(0)
 
 
+def _autopay_days_before() -> int:
+    """Тот же расчёт, что у крона autopay (tasks/autopay.py): env или 3."""
+    try:
+        return max(1, int(os.environ.get("AUTOPAY_DAYS_BEFORE") or "3"))
+    except ValueError:
+        return 3
+
+
 @router.get("")
 @inject
 async def get_balance(
@@ -82,6 +91,10 @@ async def get_balance(
         "total_spent": total_spent,
         "total_purchases": len(completed),
         "autopay_enabled": bool(autopay),
+        # За сколько дней до конца спишем. Кабинет обещает это человеку словами,
+        # а срок живёт в переменной окружения крона — без поля он назвал бы своё
+        # число и соврал бы на установке с другим AUTOPAY_DAYS_BEFORE.
+        "autopay_days_before": _autopay_days_before(),
     }
 
 

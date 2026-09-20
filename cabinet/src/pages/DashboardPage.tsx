@@ -31,6 +31,7 @@ import { RenewalBanner } from "@/components/RenewalBanner";
 import { useRenewalDiscount } from "@/hooks/useRenewalDiscount";
 import { TrialDiscountBanner } from "@/components/TrialDiscountBanner";
 import { PromoBanner } from "@/components/PromoBanner";
+import { AutopayCard } from "@/components/AutopayCard";
 import { SubscriptionFreeze } from "@/components/SubscriptionFreeze";
 import { SpeedtestWidget } from "@/components/SpeedtestWidget";
 import {
@@ -193,6 +194,10 @@ export default function DashboardPage() {
       {/* Пауза подписки — фича кабинета, но держится на бэкенде: он должен уметь
           и снять доступ, и вернуть остаток дней. Не умеет — кнопку не показываем,
           иначе человек жмёт её и получает «раздел недоступен». */}
+      {/* Автопродление — рядом с решением «продлевать ли»: на «Балансе» тумблер
+          не нашёл НИ ОДИН человек из 1124. Пробному не показываем: продлевать с
+          баланса нечего, там покупка первого тарифа. */}
+      {can("autopay") && !subscription.is_trial && <AutopayCard />}
       {can("freeze") && <SubscriptionFreeze />}
       <SpeedtestWidget />
 

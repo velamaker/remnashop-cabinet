@@ -6,6 +6,7 @@ import { subscriptionApi } from "@/api/subscription";
 import { ApiError, type PlanOfferResponse } from "@/types/api";
 import { formatDate, activeLocale } from "@/lib/format";
 import { onReturnFromPayment, openPayment } from "@/lib/payment";
+import { AutopayCard } from "@/components/AutopayCard";
 import { useT } from "@/i18n/I18nContext";
 import { useBranding } from "@/contexts/BrandingContext";
 
@@ -182,42 +183,6 @@ function ConvertPoints({ points, rate, onConverted }: { points: number; rate: nu
         className="inline-flex flex-shrink-0 items-center gap-2 rounded-xl btn-gradient border-0 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
       >
         {busy ? "…" : tr("balance.convertBtn", { r: rub })}
-      </button>
-    </div>
-  );
-}
-
-function AutopayToggle({ enabled, onChange }: { enabled: boolean; onChange: (v: boolean) => void }) {
-  const tr = useT();
-  const [busy, setBusy] = useState(false);
-
-  const toggle = async () => {
-    setBusy(true);
-    try {
-      const r = await balanceApi.setAutopay(!enabled);
-      onChange(r.autopay_enabled);
-    } catch {
-      /* ignore */
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="flex items-center justify-between gap-3 rounded-2xl border border-border-subtle bg-bg-subtle p-4">
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-fg">{tr("balance.autopayTitle")}</p>
-        <p className="mt-0.5 text-xs text-fg-muted">{tr("balance.autopaySub")}</p>
-      </div>
-      <button
-        type="button"
-        onClick={toggle}
-        disabled={busy}
-        role="switch"
-        aria-checked={enabled}
-        className={`relative h-6 w-11 flex-shrink-0 rounded-full transition-colors disabled:opacity-50 ${enabled ? "bg-accent" : "bg-bg-overlay border border-[var(--border)]"}`}
-      >
-        <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${enabled ? "left-[22px]" : "left-0.5"}`} />
       </button>
     </div>
   );
@@ -604,10 +569,10 @@ export default function BalancePage() {
         />
       )}
 
-      {/* Автопродление с баланса */}
+      {/* Автопродление с баланса (та же карточка, что на странице подписки) */}
       {balance && can("autopay") && (
-        <AutopayToggle
-          enabled={balance.autopay_enabled}
+        <AutopayCard
+          data={balance}
           onChange={(v) => setBalance((prev) => (prev ? { ...prev, autopay_enabled: v } : prev))}
         />
       )}
