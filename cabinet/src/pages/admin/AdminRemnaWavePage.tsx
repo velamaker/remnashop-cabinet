@@ -5,6 +5,9 @@ import {
 } from "lucide-react";
 import { adminApi } from "@/api/admin";
 import { formatDate } from "@/lib/format";
+import { useI18n, useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
+import { pluralFor } from "@/lib/pluralRu";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -67,18 +70,32 @@ interface RwInbound {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+// Единицы и сокращения аптайма — из словаря: функции чистые, поэтому берут
+// перевод через translate (активный язык), а не через хук.
 function fmtBytes(n: number): string {
-  if (n >= 1e12) return `${(n / 1e12).toFixed(2)} ТБ`;
-  if (n >= 1e9) return `${(n / 1e9).toFixed(1)} ГБ`;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(0)} МБ`;
-  return `${(n / 1e3).toFixed(0)} КБ`;
+  if (n >= 1e12) return translate("adm.remnawave.unit_tb", { v: (n / 1e12).toFixed(2) });
+  if (n >= 1e9) return translate("adm.remnawave.unit_gb", { v: (n / 1e9).toFixed(1) });
+  if (n >= 1e6) return translate("adm.remnawave.unit_mb", { v: (n / 1e6).toFixed(0) });
+  return translate("adm.remnawave.unit_kb", { v: (n / 1e3).toFixed(0) });
 }
 
 function fmtUptime(secs: number): string {
   const d = Math.floor(secs / 86400);
   const h = Math.floor((secs % 86400) / 3600);
   const m = Math.floor((secs % 3600) / 60);
-  return [d && `${d}д`, h && `${h}ч`, m && `${m}м`].filter(Boolean).join(" ") || "< 1м";
+  return [
+    d && translate("adm.remnawave.up_d", { n: d }),
+    h && translate("adm.remnawave.up_h", { n: h }),
+    m && translate("adm.remnawave.up_m", { n: m }),
+  ].filter(Boolean).join(" ") || translate("adm.remnawave.up_lt_min");
+}
+
+/** «4 ядра» и «4 cores»: форму выбирает pluralFor ПО ЯЗЫКУ, текст — из словаря. */
+function coresLabel(t: (k: string, v?: Record<string, string | number>) => string, lang: string, n: number): string {
+  return t(
+    pluralFor(lang, n, "adm.remnawave.cores_one", "adm.remnawave.cores_few", "adm.remnawave.cores_many"),
+    { n },
+  );
 }
 
 function StatCard({ icon: Icon, label, value, sub, accent }: {
@@ -101,6 +118,8 @@ function NodeCard({ node, onAction }: {
   node: RwNode;
   onAction: (uuid: string, action: "restart" | "enable" | "disable") => Promise<void>;
 }) {
+  const t = useT();
+  const { lang } = useI18n();
   const [busy, setBusy] = useState<string | null>(null);
 
   const act = async (action: "restart" | "enable" | "disable") => {
@@ -112,12 +131,12 @@ function NodeCard({ node, onAction }: {
   const isConnecting = node.is_connecting && !node.is_connected;
   const memPct = node.total_ram && node.total_ram > 0 ? null : null;
 
-  let statusLabel = "Офлайн";
+  let statusKey = "adm.remnawave.status_offline";
   let statusCls = "bg-danger/10 text-danger";
   let dotCls = "bg-danger";
-  if (node.is_disabled) { statusLabel = "Отключён"; statusCls = "bg-fg-subtle/10 text-fg-subtle"; dotCls = "bg-fg-subtle"; }
-  else if (isOnline) { statusLabel = "Онлайн"; statusCls = "bg-success/10 text-success"; dotCls = "bg-success"; }
-  else if (isConnecting) { statusLabel = "Подключение"; statusCls = "bg-warning/10 text-warning"; dotCls = "bg-warning"; }
+  if (node.is_disabled) { statusKey = "adm.remnawave.status_disabled"; statusCls = "bg-fg-subtle/10 text-fg-subtle"; dotCls = "bg-fg-subtle"; }
+  else if (isOnline) { statusKey = "adm.remnawave.status_online"; statusCls = "bg-success/10 text-success"; dotCls = "bg-success"; }
+  else if (isConnecting) { statusKey = "adm.remnawave.status_connecting"; statusCls = "bg-warning/10 text-warning"; dotCls = "bg-warning"; }
 
   return (
     <div className="rounded-xl border border-[var(--border)] bg-bg-raised p-4 flex flex-col gap-3">
@@ -133,12 +152,12 @@ function NodeCard({ node, onAction }: {
             <p className="truncate text-xs text-fg-subtle">{node.address}{node.port ? `:${node.port}` : ""}</p>
           </div>
         </div>
-        <span className={`flex-shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium ${statusCls}`}>{statusLabel}</span>
+        <span className={`flex-shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium ${statusCls}`}>{t(statusKey)}</span>
       </div>
 
       {/* Online users — prominent */}
       <div className="flex items-center justify-between rounded-lg bg-bg px-3 py-2">
-        <span className="flex items-center gap-1.5 text-xs text-fg-muted"><Wifi className="h-3.5 w-3.5" />Онлайн сейчас</span>
+        <span className="flex items-center gap-1.5 text-xs text-fg-muted"><Wifi className="h-3.5 w-3.5" />{t("adm.remnawave.online_now")}</span>
         <span className={`text-sm font-bold ${node.users_online > 0 ? "text-success" : "text-fg-subtle"}`}>{node.users_online}</span>
       </div>
 
@@ -146,34 +165,37 @@ function NodeCard({ node, onAction }: {
       <div className="grid grid-cols-2 gap-2">
         {node.traffic_used_bytes != null && (
           <div className="rounded-lg bg-bg px-2.5 py-2">
-            <p className="text-[10px] text-fg-subtle">Трафик</p>
+            <p className="text-[10px] text-fg-subtle">{t("adm.remnawave.traffic")}</p>
             <p className="text-xs font-semibold text-fg">{fmtBytes(node.traffic_used_bytes)}</p>
           </div>
         )}
         {node.xray_uptime != null && (
           <div className="rounded-lg bg-bg px-2.5 py-2">
-            <p className="text-[10px] text-fg-subtle">Аптайм</p>
+            <p className="text-[10px] text-fg-subtle">{t("adm.remnawave.uptime")}</p>
             <p className="text-xs font-semibold text-fg">{fmtUptime(node.xray_uptime)}</p>
           </div>
         )}
         {node.cpu_count != null && (
           <div className="rounded-lg bg-bg px-2.5 py-2">
-            <p className="text-[10px] text-fg-subtle">ЦПУ</p>
-            <p className="text-xs font-semibold text-fg">{node.cpu_count} ядер</p>
+            <p className="text-[10px] text-fg-subtle">{t("adm.remnawave.cpu")}</p>
+            <p className="text-xs font-semibold text-fg">{coresLabel(t, lang, node.cpu_count)}</p>
           </div>
         )}
         {node.total_ram != null && node.total_ram > 0 && (
           <div className="rounded-lg bg-bg px-2.5 py-2">
-            <p className="text-[10px] text-fg-subtle">ОЗУ</p>
+            <p className="text-[10px] text-fg-subtle">{t("adm.remnawave.ram")}</p>
             <p className="text-xs font-semibold text-fg">{fmtBytes(node.total_ram)}</p>
           </div>
         )}
         {node.cert_days != null && (
           <div className="rounded-lg bg-bg px-2.5 py-2"
-            title={node.cert_checked_at ? `Проверено: ${formatDate(node.cert_checked_at)}` : undefined}>
-            <p className="text-[10px] text-fg-subtle">Сертификат</p>
+            title={node.cert_checked_at ? t("adm.remnawave.cert_checked", { date: formatDate(node.cert_checked_at) }) : undefined}>
+            <p className="text-[10px] text-fg-subtle">{t("adm.remnawave.cert")}</p>
             <p className={`text-xs font-semibold ${node.cert_days <= 10 ? "text-danger" : node.cert_days <= 30 ? "text-warning" : "text-fg"}`}>
-              {node.cert_days} дн.
+              {t(
+                pluralFor(lang, node.cert_days, "adm.remnawave.cert_days_one", "adm.remnawave.cert_days_few", "adm.remnawave.cert_days_many"),
+                { n: node.cert_days },
+              )}
             </p>
           </div>
         )}
@@ -184,17 +206,17 @@ function NodeCard({ node, onAction }: {
         <button onClick={() => act("restart")} disabled={busy !== null || node.is_disabled}
           className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-fg-muted hover:text-fg hover:bg-bg disabled:opacity-40 transition-colors">
           <RefreshCw className={`h-3 w-3 ${busy === "restart" ? "animate-spin" : ""}`} />
-          {busy === "restart" ? "…" : "Рестарт"}
+          {busy === "restart" ? "…" : t("adm.remnawave.btn_restart")}
         </button>
         {node.is_disabled ? (
           <button onClick={() => act("enable")} disabled={busy !== null}
             className="flex items-center gap-1 rounded-lg border border-success/20 bg-success/8 px-2.5 py-1.5 text-xs text-success hover:bg-success/15 disabled:opacity-40 transition-colors">
-            <Power className="h-3 w-3" />{busy === "enable" ? "…" : "Включить"}
+            <Power className="h-3 w-3" />{busy === "enable" ? "…" : t("adm.remnawave.btn_enable")}
           </button>
         ) : (
           <button onClick={() => act("disable")} disabled={busy !== null}
             className="flex items-center gap-1 rounded-lg border border-warning/20 bg-warning/8 px-2.5 py-1.5 text-xs text-warning hover:bg-warning/15 disabled:opacity-40 transition-colors">
-            <PowerOff className="h-3 w-3" />{busy === "disable" ? "…" : "Выключить"}
+            <PowerOff className="h-3 w-3" />{busy === "disable" ? "…" : t("adm.remnawave.btn_disable")}
           </button>
         )}
       </div>
@@ -205,6 +227,7 @@ function NodeCard({ node, onAction }: {
 // ─── Auto-refresh timer ───────────────────────────────────────────────────────
 
 function RefreshTimer({ interval, onTick }: { interval: number; onTick: () => void }) {
+  const t = useT();
   const [remaining, setRemaining] = useState(interval);
   const ref = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -233,7 +256,7 @@ function RefreshTimer({ interval, onTick }: { interval: number; onTick: () => vo
             className="transition-all duration-1000" />
         </svg>
       </div>
-      обновление через {remaining}с
+      {t("adm.remnawave.refresh_in", { n: remaining })}
     </div>
   );
 }
@@ -242,7 +265,32 @@ function RefreshTimer({ interval, onTick }: { interval: number; onTick: () => vo
 
 type Tab = "system" | "nodes" | "hosts" | "inbounds";
 
+const HOST_COLS = [
+  "adm.remnawave.col_name",
+  "adm.remnawave.col_address",
+  "adm.remnawave.col_port",
+  "adm.remnawave.col_inbound",
+  "adm.remnawave.col_status",
+];
+
+const INBOUND_COLS = [
+  "adm.remnawave.col_tag",
+  "adm.remnawave.col_type",
+  "adm.remnawave.col_network",
+  "adm.remnawave.col_security",
+  "adm.remnawave.col_port",
+];
+
+const DATA_SOURCE_HINT: Record<Tab, string> = {
+  nodes: "adm.remnawave.src_nodes",
+  system: "adm.remnawave.src_system",
+  hosts: "adm.remnawave.src_hosts",
+  inbounds: "adm.remnawave.src_inbounds",
+};
+
 export default function AdminRemnaWavePage() {
+  const t = useT();
+  const { lang } = useI18n();
   const [tab, setTab] = useState<Tab>("nodes");
   const [system, setSystem] = useState<SystemStats | null>(null);
   const [nodes, setNodes] = useState<RwNode[]>([]);
@@ -254,30 +302,30 @@ export default function AdminRemnaWavePage() {
   const [version, setVersion] = useState<string | null>(null);
   const [totalOnline, setTotalOnline] = useState<number | null>(null);
 
-  const fetchTab = useCallback(async (t: Tab, silent = false) => {
+  const fetchTab = useCallback(async (t2: Tab, silent = false) => {
     if (!silent) setLoading(true);
     else setRefreshing(true);
     setErr(null);
     try {
-      if (t === "system") {
+      if (t2 === "system") {
         const d = await adminApi.get<SystemStats>("/remnawave/system");
         setSystem(d);
         if (d.metadata?.version) setVersion(d.metadata.version);
-      } else if (t === "nodes") {
+      } else if (t2 === "nodes") {
         const d = await adminApi.get<{ nodes: RwNode[] }>("/remnawave/nodes");
         setNodes(d.nodes ?? []);
         const online = (d.nodes ?? []).reduce((s, n) => s + (n.users_online ?? 0), 0);
         setTotalOnline(online);
-      } else if (t === "hosts") {
+      } else if (t2 === "hosts") {
         const d = await adminApi.get<{ hosts: RwHost[] }>("/remnawave/hosts");
         setHosts(d.hosts ?? []);
-      } else if (t === "inbounds") {
+      } else if (t2 === "inbounds") {
         const d = await adminApi.get<{ inbounds: RwInbound[] }>("/remnawave/inbounds");
         setInbounds(d.inbounds ?? []);
       }
     } catch (e) {
       const err = e as { detail?: string; message?: string };
-      setErr(err?.detail ?? err?.message ?? "Ошибка соединения с RemnaWave");
+      setErr(err?.detail ?? err?.message ?? translate("adm.remnawave.conn_error"));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -298,20 +346,13 @@ export default function AdminRemnaWavePage() {
   const s = system?.stats;
 
   const tabs: { key: Tab; label: string; icon: React.ElementType }[] = [
-    { key: "nodes", label: "Ноды", icon: Activity },
-    { key: "system", label: "Система", icon: Server },
-    { key: "hosts", label: "Хосты", icon: Globe },
-    { key: "inbounds", label: "Инбаунды", icon: Layers },
+    { key: "nodes", label: t("adm.remnawave.tab_nodes"), icon: Activity },
+    { key: "system", label: t("adm.remnawave.tab_system"), icon: Server },
+    { key: "hosts", label: t("adm.remnawave.tab_hosts"), icon: Globe },
+    { key: "inbounds", label: t("adm.remnawave.tab_inbounds"), icon: Layers },
   ];
 
   const onlineNodes = nodes.filter(n => n.is_connected && !n.is_disabled).length;
-
-  const dataSourceHint: Record<Tab, string> = {
-    nodes: "список и состояние нод (онлайн, трафик, ЦПУ/ОЗУ) — метод nodes панели",
-    system: "версия, CPU/RAM/аптайм сервера и сводка пользователей — метод system панели",
-    hosts: "хосты подключения — метод hosts панели",
-    inbounds: "инбаунды — метод inbounds панели",
-  };
 
   return (
     <div className="space-y-5">
@@ -328,7 +369,7 @@ export default function AdminRemnaWavePage() {
           <button onClick={() => fetchTab(tab)} disabled={loading || refreshing}
             className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs text-fg-muted hover:text-fg transition-colors disabled:opacity-50">
             <RefreshCw className={`h-3.5 w-3.5 ${(loading || refreshing) ? "animate-spin" : ""}`} />
-            Обновить
+            {t("adm.remnawave.btn_refresh")}
           </button>
         </div>
       </div>
@@ -337,26 +378,26 @@ export default function AdminRemnaWavePage() {
       {tab === "nodes" && nodes.length > 0 && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="rounded-xl border border-[var(--border)] bg-bg-raised px-4 py-3">
-            <p className="text-xs text-fg-muted">Онлайн сейчас</p>
+            <p className="text-xs text-fg-muted">{t("adm.remnawave.online_now")}</p>
             <p className="mt-0.5 text-2xl font-bold text-success">{totalOnline ?? 0}</p>
-            <p className="text-xs text-fg-subtle">пользователей</p>
+            <p className="text-xs text-fg-subtle">{t("adm.remnawave.cnt_users")}</p>
           </div>
           <div className="rounded-xl border border-[var(--border)] bg-bg-raised px-4 py-3">
-            <p className="text-xs text-fg-muted">Нод онлайн</p>
+            <p className="text-xs text-fg-muted">{t("adm.remnawave.nodes_online")}</p>
             <p className="mt-0.5 text-2xl font-bold text-fg">{onlineNodes} / {nodes.length}</p>
-            <p className="text-xs text-fg-subtle">активных</p>
+            <p className="text-xs text-fg-subtle">{t("adm.remnawave.cnt_active")}</p>
           </div>
           <div className="rounded-xl border border-[var(--border)] bg-bg-raised px-4 py-3">
-            <p className="text-xs text-fg-muted">Трафик всего</p>
+            <p className="text-xs text-fg-muted">{t("adm.remnawave.traffic_total")}</p>
             <p className="mt-0.5 text-xl font-bold text-fg">
-              {fmtBytes(nodes.reduce((s, n) => s + (n.traffic_used_bytes ?? 0), 0))}
+              {fmtBytes(nodes.reduce((s2, n) => s2 + (n.traffic_used_bytes ?? 0), 0))}
             </p>
-            <p className="text-xs text-fg-subtle">за всё время</p>
+            <p className="text-xs text-fg-subtle">{t("adm.remnawave.cnt_lifetime")}</p>
           </div>
           <div className="rounded-xl border border-[var(--border)] bg-bg-raised px-4 py-3">
-            <p className="text-xs text-fg-muted">Нод отключено</p>
+            <p className="text-xs text-fg-muted">{t("adm.remnawave.nodes_disabled")}</p>
             <p className="mt-0.5 text-2xl font-bold text-fg">{nodes.filter(n => n.is_disabled).length}</p>
-            <p className="text-xs text-fg-subtle">вручную</p>
+            <p className="text-xs text-fg-subtle">{t("adm.remnawave.cnt_manually")}</p>
           </div>
         </div>
       )}
@@ -379,10 +420,9 @@ export default function AdminRemnaWavePage() {
       <div className="flex items-start gap-2.5 rounded-xl border border-[var(--border)] bg-bg-subtle px-4 py-3">
         <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-fg-subtle" strokeWidth={1.75} />
         <p className="text-xs leading-relaxed text-fg-muted">
-          <span className="font-medium text-fg">Откуда данные:</span>{" "}
-          {dataSourceHint[tab]}. Всё тянется напрямую из API панели Remnawave в реальном
-          времени — при каждом обновлении делается свежий запрос. В базе кабинета эти данные
-          не хранятся, поэтому здесь всегда актуальное состояние панели.
+          <span className="font-medium text-fg">{t("adm.remnawave.src_label")}</span>{" "}
+          {t(DATA_SOURCE_HINT[tab])}{" "}
+          {t("adm.remnawave.src_note")}
         </p>
       </div>
 
@@ -401,14 +441,14 @@ export default function AdminRemnaWavePage() {
           {/* ── Nodes ── */}
           {tab === "nodes" && (
             nodes.length === 0 ? (
-              <p className="py-8 text-center text-sm text-fg-muted">Ноды не найдены</p>
+              <p className="py-8 text-center text-sm text-fg-muted">{t("adm.remnawave.nodes_empty")}</p>
             ) : (
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <p className="text-xs text-fg-muted">{refreshing && <span className="mr-1 animate-pulse">↺</span>}Данные обновляются каждые 30 сек</p>
+                  <p className="text-xs text-fg-muted">{refreshing && <span className="mr-1 animate-pulse">↺</span>}{t("adm.remnawave.auto_refresh_note")}</p>
                   <button onClick={async () => { await adminApi.post("/remnawave/nodes/restart-all"); await fetchTab("nodes", true); }}
                     className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs text-fg-muted hover:text-fg transition-colors">
-                    Рестарт всех нод
+                    {t("adm.remnawave.restart_all")}
                   </button>
                 </div>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -424,28 +464,29 @@ export default function AdminRemnaWavePage() {
           {tab === "system" && system && (
             <div className="space-y-5">
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <StatCard icon={Cpu} label="Процессор" value={`${s?.cpu?.cores ?? "—"} ядер`}
-                  sub={s?.cpu?.physical_cores ? `${s.cpu.physical_cores} физ.` : undefined} />
-                <StatCard icon={MemoryStick} label="Оперативная память"
+                <StatCard icon={Cpu} label={t("adm.remnawave.sys_cpu")}
+                  value={s?.cpu?.cores != null ? coresLabel(t, lang, s.cpu.cores) : "—"}
+                  sub={s?.cpu?.physical_cores ? t("adm.remnawave.phys_cores", { n: s.cpu.physical_cores }) : undefined} />
+                <StatCard icon={MemoryStick} label={t("adm.remnawave.sys_ram")}
                   value={s?.memory ? fmtBytes(s.memory.used) : "—"}
-                  sub={s?.memory ? `из ${fmtBytes(s.memory.total)} (${Math.round(s.memory.used / s.memory.total * 100)}%)` : undefined} />
-                <StatCard icon={Clock} label="Аптайм сервера"
+                  sub={s?.memory ? t("adm.remnawave.mem_of", { total: fmtBytes(s.memory.total), pct: Math.round(s.memory.used / s.memory.total * 100) }) : undefined} />
+                <StatCard icon={Clock} label={t("adm.remnawave.sys_uptime")}
                   value={s?.uptime != null ? fmtUptime(s.uptime) : "—"} />
-                <StatCard icon={Activity} label="Хостов онлайн"
+                <StatCard icon={Activity} label={t("adm.remnawave.hosts_online")}
                   value={String(s?.nodes?.total_online ?? "—")}
-                  sub={s?.nodes?.total_bytes_lifetime ? `${fmtBytes(Number(s.nodes.total_bytes_lifetime))} lifetime` : undefined} />
+                  sub={s?.nodes?.total_bytes_lifetime ? t("adm.remnawave.lifetime_value", { v: fmtBytes(Number(s.nodes.total_bytes_lifetime)) }) : undefined} />
               </div>
 
               {s?.users && (
                 <div className="rounded-xl border border-[var(--border)] bg-bg-raised p-4">
-                  <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-fg-subtle">Пользователи RemnaWave</p>
+                  <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-fg-subtle">{t("adm.remnawave.users_title")}</p>
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                    <div><p className="text-xs text-fg-muted">Всего</p><p className="mt-0.5 text-2xl font-bold text-fg">{s.users.total_users}</p></div>
+                    <div><p className="text-xs text-fg-muted">{t("adm.remnawave.total")}</p><p className="mt-0.5 text-2xl font-bold text-fg">{s.users.total_users}</p></div>
                     {s.online_stats && (
                       <>
-                        <div><p className="text-xs text-fg-muted">Онлайн сейчас</p><p className="mt-0.5 text-2xl font-bold text-success">{s.online_stats.online_now}</p></div>
-                        <div><p className="text-xs text-fg-muted">За 24ч</p><p className="mt-0.5 text-2xl font-bold text-fg">{s.online_stats.last_day}</p></div>
-                        <div><p className="text-xs text-fg-muted">За неделю</p><p className="mt-0.5 text-2xl font-bold text-fg">{s.online_stats.last_week}</p></div>
+                        <div><p className="text-xs text-fg-muted">{t("adm.remnawave.online_now")}</p><p className="mt-0.5 text-2xl font-bold text-success">{s.online_stats.online_now}</p></div>
+                        <div><p className="text-xs text-fg-muted">{t("adm.remnawave.last_day")}</p><p className="mt-0.5 text-2xl font-bold text-fg">{s.online_stats.last_day}</p></div>
+                        <div><p className="text-xs text-fg-muted">{t("adm.remnawave.last_week")}</p><p className="mt-0.5 text-2xl font-bold text-fg">{s.online_stats.last_week}</p></div>
                       </>
                     )}
                   </div>
@@ -467,14 +508,14 @@ export default function AdminRemnaWavePage() {
           {/* ── Hosts ── */}
           {tab === "hosts" && (
             hosts.length === 0 ? (
-              <p className="py-8 text-center text-sm text-fg-muted">Хосты не найдены</p>
+              <p className="py-8 text-center text-sm text-fg-muted">{t("adm.remnawave.hosts_empty")}</p>
             ) : (
               <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
                 <table className="w-full min-w-[560px] text-sm">
                   <thead>
                     <tr className="border-b border-[var(--border)] bg-bg-subtle">
-                      {["Название", "Адрес", "Порт", "Инбаунд", "Статус"].map(h => (
-                        <th key={h} className="px-4 py-2.5 text-left text-xs font-medium text-fg-muted">{h}</th>
+                      {HOST_COLS.map(h => (
+                        <th key={h} className="px-4 py-2.5 text-left text-xs font-medium text-fg-muted">{t(h)}</th>
                       ))}
                     </tr>
                   </thead>
@@ -491,8 +532,8 @@ export default function AdminRemnaWavePage() {
                         </td>
                         <td className="px-4 py-3">
                           {h.is_disabled
-                            ? <span className="text-xs text-fg-subtle">Отключён</span>
-                            : <span className="text-xs font-medium text-success">Активен</span>}
+                            ? <span className="text-xs text-fg-subtle">{t("adm.remnawave.status_disabled")}</span>
+                            : <span className="text-xs font-medium text-success">{t("adm.remnawave.host_active")}</span>}
                         </td>
                       </tr>
                     ))}
@@ -505,14 +546,14 @@ export default function AdminRemnaWavePage() {
           {/* ── Inbounds ── */}
           {tab === "inbounds" && (
             inbounds.length === 0 ? (
-              <p className="py-8 text-center text-sm text-fg-muted">Инбаунды не найдены</p>
+              <p className="py-8 text-center text-sm text-fg-muted">{t("adm.remnawave.inbounds_empty")}</p>
             ) : (
               <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
                 <table className="w-full min-w-[560px] text-sm">
                   <thead>
                     <tr className="border-b border-[var(--border)] bg-bg-subtle">
-                      {["Тег", "Тип", "Сеть", "Безопасность", "Порт"].map(h => (
-                        <th key={h} className="px-4 py-2.5 text-left text-xs font-medium text-fg-muted">{h}</th>
+                      {INBOUND_COLS.map(h => (
+                        <th key={h} className="px-4 py-2.5 text-left text-xs font-medium text-fg-muted">{t(h)}</th>
                       ))}
                     </tr>
                   </thead>

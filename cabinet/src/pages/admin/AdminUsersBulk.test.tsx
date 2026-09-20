@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, waitFor, fireEvent, act } from "@testing-library/react";
 import { ApiError } from "@/types/api";
@@ -6,7 +7,7 @@ import type { Appearance } from "@/api/appearance";
 import { canFeature } from "@/lib/features";
 import { I18nProvider } from "@/i18n/I18nContext";
 import { STORAGE_KEY } from "@/i18n/config";
-import { translate } from "@/i18n/translate";
+import { setActiveLang, translate } from "@/i18n/translate";
 
 // «Массово по фильтру»: добавить дни и написать сообщение. Заперто то, что
 // защищает людей от случайной массовой раздачи:
@@ -108,10 +109,14 @@ const job = (over: Partial<BulkJob> = {}): BulkJob => ({
 
 const noop = () => {};
 
-// Страница «Пользователи» больше не хранит русский текст в коде: подписи приходят
-// из словаря по ключам adm.users.*. Тест сверяется с тем же словарём (и держит
-// кабинет на русском), иначе он проверял бы не интерфейс, а копию строки.
-const ru = (key: string) => translate(key, {}, "ru");
+// Ни страница «Пользователи», ни «Массово по фильтру» больше не хранят русский
+// текст в коде: подписи приходят из словаря по ключам adm.users.* и adm.bulk.*.
+// Тест сверяется с тем же словарём (и держит кабинет на русском), иначе он
+// проверял бы не интерфейс, а копию строки.
+const ru = (key: string, vars: Record<string, string | number> = {}) => translate(key, vars, "ru");
+const days = (n: number) => ru("adm.bulk.days_few", { n });
+// Диалоги и панель зовут useT/useI18n — без провайдера они не рендерятся.
+const renderI18n = (ui: ReactElement) => render(<I18nProvider>{ui}</I18nProvider>);
 const renderUsersPage = () =>
   render(
     <I18nProvider>
@@ -124,19 +129,20 @@ beforeEach(() => {
   auth = { isReadonlyAdmin: false, fullAccess: true, isOwner: true, canSection: () => true };
   features = { can: () => true };
   localStorage.setItem(STORAGE_KEY, "ru");
+  setActiveLang("ru"); // чистые помощники (lib/bulkJobs) берут язык модульно
 });
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
 });
 
-const nextButton = () => screen.getByRole("button", { name: "Далее" });
+const nextButton = () => screen.getByRole("button", { name: ru("adm.bulk.next") });
 
 describe("«Добавить дни подписки»", () => {
   it("бэкенд не умеет (501) — пункт прячется, запуска нет", async () => {
     daysPreview.mockRejectedValue(new ApiError(501, "Не реализовано"));
     const onUnsupported = vi.fn();
-    render(<BulkDaysDialog filters={{}} onClose={noop} onStarted={noop} onUnsupported={onUnsupported} />);
+    renderI18n(<BulkDaysDialog filters={{}} onClose={noop} onStarted={noop} onUnsupported={onUnsupported} />);
     await waitFor(() => expect(onUnsupported).toHaveBeenCalledWith("users.bulk.days"));
     expect(startDays).not.toHaveBeenCalled();
   });
@@ -145,7 +151,7 @@ describe("«Добавить дни подписки»", () => {
     let resolve: (p: BulkDaysPreview) => void = noop;
     daysPreview.mockImplementationOnce(() => new Promise((r) => (resolve = r)));
     const onStarted = vi.fn();
-    render(<BulkDaysDialog filters={{ search: "a@b" }} onClose={noop} onStarted={onStarted} onUnsupported={noop} />);
+    renderI18n(<BulkDaysDialog filters={{ search: "a@b" }} onClose={noop} onStarted={onStarted} onUnsupported={noop} />);
     expect(nextButton()).toBeDisabled();
     await waitFor(() => expect(daysPreview).toHaveBeenCalledTimes(1));
     expect(daysPreview.mock.calls[0]?.[0]).toEqual({ search: "a@b" });
@@ -153,15 +159,15 @@ describe("«Добавить дни подписки»", () => {
     await waitFor(() => expect(nextButton()).toBeEnabled());
 
     fireEvent.click(nextButton());
-    expect(screen.getByText("Добавить 3 дня 6 подпискам?")).toBeInTheDocument();
+    expect(screen.getByText(ru("adm.bulk.confirm_few", { days: days(3), n: 6 }))).toBeInTheDocument();
     startDays.mockRejectedValueOnce(new Error("network")).mockResolvedValueOnce({ job_id: 12, status: "QUEUED", total: 10, apply: 6, duplicate: false });
-    const yes = screen.getByRole("button", { name: "Да, добавить" });
+    const yes = screen.getByRole("button", { name: ru("adm.bulk.yes_add") });
     fireEvent.click(yes);
     fireEvent.click(yes);
-    await waitFor(() => expect(screen.getByText("Не удалось запустить — попробуйте ещё раз")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(ru("adm.bulk.err_start"))).toBeInTheDocument());
     expect(startDays).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole("button", { name: "Да, добавить" }));
+    fireEvent.click(screen.getByRole("button", { name: ru("adm.bulk.yes_add") }));
     await waitFor(() => expect(onStarted).toHaveBeenCalledWith(12));
     const first = startDays.mock.calls[0]?.[1];
     const second = startDays.mock.calls[1]?.[1];
@@ -170,13 +176,13 @@ describe("«Добавить дни подписки»", () => {
 
     // Сменили дни — это уже другой запуск.
     daysPreview.mockResolvedValue(preview());
-    fireEvent.click(screen.getByRole("button", { name: "Назад" }));
-    fireEvent.change(screen.getByLabelText("Сколько дней добавить"), { target: { value: "5" } });
+    fireEvent.click(screen.getByRole("button", { name: ru("adm.bulk.back") }));
+    fireEvent.change(screen.getByLabelText(ru("adm.bulk.days_label")), { target: { value: "5" } });
     await waitFor(() => expect(daysPreview).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(nextButton()).toBeEnabled());
     fireEvent.click(nextButton());
     startDays.mockResolvedValueOnce({ job_id: 13, status: "QUEUED", total: 10, apply: 6, duplicate: false });
-    fireEvent.click(screen.getByRole("button", { name: "Да, добавить" }));
+    fireEvent.click(screen.getByRole("button", { name: ru("adm.bulk.yes_add") }));
     await waitFor(() => expect(startDays).toHaveBeenCalledTimes(3));
     expect(startDays.mock.calls[2]?.[1].request_id).not.toBe(first.request_id);
     expect(startDays.mock.calls[2]?.[1].days).toBe(5);
@@ -184,23 +190,23 @@ describe("«Добавить дни подписки»", () => {
 
   it("предпросмотр говорит про резерв, паузу и исчерпанный трафик", async () => {
     daysPreview.mockResolvedValue(preview());
-    render(<BulkDaysDialog filters={{}} onClose={noop} onStarted={noop} onUnsupported={noop} />);
-    await waitFor(() => expect(screen.getByText("на резервном доступе (не оплачено) — 1")).toBeInTheDocument());
-    expect(screen.getByText("Из них на паузе: 2 — дни добавятся к остатку паузы")).toBeInTheDocument();
-    expect(screen.getByText(/^исчерпан трафик — 1/)).toBeInTheDocument();
-    expect(screen.queryByText(/подписка истекла/)).toBeNull();
+    renderI18n(<BulkDaysDialog filters={{}} onClose={noop} onStarted={noop} onUnsupported={noop} />);
+    await waitFor(() => expect(screen.getByText(ru("adm.bulk.skip_reserve", { n: 1 }))).toBeInTheDocument());
+    expect(screen.getByText(ru("adm.bulk.frozen", { n: 2 }))).toBeInTheDocument();
+    expect(screen.getByText(ru("adm.bulk.skip_limited", { n: 1 }))).toBeInTheDocument();
+    expect(screen.queryByText(ru("adm.bulk.skip_expired", { n: 0 }))).toBeNull();
   });
 
   it("повтор за 24 часа — только с галочкой «Понимаю»", async () => {
     daysPreview.mockResolvedValue(preview({ recently_extended: { count: 3, job_id: 9, days: 2 } }));
     startDays.mockResolvedValue({ job_id: 14, status: "QUEUED", total: 10, apply: 6, duplicate: false });
-    render(<BulkDaysDialog filters={{}} onClose={noop} onStarted={noop} onUnsupported={noop} />);
+    renderI18n(<BulkDaysDialog filters={{}} onClose={noop} onStarted={noop} onUnsupported={noop} />);
     await waitFor(() => expect(nextButton()).toBeEnabled());
     fireEvent.click(nextButton());
-    expect(screen.getByText(/уже добавляли дни за последние 24 часа: 3 \(задача №9, \+2 дн\.\)/)).toBeInTheDocument();
-    const yes = screen.getByRole("button", { name: "Да, добавить" });
+    expect(screen.getByText(ru("adm.bulk.repeat_warn", { n: 3, job: 9, days: 2 }))).toBeInTheDocument();
+    const yes = screen.getByRole("button", { name: ru("adm.bulk.yes_add") });
     expect(yes).toBeDisabled();
-    fireEvent.click(screen.getByLabelText("Понимаю, добавить ещё раз"));
+    fireEvent.click(screen.getByLabelText(ru("adm.bulk.repeat_ack_days")));
     expect(yes).toBeEnabled();
     fireEvent.click(yes);
     await waitFor(() => expect(startDays).toHaveBeenCalledTimes(1));
@@ -211,9 +217,9 @@ describe("«Добавить дни подписки»", () => {
 describe("«Сообщение отфильтрованным»", () => {
   it("без каналов или длиннее 4000 символов — не отправить; выключенная почта видна", async () => {
     messagePreview.mockResolvedValue(messagePreviewData({ email_enabled: false }));
-    render(<BulkMessageDialog filters={{}} onClose={noop} onStarted={noop} onUnsupported={noop} />);
-    await waitFor(() => expect(screen.getByText("Почта выключена в настройках — письма не уйдут")).toBeInTheDocument());
-    const textarea = screen.getByLabelText("Текст сообщения");
+    renderI18n(<BulkMessageDialog filters={{}} onClose={noop} onStarted={noop} onUnsupported={noop} />);
+    await waitFor(() => expect(screen.getByText(ru("adm.bulk.email_off"))).toBeInTheDocument());
+    const textarea = screen.getByLabelText(ru("adm.bulk.text_aria"));
     fireEvent.change(textarea, { target: { value: "Привет" } });
     await waitFor(() => expect(nextButton()).toBeEnabled());
 
@@ -222,10 +228,10 @@ describe("«Сообщение отфильтрованным»", () => {
     expect(screen.getByText("4001/4000")).toBeInTheDocument();
 
     fireEvent.change(textarea, { target: { value: "Привет" } });
-    for (const label of ["Telegram", /В ленту уведомлений кабинета/, /Письмом/]) {
+    for (const label of ["Telegram", ru("adm.bulk.ch_cabinet"), ru("adm.bulk.ch_email")]) {
       fireEvent.click(screen.getByLabelText(label));
     }
-    await waitFor(() => expect(screen.getByText("Выберите хотя бы один канал")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(ru("adm.bulk.pick_channel"))).toBeInTheDocument());
     expect(nextButton()).toBeDisabled();
     expect(startMessage).not.toHaveBeenCalled();
   });
@@ -233,11 +239,11 @@ describe("«Сообщение отфильтрованным»", () => {
   it("«Проверить на себе» говорит, что пришло", async () => {
     messagePreview.mockResolvedValue(messagePreviewData());
     testMessage.mockResolvedValueOnce({ telegram: false, reason: "no_telegram" });
-    render(<BulkMessageDialog filters={{}} onClose={noop} onStarted={noop} onUnsupported={noop} />);
-    fireEvent.change(screen.getByLabelText("Текст сообщения"), { target: { value: "<b>Привет</b>" } });
-    fireEvent.click(screen.getByRole("button", { name: "Проверить на себе" }));
+    renderI18n(<BulkMessageDialog filters={{}} onClose={noop} onStarted={noop} onUnsupported={noop} />);
+    fireEvent.change(screen.getByLabelText(ru("adm.bulk.text_aria")), { target: { value: "<b>Привет</b>" } });
+    fireEvent.click(screen.getByRole("button", { name: ru("adm.bulk.test_btn") }));
     await waitFor(() =>
-      expect(screen.getByText("У вашего аккаунта нет Telegram — проверить отправку нельзя")).toBeInTheDocument(),
+      expect(screen.getByText(ru("adm.bulk.test_no_tg"))).toBeInTheDocument(),
     );
     expect(testMessage).toHaveBeenCalledWith("<b>Привет</b>");
   });
@@ -246,26 +252,26 @@ describe("«Сообщение отфильтрованным»", () => {
 describe("«Фоновые задачи»", () => {
   it("без полного доступа или read-only — ни «Остановить», ни «Продолжить»", async () => {
     jobs.mockResolvedValue({ items: [job({ status: "PAUSED", pause_reason: "Панель VPN не отвечает" })], active: { days: 7, message: null } });
-    render(<BulkJobsPanel fullAccess={false} readonly={false} refreshKey={0} onWriteRecipients={noop} onUnsupported={noop} />);
+    renderI18n(<BulkJobsPanel fullAccess={false} readonly={false} refreshKey={0} onWriteRecipients={noop} onUnsupported={noop} />);
     await waitFor(() => expect(screen.getByText("Панель VPN не отвечает")).toBeInTheDocument());
-    expect(screen.queryByRole("button", { name: "Остановить" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Продолжить" })).toBeNull();
+    expect(screen.queryByRole("button", { name: ru("adm.bulk.stop") })).toBeNull();
+    expect(screen.queryByRole("button", { name: ru("adm.bulk.resume") })).toBeNull();
     cleanup();
 
-    render(<BulkJobsPanel fullAccess readonly refreshKey={0} onWriteRecipients={noop} onUnsupported={noop} />);
+    renderI18n(<BulkJobsPanel fullAccess readonly refreshKey={0} onWriteRecipients={noop} onUnsupported={noop} />);
     await waitFor(() => expect(screen.getByText("Панель VPN не отвечает")).toBeInTheDocument());
-    expect(screen.queryByRole("button", { name: "Остановить" })).toBeNull();
+    expect(screen.queryByRole("button", { name: ru("adm.bulk.stop") })).toBeNull();
     cleanup();
 
-    render(<BulkJobsPanel fullAccess readonly={false} refreshKey={0} onWriteRecipients={noop} onUnsupported={noop} />);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Продолжить" })).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "Остановить" })).toBeInTheDocument();
+    renderI18n(<BulkJobsPanel fullAccess readonly={false} refreshKey={0} onWriteRecipients={noop} onUnsupported={noop} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: ru("adm.bulk.resume") })).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: ru("adm.bulk.stop") })).toBeInTheDocument();
   });
 
   it("опрос идёт, только пока есть идущая задача", async () => {
     vi.useFakeTimers();
     jobs.mockResolvedValue({ items: [job({ status: "COMPLETED" })], active: { days: null, message: null } });
-    render(<BulkJobsPanel fullAccess readonly={false} refreshKey={0} onWriteRecipients={noop} onUnsupported={noop} />);
+    renderI18n(<BulkJobsPanel fullAccess readonly={false} refreshKey={0} onWriteRecipients={noop} onUnsupported={noop} />);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
@@ -278,7 +284,7 @@ describe("«Фоновые задачи»", () => {
     jobs.mockReset();
     jobs.mockResolvedValueOnce({ items: [job({ status: "PROCESSING", done: 3 })], active: { days: 7, message: null } });
     jobs.mockResolvedValue({ items: [job({ status: "COMPLETED" })], active: { days: null, message: null } });
-    render(<BulkJobsPanel fullAccess readonly={false} refreshKey={0} onWriteRecipients={noop} onUnsupported={noop} />);
+    renderI18n(<BulkJobsPanel fullAccess readonly={false} refreshKey={0} onWriteRecipients={noop} onUnsupported={noop} />);
     // Сначала доезжает первый ответ и перерисовка — только тогда заводится таймер опроса.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -297,27 +303,29 @@ describe("«Фоновые задачи»", () => {
     const recent = Array.from({ length: 10 }, (_, n) => job({ id: 20 + n, kind: "message", status: "COMPLETED" }));
     jobs.mockResolvedValue({ items: recent, active: { days: 3, message: null } });
     jobById.mockResolvedValue(job({ id: 3, status: "PAUSED", pause_reason: "Панель VPN не отвечает" }));
-    render(<BulkJobsPanel fullAccess readonly={false} refreshKey={0} onWriteRecipients={noop} onUnsupported={noop} />);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Продолжить" })).toBeInTheDocument());
+    renderI18n(<BulkJobsPanel fullAccess readonly={false} refreshKey={0} onWriteRecipients={noop} onUnsupported={noop} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: ru("adm.bulk.resume") })).toBeInTheDocument());
     expect(jobById).toHaveBeenCalledWith(3);
-    expect(screen.getByText(/^№3 · /)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Остановить" })).toBeInTheDocument();
+    // Догруженная задача действительно нарисована: остальные десять — «готово»,
+    // «на паузе» в списке только она.
+    expect(screen.getByText(ru("adm.bulk.status_paused"))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: ru("adm.bulk.stop") })).toBeInTheDocument();
     cleanup();
 
     // Активная уже в списке — лишнего запроса нет.
     jobById.mockReset();
     jobs.mockResolvedValue({ items: [job({ id: 7, status: "PAUSED" })], active: { days: 7, message: null } });
-    render(<BulkJobsPanel fullAccess readonly={false} refreshKey={0} onWriteRecipients={noop} onUnsupported={noop} />);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Продолжить" })).toBeInTheDocument());
+    renderI18n(<BulkJobsPanel fullAccess readonly={false} refreshKey={0} onWriteRecipients={noop} onUnsupported={noop} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: ru("adm.bulk.resume") })).toBeInTheDocument());
     expect(jobById).not.toHaveBeenCalled();
   });
 
   it("501 на списке задач — панели нет", async () => {
     jobs.mockRejectedValue(new ApiError(501, "Не реализовано"));
     const onUnsupported = vi.fn();
-    render(<BulkJobsPanel fullAccess readonly={false} refreshKey={0} onWriteRecipients={noop} onUnsupported={onUnsupported} />);
+    renderI18n(<BulkJobsPanel fullAccess readonly={false} refreshKey={0} onWriteRecipients={noop} onUnsupported={onUnsupported} />);
     await waitFor(() => expect(onUnsupported).toHaveBeenCalledWith("users.bulk.jobs"));
-    expect(screen.queryByText("Фоновые задачи")).toBeNull();
+    expect(screen.queryByText(ru("adm.bulk.jobs_title"))).toBeNull();
   });
 });
 
@@ -348,7 +356,7 @@ describe("«Пользователи»: пункты массовых задач
     await waitFor(() => expect(usersList).toHaveBeenCalled());
     expect(options()).not.toContain(ru("adm.users.bulk_opt_days"));
     expect(options()).not.toContain(ru("adm.users.bulk_opt_message"));
-    expect(screen.queryByText("Фоновые задачи")).toBeNull();
+    expect(screen.queryByText(ru("adm.bulk.jobs_title"))).toBeNull();
     expect(jobs).not.toHaveBeenCalled();
   });
 
@@ -365,7 +373,7 @@ describe("«Пользователи»: пункты массовых задач
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     expect(options()).not.toContain(ru("adm.users.bulk_opt_days"));
     expect(options()).not.toContain(ru("adm.users.bulk_opt_message"));
-    expect(screen.queryByText("Фоновые задачи")).toBeNull();
+    expect(screen.queryByText(ru("adm.bulk.jobs_title"))).toBeNull();
     expect(jobs).not.toHaveBeenCalled();
     expect(daysPreview).not.toHaveBeenCalled();
     expect(messagePreview).not.toHaveBeenCalled();

@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, waitFor, fireEvent } from "@testing-library/react";
 import { ApiError } from "@/types/api";
 import type { RenewalDiscountConfig, RenewalDiscountPreview, RenewalDiscountStats } from "@/api/admin";
+import { I18nProvider } from "@/i18n/I18nContext";
+import { STORAGE_KEY } from "@/i18n/config";
+import { setActiveLang } from "@/i18n/translate";
 
 // Страница «Скидка до окончания подписки». Заперто то, что защищает от раздачи
 // скидок вслепую:
@@ -78,7 +81,18 @@ vi.mock("@/api/admin", () => ({
 
 const { default: AdminRenewalDiscountPage } = await import("./AdminRenewalDiscountPage");
 
+// Карточка настроек на этой странице берёт подписи из словаря — рендерим её
+// внутри провайдера языка и держим кабинет на русском.
+const renderPage = () =>
+  render(
+    <I18nProvider>
+      <AdminRenewalDiscountPage />
+    </I18nProvider>,
+  );
+
 beforeEach(() => {
+  localStorage.setItem(STORAGE_KEY, "ru");
+  setActiveLang("ru");
   getConfig = () => Promise.resolve(config());
   getStats = () => Promise.resolve(stats());
   preview.mockReset();
@@ -90,7 +104,7 @@ afterEach(cleanup);
 describe("Скидка до окончания подписки: страница", () => {
   it("предпросмотр ничего не выдаёт и печатает причины словами", async () => {
     preview.mockResolvedValue(previewData);
-    render(<AdminRenewalDiscountPage />);
+    renderPage();
 
     expect(screen.getByText(/Ничего не выдаётся и не отправляется/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Горизонт"), { target: { value: "60" } });
@@ -104,7 +118,7 @@ describe("Скидка до окончания подписки: страниц�
 
   it("«Отозвать» без второго нажатия API не зовёт", async () => {
     revokeActive.mockResolvedValue({ revoked: 2 });
-    render(<AdminRenewalDiscountPage />);
+    renderPage();
     const revoke = await screen.findByRole("button", { name: "Отозвать активные скидки" });
 
     fireEvent.click(revoke);
@@ -122,7 +136,7 @@ describe("Скидка до окончания подписки: страниц�
 
   it("пример себе прямо говорит, что скидка не выдана", async () => {
     testSend.mockResolvedValue({ telegram: "sent", push: 0 });
-    render(<AdminRenewalDiscountPage />);
+    renderPage();
 
     fireEvent.click(screen.getByRole("button", { name: "Прислать пример себе" }));
     await waitFor(() =>
@@ -133,7 +147,7 @@ describe("Скидка до окончания подписки: страниц�
   it("бэкенд без этой механики (501) — блоков нет, ошибок тоже", async () => {
     getConfig = () => Promise.reject(new ApiError(501, "нет"));
     getStats = () => Promise.reject(new ApiError(501, "нет"));
-    render(<AdminRenewalDiscountPage />);
+    renderPage();
 
     await new Promise((r) => setTimeout(r, 0));
     await waitFor(() => expect(screen.queryByText(/Итоги за/)).toBeNull());

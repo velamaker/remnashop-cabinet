@@ -3,31 +3,35 @@ import { AlertCircle, KeyRound, X, Settings2, FlaskConical } from "lucide-react"
 import { gatewaysAdminApi, type AdminGateway, type GatewayField } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { GATEWAY_NAMES } from "@/lib/gatewayNames";
+import { useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
 
 const CURRENCY_SYMBOLS: Record<string, string> = {
   RUB: "₽", USD: "$", EUR: "€", XTR: "⭐",
 };
 
+// Имя поля ключа → ключ перевода подписи.
 const FIELD_LABELS: Record<string, string> = {
-  shop_id: "Shop ID",
-  api_key: "API-ключ",
-  secret_key: "Секретный ключ",
-  merchant_id: "Merchant ID",
-  wallet_id: "Wallet ID",
-  customer: "Customer",
-  vat_code: "Код НДС",
-  payment_method: "Метод оплаты (id)",
-  payment_system_id: "ID платёжной системы",
-  secret_word_2: "Секретное слово 2",
-  customer_email: "Email покупателя",
-  customer_ip: "IP покупателя",
-  merchant_login: "Merchant Login",
-  password1: "Пароль 1",
-  password2: "Пароль 2",
+  shop_id: "adm.gateways.f_shop_id",
+  api_key: "adm.gateways.f_api_key",
+  secret_key: "adm.gateways.f_secret_key",
+  merchant_id: "adm.gateways.f_merchant_id",
+  wallet_id: "adm.gateways.f_wallet_id",
+  customer: "adm.gateways.f_customer",
+  vat_code: "adm.gateways.f_vat_code",
+  payment_method: "adm.gateways.f_payment_method",
+  payment_system_id: "adm.gateways.f_payment_system_id",
+  secret_word_2: "adm.gateways.f_secret_word_2",
+  customer_email: "adm.gateways.f_customer_email",
+  customer_ip: "adm.gateways.f_customer_ip",
+  merchant_login: "adm.gateways.f_merchant_login",
+  password1: "adm.gateways.f_password1",
+  password2: "adm.gateways.f_password2",
 };
 
 function fieldLabel(name: string): string {
-  return FIELD_LABELS[name] || name;
+  const key = FIELD_LABELS[name];
+  return key ? translate(key) : name;
 }
 
 // ─── Модалка настройки ключей шлюза ──────────────────────────────────────────
@@ -40,6 +44,7 @@ function ConfigModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const t = useT();
   const [fields, setFields] = useState<GatewayField[]>([]);
   const [values, setValues] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -50,7 +55,7 @@ function ConfigModal({
     gatewaysAdminApi
       .fields(gateway.id)
       .then((r) => setFields(r.fields))
-      .catch((e) => setErr(e instanceof ApiError ? e.detail : "Ошибка"))
+      .catch((e) => setErr(e instanceof ApiError ? e.detail : translate("adm.gateways.err_generic")))
       .finally(() => setLoading(false));
   }, [gateway.id]);
 
@@ -66,7 +71,7 @@ function ConfigModal({
       onSaved();
       onClose();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.detail : "Не удалось сохранить");
+      setErr(e instanceof ApiError ? e.detail : t("adm.gateways.save_failed"));
     } finally {
       setSaving(false);
     }
@@ -79,8 +84,8 @@ function ConfigModal({
       <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={onClose} />
       <div className="relative z-10 w-full max-w-md rounded-2xl border border-[var(--border)] bg-bg p-5 shadow-xl">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-fg">Ключи: {name}</h2>
-          <button onClick={onClose} aria-label="Закрыть" className="text-fg-subtle hover:text-fg">
+          <h2 className="text-lg font-bold text-fg">{t("adm.gateways.keys_title", { name })}</h2>
+          <button onClick={onClose} aria-label={t("adm.gateways.close")} className="text-fg-subtle hover:text-fg">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -91,7 +96,7 @@ function ConfigModal({
           </div>
         ) : fields.length === 0 ? (
           <p className="py-6 text-center text-sm text-fg-muted">
-            Этот шлюз не требует ключей.
+            {t("adm.gateways.no_fields")}
           </p>
         ) : (
           <div className="flex flex-col gap-3">
@@ -106,13 +111,17 @@ function ConfigModal({
                   autoComplete="off"
                   value={values[f.name] ?? ""}
                   onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))}
-                  placeholder={f.is_set ? `задано: ${f.hint ?? "••••"}` : "не задано"}
+                  placeholder={
+                    f.is_set
+                      ? t("adm.gateways.field_set", { hint: f.hint ?? "••••" })
+                      : t("adm.gateways.field_unset")
+                  }
                   className="w-full rounded-xl border border-[var(--border)] bg-bg-subtle px-3 py-2 text-sm text-fg outline-none focus:border-accent"
                 />
               </label>
             ))}
             <p className="text-xs text-fg-subtle">
-              Пустые поля не меняются. Значения сохраняются в боте.
+              {t("adm.gateways.fields_hint")}
             </p>
           </div>
         )}
@@ -124,7 +133,7 @@ function ConfigModal({
             onClick={onClose}
             className="h-9 rounded-xl border border-[var(--border)] px-4 text-sm font-medium text-fg-muted hover:text-fg"
           >
-            Отмена
+            {t("adm.gateways.cancel")}
           </button>
           {fields.length > 0 && (
             <button
@@ -132,7 +141,7 @@ function ConfigModal({
               disabled={saving}
               className="btn-gradient inline-flex h-9 items-center rounded-xl px-4 text-sm font-semibold disabled:opacity-60"
             >
-              {saving ? "Сохраняю…" : "Сохранить"}
+              {saving ? t("adm.gateways.saving") : t("adm.gateways.save")}
             </button>
           )}
         </div>
@@ -142,6 +151,7 @@ function ConfigModal({
 }
 
 export default function AdminGatewaysPage() {
+  const t = useT();
   const [gateways, setGateways] = useState<AdminGateway[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -154,7 +164,7 @@ export default function AdminGatewaysPage() {
     setLoading(true);
     gatewaysAdminApi.list()
       .then(r => setGateways(r.items))
-      .catch(e => setError(e instanceof ApiError ? e.detail : "Ошибка"))
+      .catch(e => setError(e instanceof ApiError ? e.detail : translate("adm.gateways.err_generic")))
       .finally(() => setLoading(false));
   }, []);
 
@@ -170,7 +180,7 @@ export default function AdminGatewaysPage() {
       await gatewaysAdminApi.toggle(g.id, !g.is_active);
       load();
     } catch (e) {
-      alert(e instanceof ApiError ? e.detail : "Ошибка");
+      alert(e instanceof ApiError ? e.detail : t("adm.gateways.err_generic"));
     } finally {
       setToggling(null);
     }
@@ -178,26 +188,22 @@ export default function AdminGatewaysPage() {
 
   const test = async (g: AdminGateway) => {
     const name = g.display_name || GATEWAY_NAMES[g.type] || g.type;
-    if (!window.confirm(
-      `Создать реальный тест-платёж (~2 ₽) для «${name}»?\n\n` +
-      `Это проверит, что ключи рабочие. Откроется ссылка оплаты — оплатите ` +
-      `и убедитесь, что платёж проходит.`,
-    )) return;
+    if (!window.confirm(t("adm.gateways.test_confirm", { name }))) return;
 
     setTesting(g.id);
-    setTestResult((r) => ({ ...r, [g.id]: { ok: true, text: "Создаю тест-платёж…" } }));
+    setTestResult((r) => ({ ...r, [g.id]: { ok: true, text: t("adm.gateways.test_creating") } }));
     try {
       const res = await gatewaysAdminApi.test(g.id);
       if (res.url) {
         window.open(res.url, "_blank", "noopener");
-        setTestResult((r) => ({ ...r, [g.id]: { ok: true, text: "Ссылка оплаты открыта в новой вкладке." } }));
+        setTestResult((r) => ({ ...r, [g.id]: { ok: true, text: t("adm.gateways.test_link_opened") } }));
       } else {
-        setTestResult((r) => ({ ...r, [g.id]: { ok: true, text: res.message || "Тест-платёж создан." } }));
+        setTestResult((r) => ({ ...r, [g.id]: { ok: true, text: res.message || t("adm.gateways.test_created") } }));
       }
     } catch (e) {
       setTestResult((r) => ({
         ...r,
-        [g.id]: { ok: false, text: e instanceof ApiError ? e.detail : "Не удалось создать тест-платёж" },
+        [g.id]: { ok: false, text: e instanceof ApiError ? e.detail : t("adm.gateways.test_failed") },
       }));
     } finally {
       setTesting(null);
@@ -207,12 +213,11 @@ export default function AdminGatewaysPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-fg">Платёжные шлюзы</h1>
+        <h1 className="text-2xl font-bold text-fg">{t("adm.gateways.title")}</h1>
       </div>
 
       <div className="rounded-2xl border border-border-subtle bg-accent/5 px-5 py-4 text-sm text-fg-muted">
-        💡 Нажмите «Настроить ключи», чтобы ввести ключи API (сохранятся в боте). Затем
-        «Тест 2 ₽» создаёт реальный платёж — единственный способ убедиться, что ключи рабочие.
+        💡 {t("adm.gateways.hint")}
       </div>
 
       {error && <div className="flex items-center gap-2 rounded-xl bg-danger/10 px-4 py-3 text-sm text-danger"><AlertCircle className="h-4 w-4" />{error}</div>}
@@ -220,7 +225,7 @@ export default function AdminGatewaysPage() {
       {loading ? (
         <div className="flex justify-center py-20"><div className="h-8 w-8 animate-spin rounded-full border-2 border-border border-t-accent" /></div>
       ) : gateways.length === 0 ? (
-        <div className="py-20 text-center text-fg-muted">Шлюзы не найдены</div>
+        <div className="py-20 text-center text-fg-muted">{t("adm.gateways.empty")}</div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {gateways.map(g => {
@@ -235,16 +240,16 @@ export default function AdminGatewaysPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     {g.is_configured ? (
-                      <span title="Ключи настроены" className="text-success"><KeyRound className="h-4 w-4" /></span>
+                      <span title={t("adm.gateways.keys_set")} className="text-success"><KeyRound className="h-4 w-4" /></span>
                     ) : (
-                      <span title="Ключи не настроены" className="text-fg-subtle/70"><KeyRound className="h-4 w-4" /></span>
+                      <span title={t("adm.gateways.keys_not_set")} className="text-fg-subtle/70"><KeyRound className="h-4 w-4" /></span>
                     )}
                   </div>
                 </div>
 
                 <div className="flex items-center justify-between">
                   <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${g.is_active ? "bg-success/10 text-success" : "bg-fg-subtle/20 text-fg-muted"}`}>
-                    {g.is_active ? "Активен" : "Выключен"}
+                    {g.is_active ? t("adm.gateways.active") : t("adm.gateways.disabled")}
                   </span>
                   <button
                     onClick={() => toggle(g)}
@@ -261,17 +266,17 @@ export default function AdminGatewaysPage() {
                     className="inline-flex items-center gap-1.5 text-xs font-medium text-accent transition-opacity hover:opacity-80"
                   >
                     <Settings2 className="h-3.5 w-3.5" />
-                    Настроить ключи
+                    {t("adm.gateways.configure")}
                   </button>
                   {g.is_configured && (
                     <button
                       onClick={() => test(g)}
                       disabled={testing === g.id}
-                      title="Создать реальный тест-платёж ~2 ₽, чтобы проверить ключи"
+                      title={t("adm.gateways.test_title")}
                       className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-muted transition-opacity hover:text-fg disabled:opacity-50"
                     >
                       <FlaskConical className="h-3.5 w-3.5" />
-                      {testing === g.id ? "Тест…" : "Тест 2 ₽"}
+                      {testing === g.id ? t("adm.gateways.testing") : t("adm.gateways.test_btn")}
                     </button>
                   )}
                 </div>

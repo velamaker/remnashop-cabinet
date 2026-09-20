@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { AlertCircle, ShieldAlert } from "lucide-react";
 import { auditAdminApi, type AuditEntry } from "@/api/admin";
+import { useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
 import { ApiError } from "@/types/api";
 
 const METHOD_COLOR: Record<string, string> = {
@@ -13,28 +15,30 @@ const METHOD_COLOR: Record<string, string> = {
 // Короткое читаемое действие из пути (например, /gateways/5/fields/api_key).
 function actionLabel(path: string): string {
   const p = path.replace(/^\/api\/v1\/admin\//, "");
+  const field = p.match(/^gateways\/\d+\/fields\/(.+)$/);
+  if (field) return translate("adm.audit.act_gateway_field", { key: field[1] ?? "" });
   const map: [RegExp, string][] = [
-    [/^gateways\/\d+\/fields\/(.+)$/, "Шлюз: ключ «$1»"],
-    [/^gateways\/\d+\/toggle$/, "Шлюз: вкл/выкл"],
-    [/^plans/, "Тарифы"],
-    [/^promocodes/, "Промокоды"],
-    [/^users\/\d+\/block$/, "Пользователь: блокировка"],
-    [/^users\/\d+\/role$/, "Пользователь: роль"],
-    [/^users\/\d+\/discount$/, "Пользователь: скидка"],
-    [/^users\/bulk\/days$/, "Массово: добавить дни"],
-    [/^users\/bulk\/message$/, "Массово: сообщение"],
-    [/^users\/bulk\/message\/test$/, "Массово: проверка сообщения на себе"],
-    [/^users\/bulk\/jobs\/\d+\/cancel$/, "Массово: остановка задачи"],
-    [/^users\/bulk\/jobs\/\d+\/resume$/, "Массово: продолжение задачи"],
-    [/^users\/bulk-action$/, "Массово: баллы/скидка/блокировка"],
-    [/^broadcasts/, "Рассылки"],
-    [/^ad-links/, "Рекл. ссылки"],
-    [/^appearance/, "Оформление"],
-    [/^settings/, "Настройки"],
-    [/^support/, "Поддержка"],
+    [/^gateways\/\d+\/toggle$/, "adm.audit.act_gateway_toggle"],
+    [/^plans/, "adm.audit.act_plans"],
+    [/^promocodes/, "adm.audit.act_promocodes"],
+    [/^users\/\d+\/block$/, "adm.audit.act_user_block"],
+    [/^users\/\d+\/role$/, "adm.audit.act_user_role"],
+    [/^users\/\d+\/discount$/, "adm.audit.act_user_discount"],
+    [/^users\/bulk\/days$/, "adm.audit.act_bulk_days"],
+    [/^users\/bulk\/message$/, "adm.audit.act_bulk_message"],
+    [/^users\/bulk\/message\/test$/, "adm.audit.act_bulk_message_test"],
+    [/^users\/bulk\/jobs\/\d+\/cancel$/, "adm.audit.act_bulk_job_cancel"],
+    [/^users\/bulk\/jobs\/\d+\/resume$/, "adm.audit.act_bulk_job_resume"],
+    [/^users\/bulk-action$/, "adm.audit.act_bulk_action"],
+    [/^broadcasts/, "adm.audit.act_broadcasts"],
+    [/^ad-links/, "adm.audit.act_ad_links"],
+    [/^appearance/, "adm.audit.act_appearance"],
+    [/^settings/, "adm.audit.act_settings"],
+    [/^support/, "adm.audit.act_support"],
   ];
-  for (const [re, label] of map) {
-    if (re.test(p)) return p.replace(re, label);
+  for (const [re, key] of map) {
+    // Замена функцией: перевод подставляется как есть, без магии $1/$& внутри строки.
+    if (re.test(p)) return p.replace(re, () => translate(key));
   }
   return p;
 }
@@ -46,6 +50,7 @@ function fmt(iso: string | null): string {
 }
 
 export default function AdminAuditPage() {
+  const t = useT();
   const [items, setItems] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +66,7 @@ export default function AdminAuditPage() {
     auditAdminApi
       .list({ limit: 200, actor: actor || undefined, method: method || undefined, path: path || undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined })
       .then((r) => setItems(r.items))
-      .catch((e) => setError(e instanceof ApiError ? e.detail : "Ошибка"))
+      .catch((e) => setError(e instanceof ApiError ? e.detail : t("adm.audit.err_generic")))
       .finally(() => setLoading(false));
   };
 
@@ -81,28 +86,28 @@ export default function AdminAuditPage() {
     <div className="space-y-6">
       <div className="flex items-center gap-2">
         <ShieldAlert className="h-5 w-5 text-fg-muted" />
-        <h1 className="text-2xl font-bold text-fg">Аудит действий</h1>
+        <h1 className="text-2xl font-bold text-fg">{t("adm.audit.title")}</h1>
       </div>
 
       <p className="text-sm text-fg-muted">
-        Изменяющие действия в админке: кто, когда и что менял.
+        {t("adm.audit.intro")}
       </p>
 
       {/* Фильтры */}
       <div className="flex flex-wrap items-end gap-2 rounded-2xl border border-border-subtle bg-bg-subtle p-3">
-        <input value={actor} onChange={(e) => setActor(e.target.value)} placeholder="Кто (@user/email)" className={`${inputCls} w-40`} />
+        <input value={actor} onChange={(e) => setActor(e.target.value)} placeholder={t("adm.audit.f_actor")} className={`${inputCls} w-40`} />
         <select value={method} onChange={(e) => setMethod(e.target.value)} className={inputCls}>
-          <option value="">Метод: любой</option>
+          <option value="">{t("adm.audit.f_method_any")}</option>
           <option value="POST">POST</option>
           <option value="PUT">PUT</option>
           <option value="PATCH">PATCH</option>
           <option value="DELETE">DELETE</option>
         </select>
-        <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="Путь содержит…" className={`${inputCls} w-44`} />
-        <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className={inputCls} title="С даты" />
-        <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className={inputCls} title="По дату" />
-        <button onClick={load} className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90">Применить</button>
-        <button onClick={reset} className="rounded-xl border border-border-subtle bg-bg px-3 py-2 text-sm text-fg-muted hover:text-fg">Сброс</button>
+        <input value={path} onChange={(e) => setPath(e.target.value)} placeholder={t("adm.audit.f_path")} className={`${inputCls} w-44`} />
+        <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className={inputCls} title={t("adm.audit.f_date_from")} />
+        <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className={inputCls} title={t("adm.audit.f_date_to")} />
+        <button onClick={load} className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90">{t("adm.audit.apply")}</button>
+        <button onClick={reset} className="rounded-xl border border-border-subtle bg-bg px-3 py-2 text-sm text-fg-muted hover:text-fg">{t("adm.audit.reset")}</button>
       </div>
 
       {error && (
@@ -117,7 +122,7 @@ export default function AdminAuditPage() {
           <div className="h-8 w-8 animate-spin rounded-full border-2 border-border border-t-accent" />
         </div>
       ) : items.length === 0 ? (
-        <div className="py-20 text-center text-fg-muted">Записей пока нет</div>
+        <div className="py-20 text-center text-fg-muted">{t("adm.audit.empty")}</div>
       ) : (
         <div className="space-y-2">
           {items.map((it) => (

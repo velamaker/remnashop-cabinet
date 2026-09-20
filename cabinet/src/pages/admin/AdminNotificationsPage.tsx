@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { AlertCircle, Bell, Trash2, Smartphone, LayoutList } from "lucide-react";
 import { notificationsAdminApi, type AdminNotification } from "@/api/admin";
+import { useT } from "@/i18n/I18nContext";
+import { activeLocale } from "@/lib/format";
 import { ApiError } from "@/types/api";
 
 function fmt(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
-  return d.toLocaleString("ru-RU", {
+  return d.toLocaleString(activeLocale(), {
     day: "2-digit",
     month: "2-digit",
     hour: "2-digit",
@@ -15,6 +17,7 @@ function fmt(iso: string | null): string {
 }
 
 export default function AdminNotificationsPage() {
+  const t = useT();
   const [items, setItems] = useState<AdminNotification[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -31,7 +34,7 @@ export default function AdminNotificationsPage() {
     notificationsAdminApi
       .list(200)
       .then((r) => setItems(r.items))
-      .catch((e) => setError(e instanceof ApiError ? e.detail : "Ошибка"))
+      .catch((e) => setError(e instanceof ApiError ? e.detail : t("adm.notifications.err_generic")))
       .finally(() => setLoading(false));
   };
 
@@ -60,7 +63,7 @@ export default function AdminNotificationsPage() {
       setPushEnabled(s.admin_push_enabled);
     } catch (e) {
       setPushEnabled(!next); // откат
-      setError(e instanceof ApiError ? e.detail : "Не удалось сохранить настройку");
+      setError(e instanceof ApiError ? e.detail : t("adm.notifications.err_save"));
     } finally {
       setPushSaving(false);
     }
@@ -78,20 +81,20 @@ export default function AdminNotificationsPage() {
       setRichEnabled(typeof s.admin_rich_enabled === "boolean" ? s.admin_rich_enabled : next);
     } catch (e) {
       setRichEnabled(!next); // откат
-      setError(e instanceof ApiError ? e.detail : "Не удалось сохранить настройку");
+      setError(e instanceof ApiError ? e.detail : t("adm.notifications.err_save"));
     } finally {
       setRichSaving(false);
     }
   };
 
   const clear = async () => {
-    if (!confirm("Очистить всю историю уведомлений?")) return;
+    if (!confirm(t("adm.notifications.clear_confirm"))) return;
     setClearing(true);
     try {
       await notificationsAdminApi.clear();
       setItems([]);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Не удалось очистить");
+      setError(e instanceof ApiError ? e.detail : t("adm.notifications.err_clear"));
     } finally {
       setClearing(false);
     }
@@ -102,7 +105,7 @@ export default function AdminNotificationsPage() {
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Bell className="h-5 w-5 text-fg-muted" />
-          <h1 className="text-2xl font-bold text-fg">Уведомления</h1>
+          <h1 className="text-2xl font-bold text-fg">{t("adm.notifications.title")}</h1>
         </div>
         {items.length > 0 && (
           <button
@@ -111,15 +114,12 @@ export default function AdminNotificationsPage() {
             className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-[var(--border)] bg-bg-raised px-3 py-2 text-sm font-medium text-fg-muted transition-colors hover:text-danger disabled:opacity-50"
           >
             <Trash2 className="h-4 w-4" />
-            Очистить
+            {t("adm.notifications.clear")}
           </button>
         )}
       </div>
 
-      <p className="text-sm text-fg-muted">
-        История уведомлений админам (регистрации, оплаты, тикеты и т.п.). Копится
-        всегда — даже если пуш на телефон выключен ниже.
-      </p>
+      <p className="text-sm text-fg-muted">{t("adm.notifications.intro")}</p>
 
       {/* Тумблер: дублировать на телефон (web-push) */}
       <div className="flex items-center justify-between gap-3 rounded-2xl border border-border-subtle bg-bg-subtle px-4 py-3">
@@ -128,11 +128,8 @@ export default function AdminNotificationsPage() {
             <Smartphone className="h-4 w-4" />
           </div>
           <div>
-            <p className="text-sm font-semibold text-fg">Дублировать на телефон (web-push)</p>
-            <p className="mt-0.5 text-xs text-fg-muted">
-              Выключите, чтобы не задваивать с Telegram — уведомления останутся в этом
-              центре и в Telegram, но не будут приходить push’ем на устройство.
-            </p>
+            <p className="text-sm font-semibold text-fg">{t("adm.notifications.push_title")}</p>
+            <p className="mt-0.5 text-xs text-fg-muted">{t("adm.notifications.push_hint")}</p>
           </div>
         </div>
         <button
@@ -162,13 +159,8 @@ export default function AdminNotificationsPage() {
               <LayoutList className="h-4 w-4" />
             </div>
             <div>
-              <p className="text-sm font-semibold text-fg">Новый вид уведомлений в Telegram</p>
-              <p className="mt-0.5 text-xs text-fg-muted">
-                Включено — админские уведомления приходят карточкой: заголовок, таблица
-                «показатель → значение» и время внизу. Выключите, чтобы вернуть прежний
-                обычный текст. Касается только уведомлений админам в Telegram —
-                сообщения пользователям и этот центр уведомлений не меняются.
-              </p>
+              <p className="text-sm font-semibold text-fg">{t("adm.notifications.rich_title")}</p>
+              <p className="mt-0.5 text-xs text-fg-muted">{t("adm.notifications.rich_hint")}</p>
             </div>
           </div>
           <button
@@ -201,7 +193,7 @@ export default function AdminNotificationsPage() {
           <div className="h-8 w-8 animate-spin rounded-full border-2 border-border border-t-accent" />
         </div>
       ) : items.length === 0 ? (
-        <div className="py-20 text-center text-fg-muted">Уведомлений пока нет</div>
+        <div className="py-20 text-center text-fg-muted">{t("adm.notifications.empty")}</div>
       ) : (
         <div className="space-y-2">
           {items.map((it) => (

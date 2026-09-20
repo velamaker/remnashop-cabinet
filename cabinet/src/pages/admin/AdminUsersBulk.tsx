@@ -28,7 +28,9 @@ import {
 } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { formatDate } from "@/lib/format";
-import { ruDays } from "@/lib/pluralRu";
+import { useI18n, useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
+import { pluralFor } from "@/lib/pluralRu";
 import {
   compensationText,
   estimateMinutes,
@@ -51,10 +53,19 @@ const PRIMARY =
 const INPUT =
   "h-9 w-full rounded-lg border border-[var(--border)] bg-bg px-3 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent";
 
+type Translate = (key: string, vars?: Record<string, string | number>) => string;
+
+// «3 дня» и «3 days»: форму счётного слова выбирает pluralFor ПО ЯЗЫКУ, сам текст —
+// из словаря. Через pluralRu на английском выходило бы «21 day».
+function daysLabel(t: Translate, lang: string, n: number): string {
+  return t(pluralFor(lang, n, "adm.bulk.days_one", "adm.bulk.days_few", "adm.bulk.days_many"), { n });
+}
+
 const errorText = (e: unknown, fallback: string) => (e instanceof ApiError ? e.detail : fallback);
 const isUnsupported = (e: unknown) => e instanceof ApiError && e.status === 501;
 
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  const t = useT();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -79,7 +90,7 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
       >
         <div className="flex flex-shrink-0 items-center justify-between border-b border-[var(--border)] px-5 py-4">
           <p className="text-sm font-semibold text-fg">{title}</p>
-          <button onClick={onClose} aria-label="Закрыть" className="-m-1 rounded-lg p-2 text-fg-muted hover:text-fg">
+          <button onClick={onClose} aria-label={t("adm.bulk.close")} className="-m-1 rounded-lg p-2 text-fg-muted hover:text-fg">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -104,6 +115,7 @@ function Spinner() {
 }
 
 function ChannelPicker({ value, onChange }: { value: BulkChannel[]; onChange: (v: BulkChannel[]) => void }) {
+  const t = useT();
   const toggle = (c: BulkChannel, on: boolean) =>
     onChange(ALL_CHANNELS.filter((x) => (x === c ? on : value.includes(x))));
   return (
@@ -112,10 +124,10 @@ function ChannelPicker({ value, onChange }: { value: BulkChannel[]; onChange: (v
         Telegram
       </Check>
       <Check checked={value.includes("cabinet")} onChange={(v) => toggle("cabinet", v)}>
-        В ленту уведомлений кабинета (и push, если Telegram не доставил)
+        {t("adm.bulk.ch_cabinet")}
       </Check>
       <Check checked={value.includes("email")} onChange={(v) => toggle("email", v)}>
-        Письмом — тем, до кого не дошли Telegram и push (только подтверждённая почта)
+        {t("adm.bulk.ch_email")}
       </Check>
     </div>
   );
@@ -143,12 +155,15 @@ export function BulkDaysDialog({
   onStarted: (jobId: number) => void;
   onUnsupported: (key: string) => void;
 }) {
+  const { t, lang } = useI18n();
+  const tr = useRef(t);
+  tr.current = t;
   const [filters, filtersKey] = useStableFilters(rawFilters);
   const [days, setDays] = useState("3");
   const [includeTrial, setIncludeTrial] = useState(false);
   const [includeLimited, setIncludeLimited] = useState(false);
   const [notify, setNotify] = useState(false);
-  const [text, setText] = useState(() => compensationText(3));
+  const [text, setText] = useState(() => compensationText(3, lang));
   const [textTouched, setTextTouched] = useState(false);
   const [channels, setChannels] = useState<BulkChannel[]>(ALL_CHANNELS);
   const [preview, setPreview] = useState<BulkDaysPreview | null>(null);
@@ -174,8 +189,8 @@ export function BulkDaysDialog({
 
   // Текст компенсации следует за числом дней, пока админ его не правил.
   useEffect(() => {
-    if (!textTouched && daysValid) setText(compensationText(daysNum));
-  }, [daysNum, daysValid, textTouched]);
+    if (!textTouched && daysValid) setText(compensationText(daysNum, lang));
+  }, [daysNum, daysValid, textTouched, lang]);
 
   useEffect(() => {
     if (!daysValid) {
@@ -198,7 +213,7 @@ export function BulkDaysDialog({
           if (cancelled) return;
           setPreview(null);
           if (isUnsupported(e)) unsupported.current("users.bulk.days");
-          else setError(errorText(e, "Не удалось посчитать, кого затронет"));
+          else setError(errorText(e, tr.current("adm.bulk.err_preview_days")));
         })
         .finally(() => {
           if (!cancelled) setLoading(false);
@@ -237,11 +252,11 @@ export function BulkDaysDialog({
       if (isUnsupported(e)) {
         onUnsupported("users.bulk.days");
       } else if (e instanceof ApiError && e.status === 409 && e.detail.startsWith("Выборка изменилась")) {
-        setError("Выборка изменилась, пока вы смотрели предпросмотр. Проверьте цифры ещё раз.");
+        setError(t("adm.bulk.err_segment_changed"));
         setStep("form");
         setReload((n) => n + 1);
       } else {
-        setError(errorText(e, "Не удалось запустить — попробуйте ещё раз"));
+        setError(errorText(e, t("adm.bulk.err_start")));
       }
     } finally {
       sending.current = false;
@@ -251,31 +266,31 @@ export function BulkDaysDialog({
 
   if (step === "confirm" && preview) {
     return (
-      <Modal title="Добавить дни подписки" onClose={onClose}>
+      <Modal title={t("adm.bulk.days_title")} onClose={onClose}>
         <p className="font-medium">
-          Добавить {ruDays(daysNum)} {eligible} {eligible === 1 ? "подписке" : "подпискам"}?
+          {t(
+            pluralFor(lang, eligible, "adm.bulk.confirm_one", "adm.bulk.confirm_few", "adm.bulk.confirm_many"),
+            { days: daysLabel(t, lang, daysNum), n: eligible },
+          )}
         </p>
-        <p className="text-fg-muted">
-          Срок в панели VPN обновится у каждого по очереди, примерно за {estimateMinutes("days", eligible)} мин. Задачу
-          можно остановить — уже добавленные дни останутся.
-        </p>
+        <p className="text-fg-muted">{t("adm.bulk.confirm_note", { n: estimateMinutes("days", eligible) })}</p>
         {needsRepeat && repeat && (
           <div className="space-y-2 rounded-lg bg-warning/10 px-3 py-2">
             <p className="text-warning">
-              Этим людям уже добавляли дни за последние 24 часа: {repeat.count} (задача №{repeat.job_id}, +{repeat.days} дн.)
+              {t("adm.bulk.repeat_warn", { n: repeat.count, job: repeat.job_id ?? "", days: repeat.days ?? "" })}
             </p>
             <Check checked={allowRepeat} onChange={setAllowRepeat}>
-              Понимаю, добавить ещё раз
+              {t("adm.bulk.repeat_ack_days")}
             </Check>
           </div>
         )}
         {error && <p className="text-danger">{error}</p>}
         <div className="flex justify-end gap-2 pt-1">
           <button className={BUTTON} onClick={() => setStep("form")} disabled={busy}>
-            Назад
+            {t("adm.bulk.back")}
           </button>
           <button className={PRIMARY} onClick={start} disabled={busy || (needsRepeat && !allowRepeat)}>
-            {busy ? "Запускаю…" : "Да, добавить"}
+            {busy ? t("adm.bulk.starting") : t("adm.bulk.yes_add")}
           </button>
         </div>
       </Modal>
@@ -284,10 +299,10 @@ export function BulkDaysDialog({
 
   const lines = skippedLines(preview?.skipped);
   return (
-    <Modal title="Добавить дни подписки" onClose={onClose}>
+    <Modal title={t("adm.bulk.days_title")} onClose={onClose}>
       <div>
         <label htmlFor="bulk-days" className="mb-1 block text-xs text-fg-muted">
-          Сколько дней добавить
+          {t("adm.bulk.days_label")}
         </label>
         <input
           id="bulk-days"
@@ -298,45 +313,38 @@ export function BulkDaysDialog({
           onChange={(e) => setDays(e.target.value)}
           className={INPUT}
         />
-        <p className={`mt-1 text-xs ${daysValid ? "text-fg-subtle" : "text-danger"}`}>от 1 до 365</p>
+        <p className={`mt-1 text-xs ${daysValid ? "text-fg-subtle" : "text-danger"}`}>{t("adm.bulk.days_range")}</p>
       </div>
       <div className="space-y-1.5">
         <Check checked={includeTrial} onChange={setIncludeTrial}>
-          Также пробным подпискам
+          {t("adm.bulk.include_trial")}
         </Check>
         <Check checked={includeLimited} onChange={setIncludeLimited}>
-          Также тем, у кого исчерпан трафик
+          {t("adm.bulk.include_limited")}
         </Check>
         {includeLimited && (
-          <p className="pl-6 text-xs text-warning">Панель после продления снова пришлёт им сообщение, что трафик исчерпан</p>
+          <p className="pl-6 text-xs text-warning">{t("adm.bulk.limited_warn")}</p>
         )}
       </div>
 
       <div className="space-y-1 rounded-lg border border-[var(--border)] bg-bg-subtle px-3 py-2.5">
-        <p className="text-xs font-medium text-fg-muted">Кого затронет</p>
+        <p className="text-xs font-medium text-fg-muted">{t("adm.bulk.affected")}</p>
         {loading ? (
           <Spinner />
         ) : preview ? (
           <>
             <p>
-              Добавим {ruDays(daysNum)}: {preview.apply} {preview.apply === 1 ? "подписке" : "подпискам"}
+              {t(
+                pluralFor(lang, preview.apply, "adm.bulk.apply_one", "adm.bulk.apply_few", "adm.bulk.apply_many"),
+                { days: daysLabel(t, lang, daysNum), n: preview.apply },
+              )}
             </p>
-            {preview.apply_frozen > 0 && (
-              <p>Из них на паузе: {preview.apply_frozen} — дни добавятся к остатку паузы</p>
-            )}
-            {preview.deferred > 0 && (
-              <p>
-                Недавно платили или меняли подписку: {preview.deferred} — обработаем в конце; если изменение ещё идёт,
-                пропустим с пометкой
-              </p>
-            )}
-            <p className="text-xs text-fg-muted">
-              Перед изменением каждого сверим с панелью VPN: если данные расходятся, человека пропустим и покажем в
-              списке «Кто не получил»
-            </p>
+            {preview.apply_frozen > 0 && <p>{t("adm.bulk.frozen", { n: preview.apply_frozen })}</p>}
+            {preview.deferred > 0 && <p>{t("adm.bulk.deferred", { n: preview.deferred })}</p>}
+            <p className="text-xs text-fg-muted">{t("adm.bulk.verify_note")}</p>
             {lines.length > 0 && (
               <div className="pt-1">
-                <p className="text-xs font-medium text-fg-muted">Не получат:</p>
+                <p className="text-xs font-medium text-fg-muted">{t("adm.bulk.skipped_title")}</p>
                 <ul className="list-disc pl-5 text-xs text-fg-muted">
                   {lines.map((l) => (
                     <li key={l}>{l}</li>
@@ -345,7 +353,7 @@ export function BulkDaysDialog({
               </div>
             )}
             {preview.active_job_id != null && (
-              <p className="text-xs text-warning">Уже идёт задача №{preview.active_job_id} — новая не запустится, пока она не закончится</p>
+              <p className="text-xs text-warning">{t("adm.bulk.active_job", { n: preview.active_job_id })}</p>
             )}
           </>
         ) : null}
@@ -353,12 +361,12 @@ export function BulkDaysDialog({
 
       <div className="space-y-2">
         <Check checked={notify} onChange={setNotify}>
-          Сообщить им об этом
+          {t("adm.bulk.notify")}
         </Check>
         {notify && (
           <div className="space-y-2 pl-6">
             <textarea
-              aria-label="Текст сообщения"
+              aria-label={t("adm.bulk.text_aria")}
               value={text}
               onChange={(e) => {
                 setText(e.target.value);
@@ -378,10 +386,10 @@ export function BulkDaysDialog({
       {error && <p className="text-danger">{error}</p>}
       <div className="flex justify-end gap-2 pt-1">
         <button className={BUTTON} onClick={onClose}>
-          Отмена
+          {t("adm.bulk.cancel")}
         </button>
         <button className={PRIMARY} onClick={() => setStep("confirm")} disabled={!canNext}>
-          Далее
+          {t("adm.bulk.next")}
         </button>
       </div>
     </Modal>
@@ -391,9 +399,9 @@ export function BulkDaysDialog({
 // ─── «Сообщение отфильтрованным» ────────────────────────────────────────────
 
 function testResultText(r: { telegram: boolean; reason: string | null }): string {
-  if (r.telegram) return "Отправлено вам в Telegram — так его увидят получатели";
-  if (r.reason === "no_telegram") return "У вашего аккаунта нет Telegram — проверить отправку нельзя";
-  return "Telegram не доставил сообщение вам — проверьте, не заблокирован ли бот";
+  if (r.telegram) return translate("adm.bulk.test_ok");
+  if (r.reason === "no_telegram") return translate("adm.bulk.test_no_tg");
+  return translate("adm.bulk.test_failed");
 }
 
 export function BulkMessageDialog({
@@ -409,6 +417,9 @@ export function BulkMessageDialog({
   onStarted: (jobId: number) => void;
   onUnsupported: (key: string) => void;
 }) {
+  const { t, lang } = useI18n();
+  const tr = useRef(t);
+  tr.current = t;
   const [filters, filtersKey] = useStableFilters(rawFilters);
   const [text, setText] = useState("");
   const [channels, setChannels] = useState<BulkChannel[]>(ALL_CHANNELS);
@@ -457,7 +468,7 @@ export function BulkMessageDialog({
         if (cancelled) return;
         setPreview(null);
         if (isUnsupported(e)) unsupported.current("users.bulk.message");
-        else setError(errorText(e, "Не удалось посчитать получателей"));
+        else setError(errorText(e, tr.current("adm.bulk.err_preview_msg")));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -476,7 +487,7 @@ export function BulkMessageDialog({
     try {
       setTestNote(testResultText(await bulkJobsAdminApi.testMessage(text)));
     } catch (e) {
-      setTestNote(errorText(e, "Не удалось отправить проверку"));
+      setTestNote(errorText(e, t("adm.bulk.err_test")));
     } finally {
       setTesting(false);
     }
@@ -504,11 +515,11 @@ export function BulkMessageDialog({
       } else if (e instanceof ApiError && e.status === 409 && e.detail.includes("уже получили это же сообщение")) {
         setRepeatAsked(e.detail);
       } else if (e instanceof ApiError && e.status === 409 && e.detail.startsWith("Выборка изменилась")) {
-        setError("Выборка изменилась, пока вы смотрели предпросмотр. Проверьте цифры ещё раз.");
+        setError(t("adm.bulk.err_segment_changed"));
         setStep("form");
         setReload((n) => n + 1);
       } else {
-        setError(errorText(e, "Не удалось запустить — попробуйте ещё раз"));
+        setError(errorText(e, t("adm.bulk.err_start")));
       }
     } finally {
       sending.current = false;
@@ -518,24 +529,29 @@ export function BulkMessageDialog({
 
   if (step === "confirm" && preview) {
     return (
-      <Modal title="Сообщение отфильтрованным" onClose={onClose}>
-        <p className="font-medium">Отправить сообщение {preview.recipients} получателям?</p>
-        <p className="text-fg-muted">Отозвать уже ушедшие сообщения будет нельзя.</p>
+      <Modal title={t("adm.bulk.msg_title")} onClose={onClose}>
+        <p className="font-medium">
+          {t(
+            pluralFor(lang, preview.recipients, "adm.bulk.msg_confirm_one", "adm.bulk.msg_confirm_few", "adm.bulk.msg_confirm_many"),
+            { n: preview.recipients },
+          )}
+        </p>
+        <p className="text-fg-muted">{t("adm.bulk.msg_no_recall")}</p>
         {repeatAsked && (
           <div className="space-y-2 rounded-lg bg-warning/10 px-3 py-2">
             <p className="text-warning">{repeatAsked}</p>
             <Check checked={allowRepeat} onChange={setAllowRepeat}>
-              Понимаю, отправить ещё раз
+              {t("adm.bulk.repeat_ack_msg")}
             </Check>
           </div>
         )}
         {error && <p className="text-danger">{error}</p>}
         <div className="flex justify-end gap-2 pt-1">
           <button className={BUTTON} onClick={() => setStep("form")} disabled={busy}>
-            Назад
+            {t("adm.bulk.back")}
           </button>
           <button className={PRIMARY} onClick={start} disabled={busy || (!!repeatAsked && !allowRepeat)}>
-            {busy ? "Отправляю…" : "Да, отправить"}
+            {busy ? t("adm.bulk.sending") : t("adm.bulk.yes_send")}
           </button>
         </div>
       </Modal>
@@ -544,15 +560,15 @@ export function BulkMessageDialog({
 
   const ch = preview?.by_channel;
   return (
-    <Modal title="Сообщение отфильтрованным" onClose={onClose}>
-      {sourceJobId != null && <p className="text-xs text-fg-muted">Получатели — те, кому задача №{sourceJobId} добавила дни.</p>}
+    <Modal title={t("adm.bulk.msg_title")} onClose={onClose}>
+      {sourceJobId != null && <p className="text-xs text-fg-muted">{t("adm.bulk.from_job", { n: sourceJobId })}</p>}
       <div>
         <textarea
-          aria-label="Текст сообщения"
+          aria-label={t("adm.bulk.text_aria")}
           value={text}
           onChange={(e) => setText(e.target.value)}
           rows={6}
-          placeholder="Текст сообщения. Можно разметку Telegram: <b>, <i>, <a href=&quot;…&quot;>"
+          placeholder={t("adm.bulk.text_ph")}
           className="w-full rounded-lg border border-[var(--border)] bg-bg px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus:outline-none focus:ring-1 focus:ring-accent"
         />
         <p className={`text-right text-xs ${text.length > TEXT_MAX ? "text-danger" : "text-fg-subtle"}`}>
@@ -566,36 +582,33 @@ export function BulkMessageDialog({
           <Spinner />
         ) : preview && ch ? (
           <>
-            <p className="font-medium">Получателей: {preview.recipients}</p>
-            <p className="text-xs text-fg-muted">в Telegram: {ch.telegram}</p>
+            <p className="font-medium">{t("adm.bulk.recipients", { n: preview.recipients })}</p>
+            <p className="text-xs text-fg-muted">{t("adm.bulk.ch_tg", { n: ch.telegram })}</p>
             {ch.telegram_bot_blocked > 0 && (
-              <p className="text-xs text-fg-muted">
-                заблокировали бота: {ch.telegram_bot_blocked} — им сразу запасные каналы
-              </p>
+              <p className="text-xs text-fg-muted">{t("adm.bulk.ch_blocked", { n: ch.telegram_bot_blocked })}</p>
             )}
             <p className="text-xs text-fg-muted">
-              без Telegram: с push — {ch.push_only}, с подтверждённой почтой — {ch.email_only}, только лента кабинета —{" "}
-              {ch.cabinet_only}
+              {t("adm.bulk.ch_no_tg", { push: ch.push_only, email: ch.email_only, cabinet: ch.cabinet_only })}
             </p>
-            {ch.unreachable > 0 && <p className="text-xs text-warning">не достучаться: {ch.unreachable}</p>}
+            {ch.unreachable > 0 && <p className="text-xs text-warning">{t("adm.bulk.ch_unreachable", { n: ch.unreachable })}</p>}
             {(preview.skipped.BLOCKED ?? 0) > 0 && (
-              <p className="text-xs text-fg-muted">заблокированы в сервисе и пропущены: {preview.skipped.BLOCKED}</p>
+              <p className="text-xs text-fg-muted">{t("adm.bulk.skipped_blocked", { n: preview.skipped.BLOCKED ?? 0 })}</p>
             )}
             {channels.includes("email") && !preview.email_enabled && (
-              <p className="text-xs text-warning">Почта выключена в настройках — письма не уйдут</p>
+              <p className="text-xs text-warning">{t("adm.bulk.email_off")}</p>
             )}
             {preview.active_job_id != null && (
-              <p className="text-xs text-warning">Уже идёт рассылка №{preview.active_job_id} — новая не запустится, пока она не закончится</p>
+              <p className="text-xs text-warning">{t("adm.bulk.active_broadcast", { n: preview.active_job_id })}</p>
             )}
           </>
         ) : channels.length === 0 ? (
-          <p className="text-xs text-fg-muted">Выберите хотя бы один канал</p>
+          <p className="text-xs text-fg-muted">{t("adm.bulk.pick_channel")}</p>
         ) : null}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
         <button className={BUTTON} onClick={sendTest} disabled={testing || !textValid}>
-          {testing ? "Отправляю…" : "Проверить на себе"}
+          {testing ? t("adm.bulk.sending") : t("adm.bulk.test_btn")}
         </button>
         {testNote && <span className="text-xs text-fg-muted">{testNote}</span>}
       </div>
@@ -603,10 +616,10 @@ export function BulkMessageDialog({
       {error && <p className="text-danger">{error}</p>}
       <div className="flex justify-end gap-2 pt-1">
         <button className={BUTTON} onClick={onClose}>
-          Отмена
+          {t("adm.bulk.cancel")}
         </button>
         <button className={PRIMARY} onClick={() => setStep("confirm")} disabled={!canNext}>
-          Далее
+          {t("adm.bulk.next")}
         </button>
       </div>
     </Modal>
@@ -616,6 +629,9 @@ export function BulkMessageDialog({
 // ─── «Фоновые задачи» ───────────────────────────────────────────────────────
 
 function JobItems({ job }: { job: BulkJob }) {
+  const t = useT();
+  const tr = useRef(t);
+  tr.current = t;
   const [items, setItems] = useState<BulkJobItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -635,7 +651,7 @@ function JobItems({ job }: { job: BulkJob }) {
         if (!cancelled) setItems(list);
       })
       .catch((e) => {
-        if (!cancelled) setError(errorText(e, "Не удалось загрузить список"));
+        if (!cancelled) setError(errorText(e, tr.current("adm.bulk.err_items")));
       });
     return () => {
       cancelled = true;
@@ -644,7 +660,7 @@ function JobItems({ job }: { job: BulkJob }) {
 
   if (error) return <p className="text-xs text-danger">{error}</p>;
   if (!items) return <Spinner />;
-  if (items.length === 0) return <p className="text-xs text-fg-muted">Все получили</p>;
+  if (items.length === 0) return <p className="text-xs text-fg-muted">{t("adm.bulk.all_delivered")}</p>;
   return (
     <ul className="max-h-60 space-y-1 overflow-y-auto text-xs">
       {items.map((i, n) => (
@@ -670,6 +686,7 @@ export function BulkJobsPanel({
   onWriteRecipients: (jobId: number) => void;
   onUnsupported: (key: string) => void;
 }) {
+  const { t, lang } = useI18n();
   const [jobs, setJobs] = useState<BulkJob[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
@@ -677,6 +694,8 @@ export function BulkJobsPanel({
   const unsupported = useRef(onUnsupported);
   unsupported.current = onUnsupported;
   const canManage = fullAccess && !readonly;
+  const tr = useRef(t);
+  tr.current = t;
 
   const load = useCallback(() => {
     bulkJobsAdminApi
@@ -699,7 +718,7 @@ export function BulkJobsPanel({
         // этой ручки нет вовсе (501 адаптера или 404 бота старее кабинета), — не
         // ошибка на странице, а просто отсутствие журнала.
         if (isUnsupported(e) || (e instanceof ApiError && e.status === 404)) unsupported.current("users.bulk.jobs");
-        else setError(errorText(e, "Не удалось загрузить фоновые задачи"));
+        else setError(errorText(e, tr.current("adm.bulk.err_jobs")));
       });
   }, []);
 
@@ -722,7 +741,7 @@ export function BulkJobsPanel({
       await (action === "cancel" ? bulkJobsAdminApi.cancel(job.id) : bulkJobsAdminApi.resume(job.id));
       load();
     } catch (e) {
-      setError(errorText(e, "Не удалось"));
+      setError(errorText(e, t("adm.bulk.err_action")));
     } finally {
       setBusyId(null);
     }
@@ -732,7 +751,7 @@ export function BulkJobsPanel({
 
   return (
     <section className="space-y-2 rounded-xl border border-[var(--border)] bg-bg-subtle px-3 py-2.5">
-      <p className="text-xs font-medium text-fg-muted">Фоновые задачи</p>
+      <p className="text-xs font-medium text-fg-muted">{t("adm.bulk.jobs_title")}</p>
       {error && <p className="text-xs text-danger">{error}</p>}
       {jobs.map((job) => {
         const percent = job.total > 0 ? Math.round((job.done / job.total) * 100) : 0;
@@ -741,7 +760,7 @@ export function BulkJobsPanel({
           <div key={job.id} className="space-y-1.5 rounded-lg border border-[var(--border)] bg-bg px-3 py-2">
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
               <span className="text-fg">
-                №{job.id} · {jobKindLabel(job.kind)}
+                {t("adm.bulk.job_head", { id: job.id, kind: jobKindLabel(job.kind) })}
                 {job.created_by ? ` · ${job.created_by}` : ""}
                 {job.created_at ? ` · ${formatDate(job.created_at)}` : ""}
               </span>
@@ -750,37 +769,37 @@ export function BulkJobsPanel({
               </span>
             </div>
             {job.kind === "days" && job.params.days != null && (
-              <p className="text-xs text-fg-muted">+{ruDays(job.params.days)}</p>
+              <p className="text-xs text-fg-muted">{t("adm.bulk.job_plus_days", { days: daysLabel(t, lang, job.params.days) })}</p>
             )}
             {job.kind === "message" && job.params.text_preview && (
-              <p className="truncate text-xs text-fg-muted">«{job.params.text_preview}»</p>
+              <p className="truncate text-xs text-fg-muted">{t("adm.bulk.text_quote", { text: job.params.text_preview })}</p>
             )}
             <div className="h-1.5 overflow-hidden rounded-full bg-bg-subtle">
               <div className="h-full rounded-full bg-accent" style={{ width: `${percent}%` }} />
             </div>
             <p className="text-xs text-fg-muted">
-              {job.done} из {job.total} · {jobCounters(job)}
+              {t("adm.bulk.progress", { done: job.done, total: job.total, counters: jobCounters(job) })}
             </p>
             {job.pause_reason && <p className="text-xs text-warning">{job.pause_reason}</p>}
             <div className="flex flex-wrap gap-2">
               {canManage && ["QUEUED", "PROCESSING", "PAUSED", "ERROR"].includes(job.status) && (
                 <button className={BUTTON} disabled={busyId === job.id} onClick={() => act(job, "cancel")}>
-                  Остановить
+                  {t("adm.bulk.stop")}
                 </button>
               )}
               {canManage && (job.status === "PAUSED" || job.status === "ERROR") && (
                 <button className={BUTTON} disabled={busyId === job.id} onClick={() => act(job, "resume")}>
-                  Продолжить
+                  {t("adm.bulk.resume")}
                 </button>
               )}
               {missed > 0 && (
                 <button className={BUTTON} onClick={() => setOpenId(openId === job.id ? null : job.id)}>
-                  Кто не получил
+                  {t("adm.bulk.who_missed")}
                 </button>
               )}
               {canManage && job.kind === "days" && job.applied > 0 && (job.status === "COMPLETED" || job.status === "CANCELED") && (
                 <button className={BUTTON} onClick={() => onWriteRecipients(job.id)}>
-                  Написать получившим
+                  {t("adm.bulk.write_recipients")}
                 </button>
               )}
             </div>

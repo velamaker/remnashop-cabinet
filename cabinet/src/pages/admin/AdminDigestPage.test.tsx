@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, waitFor, fireEvent, within } from "@testing-library/react";
 import { ApiError } from "@/types/api";
 import type { DigestEmailStatus } from "@/api/admin";
+import { I18nProvider } from "@/i18n/I18nContext";
+import { STORAGE_KEY } from "@/i18n/config";
+import { setActiveLang, translate } from "@/i18n/translate";
 
 // Карточка «Сводка письмом» на странице дайджеста. Заперто:
 //  • у кабинета поверх чужого бота ручки нет (501/404) — карточки нет, а сам
@@ -44,11 +47,27 @@ vi.mock("@/api/admin", () => ({
 
 const { default: AdminDigestPage } = await import("./AdminDigestPage");
 
-const digestCard = () => screen.queryByText("Месячный дайджест пользователю");
-const emailCardTitle = () => screen.queryByText("Сводка письмом");
+// Карточка настроек больше не хранит русский текст в коде: подписи приходят из
+// словаря по ключам adm.settings.*. Тест сверяется с тем же словарём (и держит
+// кабинет на русском), иначе он проверял бы не интерфейс, а копию строки.
+const ru = (key: string, vars?: Record<string, string | number>) => translate(key, vars, "ru");
+const rx = (key: string, vars?: Record<string, string | number>) =>
+  new RegExp(ru(key, vars).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+
+const renderPage = () =>
+  render(
+    <I18nProvider>
+      <AdminDigestPage />
+    </I18nProvider>,
+  );
+
+const digestCard = () => screen.queryByText(ru("adm.settings.digest_title"));
+const emailCardTitle = () => screen.queryByText(ru("adm.settings.dm_title"));
 const emailCard = () => within(emailCardTitle()!.closest("section")!);
 
 beforeEach(() => {
+  localStorage.setItem(STORAGE_KEY, "ru");
+  setActiveLang("ru");
   getEmail = () => Promise.resolve(status());
   update.mockReset();
   test.mockReset();
@@ -58,34 +77,34 @@ afterEach(cleanup);
 describe("Сводка письмом: карточка", () => {
   it.each([501, 404])("ручки нет (%i) → карточки нет, дайджест на месте", async (code) => {
     getEmail = () => Promise.reject(new ApiError(code, "нет соответствия"));
-    render(<AdminDigestPage />);
+    renderPage();
 
     await waitFor(() => expect(digestCard()).not.toBeNull());
     // Дожидаемся, пока отказ точно пришёл, и только потом проверяем отсутствие.
     await new Promise((r) => setTimeout(r, 0));
     expect(emailCardTitle()).toBeNull();
-    expect(screen.queryByText("Не удалось загрузить")).toBeNull();
+    expect(screen.queryByText(ru("adm.settings.load_failed"))).toBeNull();
   });
 
   it("сохранение шлёт только изменённое; 409 показывает причину", async () => {
     update.mockImplementationOnce((data: Record<string, unknown>) =>
       Promise.resolve(status({ email_from: String(data.email_from) })),
     );
-    render(<AdminDigestPage />);
+    renderPage();
     await waitFor(() => expect(emailCardTitle()).not.toBeNull());
 
     const card = emailCard();
     // Подпись поля — отдельный <label> рядом с input (так устроен общий Field).
-    const fromInput = card.getByText(/Адрес отправителя сводки/).parentElement!.querySelector("input")!;
+    const fromInput = card.getByText(rx("adm.settings.dm_from_brevo")).parentElement!.querySelector("input")!;
     fireEvent.change(fromInput, { target: { value: " digest@example.test " } });
-    fireEvent.click(card.getByRole("button", { name: /Сохранить/ }));
+    fireEvent.click(card.getByRole("button", { name: rx("adm.settings.save") }));
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
     expect(update).toHaveBeenCalledWith({ email_from: "digest@example.test" });
 
     const reason = "Не задан адрес кабинета (WEB_CABINET_URL) — без ссылки «Отписаться» письма не отправляются.";
     update.mockRejectedValueOnce(new ApiError(409, reason));
-    fireEvent.click(card.getByRole("button", { name: /Отправлять письмом/ }));
-    fireEvent.click(card.getByRole("button", { name: /Сохранить/ }));
+    fireEvent.click(card.getByRole("button", { name: rx("adm.settings.dm_send_enable") }));
+    fireEvent.click(card.getByRole("button", { name: rx("adm.settings.save") }));
     await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
     expect(update).toHaveBeenLastCalledWith({ email_enabled: true });
     await waitFor(() => expect(card.getByText(reason)).toBeInTheDocument());
@@ -93,11 +112,11 @@ describe("Сводка письмом: карточка", () => {
 
   it("тест без адреса не уходит; с адресом — ровно на него", async () => {
     test.mockResolvedValue({ success: true, to: "me@example.test", from: "digest@example.test" });
-    render(<AdminDigestPage />);
+    renderPage();
     await waitFor(() => expect(emailCardTitle()).not.toBeNull());
 
     const card = emailCard();
-    const send = card.getByRole("button", { name: "Отправить тест" });
+    const send = card.getByRole("button", { name: ru("adm.settings.dm_test_btn") });
     fireEvent.click(send);
     expect(test).not.toHaveBeenCalled();
 
@@ -105,7 +124,11 @@ describe("Сводка письмом: карточка", () => {
     fireEvent.click(send);
     await waitFor(() => expect(test).toHaveBeenCalledTimes(1));
     expect(test).toHaveBeenCalledWith("me@example.test");
-    await waitFor(() => expect(card.getByText(/Тестовое письмо отправлено на me@example.test/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        card.getByText(rx("adm.settings.dm_test_sent", { to: "me@example.test", from: "digest@example.test" })),
+      ).toBeInTheDocument(),
+    );
   });
 
   it("препятствия выводятся текстом; поле отправителя видно для Brevo", async () => {
@@ -118,14 +141,14 @@ describe("Сводка письмом: карточка", () => {
           last: { month: "2026-10", sent: 5, failed: 0, no_traffic: 1, usage_error: 0, over_limit: 0, provider_blocked: 0, sending: 1 },
         }),
       );
-    render(<AdminDigestPage />);
+    renderPage();
     await waitFor(() => expect(emailCardTitle()).not.toBeNull());
 
     const card = emailCard();
     expect(card.getByText(blocker)).toBeInTheDocument();
-    expect(card.getByText("Дайджест выключен — письма тоже не уйдут.")).toBeInTheDocument();
-    expect(card.getByText("Адрес отправителя сводки (для Brevo обязателен)")).toBeInTheDocument();
-    expect(card.getByText(/Получат письмо: 6/)).toBeInTheDocument();
-    expect(card.getByText(/Оборвалось на отправке: 1 — повторно не шлём/)).toBeInTheDocument();
+    expect(card.getByText(ru("adm.settings.dm_digest_off"))).toBeInTheDocument();
+    expect(card.getByText(ru("adm.settings.dm_from_brevo"))).toBeInTheDocument();
+    expect(card.getByText(rx("adm.settings.dm_audience", { n: 6, out: 0 }))).toBeInTheDocument();
+    expect(card.getByText(rx("adm.settings.dm_last_sending", { n: 1 }))).toBeInTheDocument();
   });
 });

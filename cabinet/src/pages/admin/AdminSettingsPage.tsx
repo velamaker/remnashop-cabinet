@@ -4,6 +4,8 @@ import type { LucideIcon } from "lucide-react";
 import { settingsAdminApi, topupAdminApi, morningSummaryAdminApi, trialDiscountAdminApi, reserveAdminApi, plansAdminApi, promoBannerAdminApi, winbackAdminApi, renewalDiscountAdminApi, digestAdminApi, digestEmailAdminApi, trafficAlertAdminApi, newDeviceAdminApi, loginAlertAdminApi, emailGateAdminApi, freezeAdminApi, type AdminSettings, type TopupAdminConfig, type TopupApplicability, type MorningSummaryConfig, type TrialDiscountConfig, type TrialDiscountDryRun, type ReserveConfig, type ReserveSquadCheck, type AdminSquad, type PromoBannerConfig, type WinbackConfig, type RenewalDiscountConfig, type DigestConfig, type DigestEmailStatus, type DigestEmailPreview, type DigestEmailDryRun, type DigestEmailOutcome, type TrafficAlertConfig, type NewDeviceConfig, type LoginAlertConfig, type FreezeConfig } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { useAuth } from "@/contexts/AuthContext";
+import { useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
 
 // Крупный блок настроек: заголовок с иконкой + вложенные секции (карточки).
 function Group({ title, icon: Icon, children }: { title: string; icon: LucideIcon; children: React.ReactNode }) {
@@ -122,34 +124,35 @@ function Field({
   );
 }
 
-// Человекочитаемые названия уведомлений
-const NOTIFICATION_LABELS: Record<string, string> = {
-  SUBSCRIPTION: "Подписка",
-  BOT_LIFECYCLE: "Запуск/остановка бота",
-  TRIAL_ACTIVATED: "Активирован пробный период",
-  USER_REGISTERED: "Новая регистрация",
-  EXPIRES_IN_1_DAY: "Истекает через 1 день",
-  EXPIRES_IN_2_DAYS: "Истекает через 2 дня",
-  EXPIRES_IN_3_DAYS: "Истекает через 3 дня",
-  EXPIRED_1_DAY_AGO: "Истекла 1 день назад",
-  REFERRAL_ATTACHED: "Привязан реферал",
-  REFERRAL_REWARD_RECEIVED: "Получена реферальная награда",
-  NODE_STATUS_CHANGED: "Изменился статус ноды",
-  NODE_TRAFFIC_REACHED: "Достигнут лимит трафика ноды",
-  PROMOCODE_ACTIVATED: "Активирован промокод",
-  USER_DEVICES_UPDATED: "Обновлены устройства пользователя",
-  USER_FIRST_CONNECTION: "Первое подключение пользователя",
-  USER_REVOKED_SUBSCRIPTION: "Пользователь отозвал подписку",
+// Человекочитаемые названия уведомлений — ключами перевода: экран двуязычный.
+const NOTIFICATION_KEYS: Record<string, string> = {
+  SUBSCRIPTION: "adm.settings.notif_subscription",
+  BOT_LIFECYCLE: "adm.settings.notif_bot_lifecycle",
+  TRIAL_ACTIVATED: "adm.settings.notif_trial_activated",
+  USER_REGISTERED: "adm.settings.notif_user_registered",
+  EXPIRES_IN_1_DAY: "adm.settings.notif_expires_1d",
+  EXPIRES_IN_2_DAYS: "adm.settings.notif_expires_2d",
+  EXPIRES_IN_3_DAYS: "adm.settings.notif_expires_3d",
+  EXPIRED_1_DAY_AGO: "adm.settings.notif_expired_1d",
+  REFERRAL_ATTACHED: "adm.settings.notif_referral_attached",
+  REFERRAL_REWARD_RECEIVED: "adm.settings.notif_referral_reward",
+  NODE_STATUS_CHANGED: "adm.settings.notif_node_status",
+  NODE_TRAFFIC_REACHED: "adm.settings.notif_node_traffic",
+  PROMOCODE_ACTIVATED: "adm.settings.notif_promocode",
+  USER_DEVICES_UPDATED: "adm.settings.notif_devices_updated",
+  USER_FIRST_CONNECTION: "adm.settings.notif_first_connection",
+  USER_REVOKED_SUBSCRIPTION: "adm.settings.notif_revoked_sub",
 };
 
+// Незнакомое событие бэкенда переводить нечем — показываем его код словами, как и
+// раньше: это техническое имя, а не текст интерфейса.
 function prettyNotification(key: string): string {
-  return (
-    NOTIFICATION_LABELS[key] ??
-    key
-      .toLowerCase()
-      .replace(/_/g, " ")
-      .replace(/^\w/, (c) => c.toUpperCase())
-  );
+  const tkey = NOTIFICATION_KEYS[key];
+  if (tkey) return translate(tkey);
+  return key
+    .toLowerCase()
+    .replace(/_/g, " ")
+    .replace(/^\w/, (c) => c.toUpperCase());
 }
 
 /** Что на подключённом бэкенде вообще применимо.
@@ -174,9 +177,10 @@ type Applicability = {
  *  Любая другая беда (сеть, 500) — настоящая ошибка, и о ней надо сказать. */
 const UNSUPPORTED = "__unsupported__";
 const loadError = (e: unknown) =>
-  e instanceof ApiError && e.status === 501 ? UNSUPPORTED : "Не удалось загрузить";
+  e instanceof ApiError && e.status === 501 ? UNSUPPORTED : translate("adm.settings.load_failed");
 
 export default function AdminSettingsPage() {
+  const t = useT();
   const [settings, setSettings] = useState<(AdminSettings & Applicability) | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -187,7 +191,7 @@ export default function AdminSettingsPage() {
     settingsAdminApi
       .get()
       .then(setSettings)
-      .catch((e) => setError(e instanceof ApiError ? e.detail : "Ошибка"))
+      .catch((e) => setError(e instanceof ApiError ? e.detail : translate("adm.settings.err_generic")))
       .finally(() => setLoading(false));
   }, []);
 
@@ -243,7 +247,7 @@ export default function AdminSettingsPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.settings.err_save"));
     } finally {
       setSaving(false);
     }
@@ -311,7 +315,7 @@ export default function AdminSettingsPage() {
     <div className="mx-auto max-w-3xl space-y-8">
       {/* Sticky header */}
       <div className="sticky top-0 z-10 -mx-5 flex items-center justify-between border-b border-border-subtle bg-bg/80 px-5 py-3 backdrop-blur-md md:-mx-8 md:px-8">
-        <h1 className="text-xl font-bold text-fg md:text-2xl">Настройки</h1>
+        <h1 className="text-xl font-bold text-fg md:text-2xl">{t("adm.settings.title")}</h1>
         {canSaveAnything ? (
         <button
           onClick={save}
@@ -321,11 +325,11 @@ export default function AdminSettingsPage() {
           }`}
         >
           {saved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
-          {saved ? "Сохранено!" : saving ? "Сохранение…" : "Сохранить"}
+          {saved ? t("adm.settings.saved_bang") : saving ? t("adm.settings.saving") : t("adm.settings.save")}
         </button>
         ) : (
           <span className="max-w-[60%] text-right text-xs leading-snug text-fg-muted">
-            Менять отсюда нечего: настройки этого бота заданы в его файле окружения (.env)
+            {t("adm.settings.nothing_to_edit")}
           </span>
         )}
       </div>
@@ -337,43 +341,43 @@ export default function AdminSettingsPage() {
         </div>
       )}
 
-      <Group title="Доступ и регистрация" icon={Lock}>
+      <Group title={t("adm.settings.grp_access")} icon={Lock}>
       {/* Access */}
       {(can("access_mode") || can("registration_allowed") || can("payments_allowed")) && (
-      <Section title="Доступ" desc="Кто и как может пользоваться сервисом">
+      <Section title={t("adm.settings.access_title")} desc={t("adm.settings.access_desc")}>
         {can("access_mode") && (
         <div>
-          <label className="mb-1 block text-xs font-medium text-fg-muted">Режим доступа</label>
+          <label className="mb-1 block text-xs font-medium text-fg-muted">{t("adm.settings.access_mode")}</label>
           <select
             value={settings.access.mode}
             onChange={(e) => upd(["access", "mode"], e.target.value)}
             className="w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent"
           >
-            <option value="PUBLIC">PUBLIC — открытый</option>
-            <option value="INVITED">INVITED — только по приглашению</option>
-            <option value="RESTRICTED">RESTRICTED — всё заблокировано</option>
+            <option value="PUBLIC">{t("adm.settings.mode_public")}</option>
+            <option value="INVITED">{t("adm.settings.mode_invited")}</option>
+            <option value="RESTRICTED">{t("adm.settings.mode_restricted")}</option>
           </select>
         </div>
         )}
         {(can("registration_allowed") || can("payments_allowed")) && (
         <div className="grid gap-2.5 sm:grid-cols-2">
-          {can("registration_allowed") && <Toggle label="Разрешить регистрацию" sub={why("registration_allowed")} disabled={!!why("registration_allowed")} checked={settings.access.registration_allowed} onChange={(v) => upd(["access", "registration_allowed"], v)} />}
-          {can("payments_allowed") && <Toggle label="Разрешить оплату" sub={why("payments_allowed")} disabled={!!why("payments_allowed")} checked={settings.access.payments_allowed} onChange={(v) => upd(["access", "payments_allowed"], v)} />}
+          {can("registration_allowed") && <Toggle label={t("adm.settings.registration_allowed")} sub={why("registration_allowed")} disabled={!!why("registration_allowed")} checked={settings.access.registration_allowed} onChange={(v) => upd(["access", "registration_allowed"], v)} />}
+          {can("payments_allowed") && <Toggle label={t("adm.settings.payments_allowed")} sub={why("payments_allowed")} disabled={!!why("payments_allowed")} checked={settings.access.payments_allowed} onChange={(v) => upd(["access", "payments_allowed"], v)} />}
         </div>
         )}
       </Section>
       )}
 
       {/* Requirements */}
-      <Section title="Требования" desc="Условия для пользователей при регистрации">
-        {can("rules_required") && <Toggle label="Принять правила" sub={why("rules_required") ?? "Пользователь должен принять правила при регистрации"} disabled={!!why("rules_required")} checked={settings.requirements.rules_required} onChange={(v) => upd(["requirements", "rules_required"], v)} />}
-        {can("channel_required") && <Toggle label="Обязательный канал" sub={why("channel_required") ?? "Пользователь должен подписаться на канал"} disabled={!!why("channel_required")} checked={settings.requirements.channel_required} onChange={(v) => upd(["requirements", "channel_required"], v)} />}
+      <Section title={t("adm.settings.req_title")} desc={t("adm.settings.req_desc")}>
+        {can("rules_required") && <Toggle label={t("adm.settings.req_rules")} sub={why("rules_required") ?? t("adm.settings.req_rules_sub")} disabled={!!why("rules_required")} checked={settings.requirements.rules_required} onChange={(v) => upd(["requirements", "rules_required"], v)} />}
+        {can("channel_required") && <Toggle label={t("adm.settings.req_channel")} sub={why("channel_required") ?? t("adm.settings.req_channel_sub")} disabled={!!why("channel_required")} checked={settings.requirements.channel_required} onChange={(v) => upd(["requirements", "channel_required"], v)} />}
         {/* Поле, которое правится не отсюда, показываем только когда в нём что-то
             есть: пустая серая строка не рассказывает ни о чём. */}
         {(showChannelLink || showRulesLink) && (
         <div className="grid gap-4 pt-1 sm:grid-cols-2">
-          {showChannelLink && <Field label="Ссылка на канал" value={settings.requirements.channel_link} disabled={!!why("channel_link")} hint={why("channel_link")} onChange={(v) => upd(["requirements", "channel_link"], v)} />}
-          {showRulesLink && <Field label="Ссылка на правила" value={settings.requirements.rules_link} disabled={!!why("rules_link")} hint={why("rules_link")} onChange={(v) => upd(["requirements", "rules_link"], v)} />}
+          {showChannelLink && <Field label={t("adm.settings.channel_link")} value={settings.requirements.channel_link} disabled={!!why("channel_link")} hint={why("channel_link")} onChange={(v) => upd(["requirements", "channel_link"], v)} />}
+          {showRulesLink && <Field label={t("adm.settings.rules_link")} value={settings.requirements.rules_link} disabled={!!why("rules_link")} hint={why("rules_link")} onChange={(v) => upd(["requirements", "rules_link"], v)} />}
         </div>
         )}
         <EmailGateToggle />
@@ -383,20 +387,20 @@ export default function AdminSettingsPage() {
 
       </Group>
 
-      <Group title="Система" icon={SlidersHorizontal}>
+      <Group title={t("adm.settings.grp_system")} icon={SlidersHorizontal}>
       {/* Backup */}
       {showBackup && (
-      <Section title="Резервные копии">
+      <Section title={t("adm.settings.backup_title")}>
         {(can("backup_enabled") || can("backup_send_to_chat")) && (
         <div className="grid gap-2.5 sm:grid-cols-2">
-          {can("backup_enabled") && <Toggle label="Автобэкап" sub={why("backup_enabled")} disabled={!!why("backup_enabled")} checked={settings.backup.enabled} onChange={(v) => upd(["backup", "enabled"], v)} />}
-          {can("backup_send_to_chat") && <Toggle label="Отправлять в чат" sub={why("backup_send_to_chat")} disabled={!!why("backup_send_to_chat")} checked={settings.backup.send_to_chat} onChange={(v) => upd(["backup", "send_to_chat"], v)} />}
+          {can("backup_enabled") && <Toggle label={t("adm.settings.backup_enabled")} sub={why("backup_enabled")} disabled={!!why("backup_enabled")} checked={settings.backup.enabled} onChange={(v) => upd(["backup", "enabled"], v)} />}
+          {can("backup_send_to_chat") && <Toggle label={t("adm.settings.backup_send_chat")} sub={why("backup_send_to_chat")} disabled={!!why("backup_send_to_chat")} checked={settings.backup.send_to_chat} onChange={(v) => upd(["backup", "send_to_chat"], v)} />}
         </div>
         )}
         {(can("backup_interval_hours") || can("backup_max_files")) && (
         <div className="grid grid-cols-2 gap-4 pt-1">
-          {can("backup_interval_hours") && <Field label="Интервал (часов)" type="number" value={String(settings.backup.interval_hours)} disabled={!!why("backup_interval_hours")} hint={why("backup_interval_hours")} onChange={(v) => upd(["backup", "interval_hours"], Number(v))} />}
-          {can("backup_max_files") && <Field label="Макс. файлов" type="number" value={String(settings.backup.max_files)} disabled={!!why("backup_max_files")} hint={why("backup_max_files")} onChange={(v) => upd(["backup", "max_files"], Number(v))} />}
+          {can("backup_interval_hours") && <Field label={t("adm.settings.backup_interval")} type="number" value={String(settings.backup.interval_hours)} disabled={!!why("backup_interval_hours")} hint={why("backup_interval_hours")} onChange={(v) => upd(["backup", "interval_hours"], Number(v))} />}
+          {can("backup_max_files") && <Field label={t("adm.settings.backup_max_files")} type="number" value={String(settings.backup.max_files)} disabled={!!why("backup_max_files")} hint={why("backup_max_files")} onChange={(v) => upd(["backup", "max_files"], Number(v))} />}
         </div>
         )}
       </Section>
@@ -404,13 +408,13 @@ export default function AdminSettingsPage() {
 
       {/* Extra */}
       {showExtra && (
-      <Section title="Дополнительно">
-        {can("trial_channel_guard") && <Toggle label="Охрана канала для триала" sub={why("trial_channel_guard") ?? "Запрещать пробный период без подписки на канал"} disabled={!!why("trial_channel_guard")} checked={settings.extra.trial_channel_guard} onChange={(v) => upd(["extra", "trial_channel_guard"], v)} />}
+      <Section title={t("adm.settings.extra_title")}>
+        {can("trial_channel_guard") && <Toggle label={t("adm.settings.extra_trial_guard")} sub={why("trial_channel_guard") ?? t("adm.settings.extra_trial_guard_sub")} disabled={!!why("trial_channel_guard")} checked={settings.extra.trial_channel_guard} onChange={(v) => upd(["extra", "trial_channel_guard"], v)} />}
         <div className="grid gap-2.5 sm:grid-cols-2">
-          {can("mini_app_reserve") && <Toggle label="Резервный Mini App" sub={why("mini_app_reserve")} disabled={!!why("mini_app_reserve")} checked={settings.extra.mini_app_reserve} onChange={(v) => upd(["extra", "mini_app_reserve"], v)} />}
-          {can("device_single_reset") && <Toggle label="Сброс одного устройства" sub={why("device_single_reset")} disabled={!!why("device_single_reset")} checked={settings.extra.device_single_reset.enabled} onChange={(v) => upd(["extra", "device_single_reset", "enabled"], v)} />}
-          {can("device_all_reset") && <Toggle label="Сброс всех устройств" sub={why("device_all_reset")} disabled={!!why("device_all_reset")} checked={settings.extra.device_all_reset.enabled} onChange={(v) => upd(["extra", "device_all_reset", "enabled"], v)} />}
-          {can("link_reset") && <Toggle label="Сброс ссылки" sub={why("link_reset")} disabled={!!why("link_reset")} checked={settings.extra.link_reset.enabled} onChange={(v) => upd(["extra", "link_reset", "enabled"], v)} />}
+          {can("mini_app_reserve") && <Toggle label={t("adm.settings.extra_mini_app")} sub={why("mini_app_reserve")} disabled={!!why("mini_app_reserve")} checked={settings.extra.mini_app_reserve} onChange={(v) => upd(["extra", "mini_app_reserve"], v)} />}
+          {can("device_single_reset") && <Toggle label={t("adm.settings.extra_device_single")} sub={why("device_single_reset")} disabled={!!why("device_single_reset")} checked={settings.extra.device_single_reset.enabled} onChange={(v) => upd(["extra", "device_single_reset", "enabled"], v)} />}
+          {can("device_all_reset") && <Toggle label={t("adm.settings.extra_device_all")} sub={why("device_all_reset")} disabled={!!why("device_all_reset")} checked={settings.extra.device_all_reset.enabled} onChange={(v) => upd(["extra", "device_all_reset", "enabled"], v)} />}
+          {can("link_reset") && <Toggle label={t("adm.settings.extra_link_reset")} sub={why("link_reset")} disabled={!!why("link_reset")} checked={settings.extra.link_reset.enabled} onChange={(v) => upd(["extra", "link_reset", "enabled"], v)} />}
         </div>
       </Section>
       )}
@@ -421,7 +425,7 @@ export default function AdminSettingsPage() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Bell className="h-4 w-4 text-fg-muted" />
-            <h3 className="text-sm font-semibold text-fg">Уведомления</h3>
+            <h3 className="text-sm font-semibold text-fg">{t("adm.settings.notif_title")}</h3>
             <span className="rounded-full bg-bg px-2 py-0.5 text-xs font-medium text-fg-muted">
               {notifStats.on} / {notifStats.total}
             </span>
@@ -435,14 +439,14 @@ export default function AdminSettingsPage() {
               onClick={() => setAllNotifications(true)}
               className="rounded-lg border border-border-subtle bg-bg px-3 py-1.5 text-xs font-medium text-fg-muted transition-colors hover:text-fg"
             >
-              Включить все
+              {t("adm.settings.notif_all_on")}
             </button>
             <button
               type="button"
               onClick={() => setAllNotifications(false)}
               className="rounded-lg border border-border-subtle bg-bg px-3 py-1.5 text-xs font-medium text-fg-muted transition-colors hover:text-fg"
             >
-              Выключить все
+              {t("adm.settings.notif_all_off")}
             </button>
           </div>
           )}
@@ -461,6 +465,7 @@ export default function AdminSettingsPage() {
 }
 
 export function PromoBannerCard() {
+  const t = useT();
   const [cfg, setCfg] = useState<PromoBannerConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -483,7 +488,7 @@ export function PromoBannerCard() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.settings.err_save"));
     } finally {
       setSaving(false);
     }
@@ -491,70 +496,70 @@ export function PromoBannerCard() {
 
   if (loading) return null;
   if (error === UNSUPPORTED) return null;
-  if (!cfg) return <Section title="Промо-баннер">{error ?? "Ошибка"}</Section>;
+  if (!cfg) return <Section title={t("adm.settings.promo_title_short")}>{error ?? t("adm.settings.err_generic")}</Section>;
 
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
 
   return (
-    <Section title="Промо-баннер в кабинете" desc="Показывает заметный баннер юзерам в кабинете (объявление/акция). Цену не меняет — для скидок используйте промокоды. Можно нацелить на аудиторию и задать период.">
-      <Toggle label="Показывать баннер" sub="По умолчанию выключено" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
+    <Section title={t("adm.settings.promo_title")} desc={t("adm.settings.promo_desc")}>
+      <Toggle label={t("adm.settings.promo_enabled")} sub={t("adm.settings.off_by_default")} checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
       <div>
-        <label className="mb-1 block text-xs text-fg-muted">Заголовок</label>
-        <input type="text" value={cfg.title} onChange={(e) => patch({ title: e.target.value })} className={inputCls} placeholder="Например: Летняя акция!" />
+        <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.promo_f_title")}</label>
+        <input type="text" value={cfg.title} onChange={(e) => patch({ title: e.target.value })} className={inputCls} placeholder={t("adm.settings.promo_title_ph")} />
       </div>
       <div>
-        <label className="mb-1 block text-xs text-fg-muted">Текст</label>
-        <textarea value={cfg.text} onChange={(e) => patch({ text: e.target.value })} className={inputCls} rows={2} placeholder="Скидка 20% на годовой тариф до конца недели" />
+        <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.promo_f_text")}</label>
+        <textarea value={cfg.text} onChange={(e) => patch({ text: e.target.value })} className={inputCls} rows={2} placeholder={t("adm.settings.promo_text_ph")} />
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Текст кнопки (необяз.)</label>
-          <input type="text" value={cfg.cta_text} onChange={(e) => patch({ cta_text: e.target.value })} className={inputCls} placeholder="Оформить" />
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.promo_cta_text")}</label>
+          <input type="text" value={cfg.cta_text} onChange={(e) => patch({ cta_text: e.target.value })} className={inputCls} placeholder={t("adm.settings.promo_cta_text_ph")} />
         </div>
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Ссылка кнопки</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.promo_cta_url")}</label>
           <input type="text" value={cfg.cta_url} onChange={(e) => patch({ cta_url: e.target.value })} className={inputCls} placeholder="/billing" />
         </div>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Цвет</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.promo_color")}</label>
           <select value={cfg.color} onChange={(e) => patch({ color: e.target.value as PromoBannerConfig["color"] })} className={inputCls}>
-            <option value="accent">Акцент</option>
-            <option value="red">Красный</option>
-            <option value="green">Зелёный</option>
-            <option value="amber">Жёлтый</option>
+            <option value="accent">{t("adm.settings.promo_color_accent")}</option>
+            <option value="red">{t("adm.settings.promo_color_red")}</option>
+            <option value="green">{t("adm.settings.promo_color_green")}</option>
+            <option value="amber">{t("adm.settings.promo_color_amber")}</option>
           </select>
         </div>
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Кому показывать</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.promo_audience")}</label>
           <select value={cfg.audience} onChange={(e) => patch({ audience: e.target.value as PromoBannerConfig["audience"] })} className={inputCls}>
-            <option value="all">Всем</option>
-            <option value="no_sub">Без подписки</option>
-            <option value="has_sub">С подпиской</option>
-            <option value="trial">На пробном</option>
-            <option value="expiring">Истекающим (≤3 дн.)</option>
+            <option value="all">{t("adm.settings.promo_aud_all")}</option>
+            <option value="no_sub">{t("adm.settings.promo_aud_no_sub")}</option>
+            <option value="has_sub">{t("adm.settings.promo_aud_has_sub")}</option>
+            <option value="trial">{t("adm.settings.promo_aud_trial")}</option>
+            <option value="expiring">{t("adm.settings.promo_aud_expiring")}</option>
           </select>
         </div>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Показывать с (необяз.)</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.promo_starts_at")}</label>
           <input type="datetime-local" value={cfg.starts_at ? cfg.starts_at.slice(0, 16) : ""} onChange={(e) => patch({ starts_at: e.target.value ? new Date(e.target.value).toISOString() : "" })} className={inputCls} />
         </div>
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Показывать до (необяз.)</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.promo_ends_at")}</label>
           <input type="datetime-local" value={cfg.ends_at ? cfg.ends_at.slice(0, 16) : ""} onChange={(e) => patch({ ends_at: e.target.value ? new Date(e.target.value).toISOString() : "" })} className={inputCls} />
         </div>
       </div>
-      <Toggle label="Разрешить скрывать" sub="Юзер может закрыть баннер крестиком" checked={cfg.dismissible} onChange={(v) => patch({ dismissible: v })} />
+      <Toggle label={t("adm.settings.promo_dismissible")} sub={t("adm.settings.promo_dismissible_sub")} checked={cfg.dismissible} onChange={(v) => patch({ dismissible: v })} />
       <div className="flex items-center justify-between gap-3 pt-1">
         <span className="text-xs">
           {error && <span className="text-danger">{error}</span>}
-          {saved && <span className="text-success">Сохранено</span>}
+          {saved && <span className="text-success">{t("adm.settings.saved")}</span>}
         </span>
         <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
-          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+          <Save className="h-4 w-4" /> {saving ? "…" : t("adm.settings.save")}
         </button>
       </div>
     </Section>
@@ -562,6 +567,7 @@ export function PromoBannerCard() {
 }
 
 export function ReserveCard() {
+  const t = useT();
   const [cfg, setCfg] = useState<ReserveConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -648,7 +654,7 @@ export function ReserveCard() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.settings.err_save"));
     } finally {
       setSaving(false);
     }
@@ -656,7 +662,7 @@ export function ReserveCard() {
 
   if (loading) return null;
   if (error === UNSUPPORTED) return null;
-  if (!cfg) return <Section title="Резервный доступ">{error ?? "Ошибка"}</Section>;
+  if (!cfg) return <Section title={t("adm.settings.reserve_title_short")}>{error ?? t("adm.settings.err_generic")}</Section>;
 
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
   const modes = cfg.modes ?? [];
@@ -667,22 +673,22 @@ export function ReserveCard() {
   const squadHint =
     why("squad_uuid") ??
     (graceMode
-      ? "Обязателен для режима «Включён»: резерв выдаётся только на этом скваде."
-      : "Обязателен. Это сервер, через который истёкший заходит в Telegram и продлевает подписку. Куда именно он пускает — задаётся в панели Remnawave: сделайте сквад, чьи ноды ходят только в Telegram.");
+      ? t("adm.settings.reserve_squad_hint_grace")
+      : t("adm.settings.reserve_squad_hint"));
 
   return (
     <Section
-      title="Резервный доступ истёкшим"
+      title={t("adm.settings.reserve_title")}
       desc={
         graceMode
-          ? "Когда подписка заканчивается или кончается трафик, человек ещё какое-то время сохраняет небольшой лимит («спасательный круг»), чтобы успеть продлить. Дальше доступ отключается. Экран правит настройки самого бота — срок у него считается в ЧАСАХ, а резерв выдаётся на отдельных сквадах."
-          : "Кому кончилась подписка и кто не успел продлить — на N дней остаётся сервер из сквад-резерва, чтобы зайти в Telegram и продлить. Остальные серверы недоступны. Дальше доступ отключается, а надпись «подписка закончилась / продлите» приходит из настроек панели (уже по-русски)."
+          ? t("adm.settings.reserve_desc_grace")
+          : t("adm.settings.reserve_desc")
       }
     >
       {can("enabled") && (
         <Toggle
-          label="Включить резерв"
-          sub={why("enabled") ?? "По умолчанию выключено (раздаёт бесплатный трафик)"}
+          label={t("adm.settings.reserve_enable")}
+          sub={why("enabled") ?? t("adm.settings.reserve_enable_sub")}
           checked={cfg.enabled}
           onChange={(v) => patch({ enabled: v })}
           disabled={!!why("enabled")}
@@ -690,7 +696,7 @@ export function ReserveCard() {
       )}
       {graceMode && can("mode") && (
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Режим резерва</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.reserve_mode")}</label>
           <select
             value={cfg.mode}
             disabled={!!why("mode")}
@@ -713,14 +719,14 @@ export function ReserveCard() {
       <div className="grid gap-3 sm:grid-cols-2">
         {can("reserve_gb") && (
           <div>
-            <label className="mb-1 block text-xs text-fg-muted">Резерв трафика, ГБ</label>
+            <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.reserve_gb")}</label>
             <input type="number" min={1} max={graceMode ? undefined : 100} disabled={!!why("reserve_gb")} value={String(cfg.reserve_gb)} onChange={(e) => patch({ reserve_gb: Number(e.target.value) })} className={`${inputCls} ${why("reserve_gb") ? "cursor-not-allowed opacity-60" : ""}`} />
             {why("reserve_gb") && <p className="mt-1 text-xs leading-snug text-fg-muted">{why("reserve_gb")}</p>}
           </div>
         )}
         {can("window_days") && (
           <div>
-            <label className="mb-1 block text-xs text-fg-muted">Окно резерва, дней</label>
+            <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.reserve_window_days")}</label>
             <input type="number" min={1} max={60} disabled={!!why("window_days")} value={String(cfg.window_days)} onChange={(e) => patch({ window_days: Number(e.target.value) })} className={`${inputCls} ${why("window_days") ? "cursor-not-allowed opacity-60" : ""}`} />
             {why("window_days") && <p className="mt-1 text-xs leading-snug text-fg-muted">{why("window_days")}</p>}
           </div>
@@ -728,10 +734,14 @@ export function ReserveCard() {
         {hasHours && can("window_hours") && (
           <div>
             {/* Единицу подписываем явно и не пересчитываем: столько часов и уйдёт в бота. */}
-            <label className="mb-1 block text-xs text-fg-muted">Срок резерва, часов</label>
+            <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.reserve_window_hours")}</label>
             <input type="number" min={1} disabled={!!why("window_hours")} value={String(cfg.window_hours)} onChange={(e) => patch({ window_hours: Number(e.target.value) })} className={`${inputCls} ${why("window_hours") ? "cursor-not-allowed opacity-60" : ""}`} />
             <p className="mt-1 text-xs leading-snug text-fg-muted">
-              {why("window_hours") ?? `Столько часов держится резерв (${cfg.window_hours} ч ≈ ${Math.round(((cfg.window_hours ?? 0) / 24) * 10) / 10} сут.)`}
+              {why("window_hours") ??
+                t("adm.settings.reserve_hours_hint", {
+                  h: cfg.window_hours ?? 0,
+                  d: Math.round(((cfg.window_hours ?? 0) / 24) * 10) / 10,
+                })}
             </p>
           </div>
         )}
@@ -739,7 +749,7 @@ export function ReserveCard() {
       {can("squad_uuid") && (
         <div>
           <label className="mb-1 block text-xs text-fg-muted">
-            {graceMode ? "Сквад для истёкших" : "Сквад-резерв (доступ к Telegram)"}
+            {graceMode ? t("adm.settings.reserve_squad_grace") : t("adm.settings.reserve_squad")}
           </label>
           {squads && squads.length > 0 ? (
             <select
@@ -748,59 +758,59 @@ export function ReserveCard() {
               onChange={(e) => patch({ squad_uuid: e.target.value })}
               className={`${inputCls} ${why("squad_uuid") ? "cursor-not-allowed opacity-60" : ""}`}
             >
-              <option value="">— не выбран —</option>
+              <option value="">{t("adm.settings.reserve_squad_none")}</option>
               {/* Сквад из конфига может быть удалён из панели — показываем его отдельной
                   строкой, иначе select молча сбросил бы значение на «не выбран». */}
               {!squads.some((sq) => sq.uuid === cfg.squad_uuid) && cfg.squad_uuid && (
-                <option value={cfg.squad_uuid}>{cfg.squad_uuid} (нет в панели)</option>
+                <option value={cfg.squad_uuid}>{t("adm.settings.reserve_squad_missing", { uuid: cfg.squad_uuid })}</option>
               )}
               {squads.map((sq) => (
                 <option key={sq.uuid} value={sq.uuid}>{sq.name}</option>
               ))}
             </select>
           ) : (
-            <input type="text" disabled={!!why("squad_uuid")} value={cfg.squad_uuid} onChange={(e) => patch({ squad_uuid: e.target.value })} placeholder="напр. 03542796-2d7d-…" className={`${inputCls} ${why("squad_uuid") ? "cursor-not-allowed opacity-60" : ""}`} />
+            <input type="text" disabled={!!why("squad_uuid")} value={cfg.squad_uuid} onChange={(e) => patch({ squad_uuid: e.target.value })} placeholder={t("adm.settings.reserve_squad_ph")} className={`${inputCls} ${why("squad_uuid") ? "cursor-not-allowed opacity-60" : ""}`} />
           )}
           {squadHint && <p className="mt-1 text-xs leading-snug text-fg-muted">{squadHint}</p>}
           {squadCheck?.checked && (
             <p className={`mt-1 text-xs leading-snug ${squadCheck.ok ? "text-fg-muted" : "text-warning"}`}>
               {squadCheck.ok
-                ? `Проверено: сквад отдаёт серверов — ${squadCheck.hosts}.`
-                : `Не сможет выдать сервер: ${squadCheck.problems.join("; ")}.`}
+                ? t("adm.settings.reserve_check_ok", { n: squadCheck.hosts })
+                : t("adm.settings.reserve_check_bad", { problems: squadCheck.problems.join("; ") })}
             </p>
           )}
         </div>
       )}
       {cfg.squad_uuid_limited !== undefined && can("squad_uuid_limited") && (
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Сквад для исчерпавших трафик (UUID)</label>
-          <input type="text" disabled={!!why("squad_uuid_limited")} value={cfg.squad_uuid_limited} onChange={(e) => patch({ squad_uuid_limited: e.target.value })} placeholder="напр. 03542796-2d7d-…" className={`${inputCls} ${why("squad_uuid_limited") ? "cursor-not-allowed opacity-60" : ""}`} />
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.reserve_squad_limited")}</label>
+          <input type="text" disabled={!!why("squad_uuid_limited")} value={cfg.squad_uuid_limited} onChange={(e) => patch({ squad_uuid_limited: e.target.value })} placeholder={t("adm.settings.reserve_squad_ph")} className={`${inputCls} ${why("squad_uuid_limited") ? "cursor-not-allowed opacity-60" : ""}`} />
           <p className="mt-1 text-xs leading-snug text-fg-muted">
-            {why("squad_uuid_limited") ?? "Кто выбрал весь трафик — попадает сюда, а не к истёкшим."}
+            {why("squad_uuid_limited") ?? t("adm.settings.reserve_squad_limited_hint")}
           </p>
         </div>
       )}
       {cfg.trial_enabled !== undefined && (
         <div className="space-y-2.5">
-          <p className="text-xs text-fg-muted">Кому положен резерв (обычные платные подписки получают его всегда):</p>
+          <p className="text-xs text-fg-muted">{t("adm.settings.reserve_who")}</p>
           {can("trial_enabled") && (
-            <Toggle label="Пробным подпискам" sub={why("trial_enabled")} checked={!!cfg.trial_enabled} onChange={(v) => patch({ trial_enabled: v })} disabled={!!why("trial_enabled")} />
+            <Toggle label={t("adm.settings.reserve_who_trial")} sub={why("trial_enabled")} checked={!!cfg.trial_enabled} onChange={(v) => patch({ trial_enabled: v })} disabled={!!why("trial_enabled")} />
           )}
           {cfg.daily_enabled !== undefined && can("daily_enabled") && (
-            <Toggle label="Суточным подпискам" sub={why("daily_enabled")} checked={!!cfg.daily_enabled} onChange={(v) => patch({ daily_enabled: v })} disabled={!!why("daily_enabled")} />
+            <Toggle label={t("adm.settings.reserve_who_daily")} sub={why("daily_enabled")} checked={!!cfg.daily_enabled} onChange={(v) => patch({ daily_enabled: v })} disabled={!!why("daily_enabled")} />
           )}
           {cfg.free_enabled !== undefined && can("free_enabled") && (
-            <Toggle label="Бесплатным тарифам" sub={why("free_enabled")} checked={!!cfg.free_enabled} onChange={(v) => patch({ free_enabled: v })} disabled={!!why("free_enabled")} />
+            <Toggle label={t("adm.settings.reserve_who_free")} sub={why("free_enabled")} checked={!!cfg.free_enabled} onChange={(v) => patch({ free_enabled: v })} disabled={!!why("free_enabled")} />
           )}
         </div>
       )}
       <div className="flex items-center justify-between gap-3 pt-1">
         <span className="text-xs">
           {error && <span className="text-danger">{error}</span>}
-          {saved && <span className="text-success">Сохранено</span>}
+          {saved && <span className="text-success">{t("adm.settings.saved")}</span>}
         </span>
         <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
-          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+          <Save className="h-4 w-4" /> {saving ? "…" : t("adm.settings.save")}
         </button>
       </div>
     </Section>
@@ -808,6 +818,7 @@ export function ReserveCard() {
 }
 
 function EmailGateToggle() {
+  const t = useT();
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -829,8 +840,8 @@ function EmailGateToggle() {
 
   return (
     <Toggle
-      label="Подтверждение email перед покупкой"
-      sub={busy ? "Сохранение…" : "Email-юзер должен подтвердить email до триала/оплаты (Telegram/OAuth не касается)"}
+      label={t("adm.settings.email_gate")}
+      sub={busy ? t("adm.settings.saving") : t("adm.settings.email_gate_sub")}
       checked={enabled}
       onChange={toggle}
     />
@@ -838,6 +849,7 @@ function EmailGateToggle() {
 }
 
 export function FreezeCard() {
+  const t = useT();
   const [cfg, setCfg] = useState<FreezeConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -863,7 +875,7 @@ export function FreezeCard() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.settings.err_save"));
     } finally {
       setSaving(false);
     }
@@ -871,24 +883,24 @@ export function FreezeCard() {
 
   if (loading) return null;
   if (error === UNSUPPORTED) return null;
-  if (!cfg) return <Section title="Заморозка подписки">{error ?? "Ошибка"}</Section>;
+  if (!cfg) return <Section title={t("adm.settings.freeze_title_short")}>{error ?? t("adm.settings.err_generic")}</Section>;
 
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
 
   return (
-    <Section title="Заморозка (пауза) подписки" desc="Юзер может поставить подписку на паузу — дни не сгорают, доступ отключается. При возобновлении срок сдвигается на остаток. Максимум N дней паузы, потом авто-возобновление.">
-      <Toggle label="Разрешить заморозку" sub="По умолчанию выключено" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
+    <Section title={t("adm.settings.freeze_title")} desc={t("adm.settings.freeze_desc")}>
+      <Toggle label={t("adm.settings.freeze_enable")} sub={t("adm.settings.off_by_default")} checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
       <div className="sm:max-w-xs">
-        <label className="mb-1 block text-xs text-fg-muted">Макс. длительность паузы, дней</label>
+        <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.freeze_max_days")}</label>
         <input type="number" min={1} max={365} value={String(cfg.max_days)} onChange={(e) => patch({ max_days: Number(e.target.value) })} className={inputCls} />
       </div>
       <div className="flex items-center justify-between gap-3 pt-1">
         <span className="text-xs">
           {error && <span className="text-danger">{error}</span>}
-          {saved && <span className="text-success">Сохранено</span>}
+          {saved && <span className="text-success">{t("adm.settings.saved")}</span>}
         </span>
         <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
-          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+          <Save className="h-4 w-4" /> {saving ? "…" : t("adm.settings.save")}
         </button>
       </div>
     </Section>
@@ -896,6 +908,7 @@ export function FreezeCard() {
 }
 
 export function NewDeviceCard() {
+  const t = useT();
   const [cfg, setCfg] = useState<NewDeviceConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -915,7 +928,7 @@ export function NewDeviceCard() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.settings.err_save"));
     } finally {
       setSaving(false);
     }
@@ -923,17 +936,18 @@ export function NewDeviceCard() {
 
   if (loading) return null;
   if (error === UNSUPPORTED) return null;
-  if (!cfg) return <Section title="Новое устройство">{error ?? "Ошибка"}</Section>;
+  if (!cfg) return <Section title={t("adm.settings.newdev_title_short")}>{error ?? t("adm.settings.err_generic")}</Section>;
 
   return (
-    <Section title="Уведомление «новое устройство»" desc="Когда к подписке юзера подключается новое устройство — ему приходит уведомление в Telegram/Push (доверие + антишеринг). Первый снимок = базовый, без уведомлений.">
-      <Toggle label="Включить уведомление" sub={saving ? "Сохранение…" : (saved ? "Сохранено" : "По умолчанию выключено")} checked={cfg.enabled} onChange={(v) => save(v)} />
+    <Section title={t("adm.settings.newdev_title")} desc={t("adm.settings.newdev_desc")}>
+      <Toggle label={t("adm.settings.notify_enable")} sub={saving ? t("adm.settings.saving") : saved ? t("adm.settings.saved") : t("adm.settings.off_by_default")} checked={cfg.enabled} onChange={(v) => save(v)} />
       {error && <span className="text-xs text-danger">{error}</span>}
     </Section>
   );
 }
 
 export function LoginAlertCard() {
+  const t = useT();
   const [cfg, setCfg] = useState<LoginAlertConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -953,7 +967,7 @@ export function LoginAlertCard() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.settings.err_save"));
     } finally {
       setSaving(false);
     }
@@ -961,17 +975,18 @@ export function LoginAlertCard() {
 
   if (loading) return null;
   if (error === UNSUPPORTED) return null;
-  if (!cfg) return <Section title="Алерт о новом входе">{error ?? "Ошибка"}</Section>;
+  if (!cfg) return <Section title={t("adm.settings.login_title")}>{error ?? t("adm.settings.err_generic")}</Section>;
 
   return (
-    <Section title="Алерт о новом входе" desc="Когда в аккаунт заходят с нового IP (не первый вход, VPN-ноды исключены) — пользователю приходит уведомление в Telegram / Push / email со сменой пароля при необходимости.">
-      <Toggle label="Включить уведомление о новом входе" sub={saving ? "Сохранение…" : (saved ? "Сохранено" : "По умолчанию выключено")} checked={cfg.enabled} onChange={(v) => save(v)} />
+    <Section title={t("adm.settings.login_title")} desc={t("adm.settings.login_desc")}>
+      <Toggle label={t("adm.settings.login_enable")} sub={saving ? t("adm.settings.saving") : saved ? t("adm.settings.saved") : t("adm.settings.off_by_default")} checked={cfg.enabled} onChange={(v) => save(v)} />
       {error && <span className="text-xs text-danger">{error}</span>}
     </Section>
   );
 }
 
 export function TrafficAlertCard() {
+  const t = useT();
   const [cfg, setCfg] = useState<TrafficAlertConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -997,7 +1012,7 @@ export function TrafficAlertCard() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.settings.err_save"));
     } finally {
       setSaving(false);
     }
@@ -1005,24 +1020,24 @@ export function TrafficAlertCard() {
 
   if (loading) return null;
   if (error === UNSUPPORTED) return null;
-  if (!cfg) return <Section title="Трафик заканчивается">{error ?? "Ошибка"}</Section>;
+  if (!cfg) return <Section title={t("adm.settings.traffic_title_short")}>{error ?? t("adm.settings.err_generic")}</Section>;
 
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
 
   return (
-    <Section title="Уведомление «трафик заканчивается»" desc="Когда юзер израсходовал заданный % лимита трафика — приходит предупреждение в Telegram/Push, чтобы успел продлить/сменить тариф. Только тарифы с лимитом.">
-      <Toggle label="Включить уведомление" sub="По умолчанию выключено" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
+    <Section title={t("adm.settings.traffic_title")} desc={t("adm.settings.traffic_desc")}>
+      <Toggle label={t("adm.settings.notify_enable")} sub={t("adm.settings.off_by_default")} checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
       <div className="sm:max-w-xs">
-        <label className="mb-1 block text-xs text-fg-muted">Порог, % израсходованного (50–99)</label>
+        <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.traffic_threshold")}</label>
         <input type="number" min={50} max={99} value={String(cfg.threshold_percent)} onChange={(e) => patch({ threshold_percent: Number(e.target.value) })} className={inputCls} />
       </div>
       <div className="flex items-center justify-between gap-3 pt-1">
         <span className="text-xs">
           {error && <span className="text-danger">{error}</span>}
-          {saved && <span className="text-success">Сохранено</span>}
+          {saved && <span className="text-success">{t("adm.settings.saved")}</span>}
         </span>
         <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
-          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+          <Save className="h-4 w-4" /> {saving ? "…" : t("adm.settings.save")}
         </button>
       </div>
     </Section>
@@ -1030,6 +1045,7 @@ export function TrafficAlertCard() {
 }
 
 export function DigestCard() {
+  const t = useT();
   const [cfg, setCfg] = useState<DigestConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1056,7 +1072,7 @@ export function DigestCard() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.settings.err_save"));
     } finally {
       setSaving(false);
     }
@@ -1064,42 +1080,42 @@ export function DigestCard() {
 
   if (loading) return null;
   if (error === UNSUPPORTED) return null;
-  if (!cfg) return <Section title="Месячный дайджест">{error ?? "Ошибка"}</Section>;
+  if (!cfg) return <Section title={t("adm.settings.digest_title_short")}>{error ?? t("adm.settings.err_generic")}</Section>;
 
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
 
   return (
-    <Section title="Месячный дайджест пользователю" desc="Раз в месяц юзеру приходит сводка в Telegram/Push: сколько ГБ использовал за месяц и любимый сервер. Данные из Remnawave.">
-      <Toggle label="Включить дайджест" sub="По умолчанию выключено" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
+    <Section title={t("adm.settings.digest_title")} desc={t("adm.settings.digest_desc")}>
+      <Toggle label={t("adm.settings.digest_enable")} sub={t("adm.settings.off_by_default")} checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">День месяца (1–28)</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.digest_day")}</label>
           <input type="number" min={1} max={28} value={String(cfg.day_of_month)} onChange={(e) => patch({ day_of_month: Number(e.target.value) })} className={inputCls} />
         </div>
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Час (UTC, 0–23)</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.digest_hour")}</label>
           <input type="number" min={0} max={23} value={String(cfg.hour)} onChange={(e) => patch({ hour: Number(e.target.value) })} className={inputCls} />
         </div>
       </div>
       <div className="flex items-center justify-between gap-3 pt-1">
         <span className="text-xs">
           {error && <span className="text-danger">{error}</span>}
-          {saved && <span className="text-success">Сохранено</span>}
+          {saved && <span className="text-success">{t("adm.settings.saved")}</span>}
         </span>
         <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
-          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+          <Save className="h-4 w-4" /> {saving ? "…" : t("adm.settings.save")}
         </button>
       </div>
     </Section>
   );
 }
 
-// Исходы холостого прогона — словами, которыми их прочтёт владелец.
+// Исходы холостого прогона — словами, которыми их прочтёт владелец (ключи перевода).
 const DIGEST_EMAIL_OUTCOMES: Record<DigestEmailOutcome, string> = {
-  would_send: "уйдёт",
-  no_traffic: "без трафика — не шлём",
-  usage_error: "панель не ответила",
-  already_this_month: "уже отправлено в этом месяце",
+  would_send: "adm.settings.dm_out_would_send",
+  no_traffic: "adm.settings.dm_out_no_traffic",
+  usage_error: "adm.settings.dm_out_usage_error",
+  already_this_month: "adm.settings.dm_out_already",
 };
 
 /** Сводка письмом — тем, у кого нет ни Telegram, ни push.
@@ -1112,6 +1128,7 @@ const DIGEST_EMAIL_OUTCOMES: Record<DigestEmailOutcome, string> = {
  *  Сохраняем только изменённые поля: включение проверяется на бэкенде (409 с
  *  причиной), и лишнее поле в теле не должно тянуть за собой чужой отказ. */
 export function DigestEmailCard() {
+  const t = useT();
   const [st, setSt] = useState<DigestEmailStatus | null>(null);
   const [hidden, setHidden] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -1143,7 +1160,7 @@ export function DigestEmailCard() {
       .then(apply)
       .catch((e) => {
         if (e instanceof ApiError && (e.status === 404 || e.status === 501)) setHidden(true);
-        else setLoadErr("Не удалось загрузить");
+        else setLoadErr(translate("adm.settings.load_failed"));
       })
       .finally(() => setLoading(false));
   }, []);
@@ -1167,7 +1184,7 @@ export function DigestEmailCard() {
     } catch (e) {
       // 409 — включить нельзя, причина в detail дословно. Введённое не сбрасываем:
       // владелец поправит адрес и нажмёт ещё раз.
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.settings.err_save"));
     } finally {
       setSaving(false);
     }
@@ -1180,7 +1197,7 @@ export function DigestEmailCard() {
       setPreview(await digestEmailAdminApi.preview(lang));
     } catch (e) {
       setPreview(null);
-      setPreviewErr(e instanceof ApiError ? e.detail : "Не удалось показать письмо");
+      setPreviewErr(e instanceof ApiError ? e.detail : t("adm.settings.dm_preview_failed"));
     }
   };
 
@@ -1191,7 +1208,7 @@ export function DigestEmailCard() {
       setDry(await digestEmailAdminApi.dryRun());
     } catch (e) {
       setDry(null);
-      setDryErr(e instanceof ApiError ? e.detail : "Не удалось проверить");
+      setDryErr(e instanceof ApiError ? e.detail : t("adm.settings.check_failed"));
     } finally {
       setChecking(false);
     }
@@ -1206,17 +1223,17 @@ export function DigestEmailCard() {
       const r = await digestEmailAdminApi.test(to);
       setTestMsg({
         ok: true,
-        text: `Тестовое письмо отправлено на ${r.to} с адреса ${r.from}. Ссылка «Отписаться» в нём относится к вашему аккаунту.`,
+        text: t("adm.settings.dm_test_sent", { to: r.to, from: r.from }),
       });
     } catch (e) {
-      setTestMsg({ ok: false, text: e instanceof ApiError ? e.detail : "Не удалось отправить" });
+      setTestMsg({ ok: false, text: e instanceof ApiError ? e.detail : t("adm.settings.dm_test_failed") });
     } finally {
       setTesting(false);
     }
   };
 
   if (loading || hidden) return null;
-  if (!st) return <Section title="Сводка письмом">{loadErr ?? "Ошибка"}</Section>;
+  if (!st) return <Section title={t("adm.settings.dm_title")}>{loadErr ?? t("adm.settings.err_generic")}</Section>;
 
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
   const ghostBtn = "inline-flex shrink-0 items-center gap-2 rounded-xl border border-border-subtle px-3 py-2 text-sm font-medium text-fg hover:bg-bg-subtle disabled:opacity-50";
@@ -1224,12 +1241,12 @@ export function DigestEmailCard() {
 
   return (
     <Section
-      title="Сводка письмом"
-      desc="Тем, у кого нет ни Telegram, ни push-уведомлений, та же сводка уходит на подтверждённую почту — в тот же день и час, что и основная. В письме есть ссылка «Отписаться»."
+      title={t("adm.settings.dm_title")}
+      desc={t("adm.settings.dm_desc")}
     >
       {!st.digest_enabled && (
         <p className="rounded-xl border border-border-subtle bg-bg px-4 py-3 text-xs text-warning">
-          Дайджест выключен — письма тоже не уйдут.
+          {t("adm.settings.dm_digest_off")}
         </p>
       )}
       {st.blockers.length > 0 && (
@@ -1240,68 +1257,76 @@ export function DigestEmailCard() {
         </ul>
       )}
       <Field
-        label={st.needs_separate_sender ? "Адрес отправителя сводки (для Brevo обязателен)" : "Адрес отправителя сводки"}
+        label={st.needs_separate_sender ? t("adm.settings.dm_from_brevo") : t("adm.settings.dm_from")}
         value={from}
         onChange={setFrom}
         type="email"
-        hint="Отдельный от адреса для кодов входа. В Brevo его нужно добавить в «Senders». Для Gmail/Яндекс/Mail.ru не используется — письмо уйдёт с основного адреса."
+        hint={t("adm.settings.dm_from_hint")}
       />
       {st.effective_from && (
-        <p className="text-xs text-fg-muted">Сейчас письма уходят с адреса: {st.effective_from}</p>
+        <p className="text-xs text-fg-muted">{t("adm.settings.dm_effective_from", { email: st.effective_from })}</p>
       )}
       <Toggle
-        label="Отправлять письмом"
-        sub="По умолчанию выключено. Письма уходят только вместе с включённым дайджестом"
+        label={t("adm.settings.dm_send_enable")}
+        sub={t("adm.settings.dm_send_enable_sub")}
         checked={enabled}
         onChange={setEnabled}
       />
       <p className="text-xs leading-snug text-fg-muted">
-        Получат письмо: {st.audience} (активная подписка, подтверждённая почта, нет Telegram и push). Отписались: {st.opted_out}.
+        {t("adm.settings.dm_audience", { n: st.audience, out: st.opted_out })}
       </p>
       {last && (
         <p className="text-xs leading-snug text-fg-muted">
-          Рассылка за {last.month}: отправлено {last.sent}, не доставлено {last.failed}, без трафика {last.no_traffic}, панель не ответила {last.usage_error}, сверх лимита {last.over_limit}, заблокированы в Brevo {last.provider_blocked}.
-          {last.sending > 0 && ` Оборвалось на отправке: ${last.sending} — повторно не шлём.`}
+          {t("adm.settings.dm_last", {
+            month: last.month,
+            sent: last.sent,
+            failed: last.failed,
+            no_traffic: last.no_traffic,
+            usage_error: last.usage_error,
+            over_limit: last.over_limit,
+            provider_blocked: last.provider_blocked,
+          })}
+          {last.sending > 0 && ` ${t("adm.settings.dm_last_sending", { n: last.sending })}`}
         </p>
       )}
       <div className="flex items-center justify-between gap-3 pt-1">
         <span className="text-xs">
           {error && <span className="text-danger">{error}</span>}
-          {saved && <span className="text-success">Сохранено</span>}
+          {saved && <span className="text-success">{t("adm.settings.saved")}</span>}
         </span>
         <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
-          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+          <Save className="h-4 w-4" /> {saving ? "…" : t("adm.settings.save")}
         </button>
       </div>
 
       <div className="space-y-3 rounded-xl border border-border-subtle bg-bg px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
           <button onClick={() => showPreview(previewLang)} className={ghostBtn}>
-            Посмотреть письмо
+            {t("adm.settings.dm_preview_btn")}
           </button>
           {preview && (
             <select
               value={previewLang}
               onChange={(e) => showPreview(e.target.value as "ru" | "en")}
               className="rounded-xl border border-border-subtle bg-bg px-2 py-2 text-sm text-fg"
-              aria-label="Язык письма"
+              aria-label={t("adm.settings.dm_lang_aria")}
             >
-              <option value="ru">Русский</option>
-              <option value="en">English</option>
+              <option value="ru">{t("adm.settings.dm_lang_ru")}</option>
+              <option value="en">{t("adm.settings.dm_lang_en")}</option>
             </select>
           )}
           <button onClick={check} disabled={checking} className={ghostBtn}>
-            {checking ? "…" : "Кому уйдёт"}
+            {checking ? "…" : t("adm.settings.dm_check_btn")}
           </button>
         </div>
         {previewErr && <p className="text-xs text-danger">{previewErr}</p>}
         {preview && (
           <div className="space-y-2">
-            <p className="text-xs text-fg-muted">Тема: <span className="text-fg">{preview.subject}</span></p>
+            <p className="text-xs text-fg-muted">{t("adm.settings.dm_subject")} <span className="text-fg">{preview.subject}</span></p>
             {/* sandbox без разрешений: вёрстка письма не исполняет скриптов и не
                 трогает страницу админки. Ссылка отписки в примере — заглушка. */}
             <iframe
-              title="Предпросмотр письма"
+              title={t("adm.settings.dm_preview_title")}
               sandbox=""
               srcDoc={preview.html}
               className="h-[520px] w-full rounded-xl border border-border-subtle bg-white"
@@ -1312,18 +1337,18 @@ export function DigestEmailCard() {
         {dry && (
           <div className="space-y-2 text-xs text-fg-muted">
             <p className="text-fg">
-              Осмотрено {dry.examined}, уйдёт писем {dry.would_send}. Ничего не отправлено и не записано.
+              {t("adm.settings.dm_dry_summary", { examined: dry.examined, n: dry.would_send })}
             </p>
-            {dry.truncated && <p>Показаны первые {dry.examined} из {dry.audience}.</p>}
+            {dry.truncated && <p>{t("adm.settings.dm_dry_truncated", { n: dry.examined, total: dry.audience })}</p>}
             {dry.items.length > 0 && (
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="text-left text-fg-muted">
-                      <th className="py-1 pr-3 font-medium">ID</th>
-                      <th className="py-1 pr-3 font-medium">ГБ за 30 дней</th>
-                      <th className="py-1 pr-3 font-medium">Любимый сервер</th>
-                      <th className="py-1 pr-3 font-medium">Итог</th>
+                      <th className="py-1 pr-3 font-medium">{t("adm.settings.dm_col_id")}</th>
+                      <th className="py-1 pr-3 font-medium">{t("adm.settings.dm_col_gb")}</th>
+                      <th className="py-1 pr-3 font-medium">{t("adm.settings.dm_col_favorite")}</th>
+                      <th className="py-1 pr-3 font-medium">{t("adm.settings.dm_col_outcome")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1332,7 +1357,7 @@ export function DigestEmailCard() {
                         <td className="py-1 pr-3">{item.user_id ?? "—"}</td>
                         <td className="py-1 pr-3">{item.gb ?? "—"}</td>
                         <td className="py-1 pr-3">{item.favorite ?? "—"}</td>
-                        <td className="py-1 pr-3">{DIGEST_EMAIL_OUTCOMES[item.outcome] ?? item.outcome}</td>
+                        <td className="py-1 pr-3">{DIGEST_EMAIL_OUTCOMES[item.outcome] ? t(DIGEST_EMAIL_OUTCOMES[item.outcome]) : item.outcome}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1343,7 +1368,7 @@ export function DigestEmailCard() {
         )}
         <div className="flex flex-wrap items-end gap-2">
           <div className="min-w-0 flex-1">
-            <label className="mb-1 block text-xs text-fg-muted">Тестовое письмо на адрес</label>
+            <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.dm_test_label")}</label>
             <input
               type="email"
               value={testTo}
@@ -1353,7 +1378,7 @@ export function DigestEmailCard() {
             />
           </div>
           <button onClick={sendTest} disabled={testing || !testTo.trim()} className={ghostBtn}>
-            {testing ? "…" : "Отправить тест"}
+            {testing ? "…" : t("adm.settings.dm_test_btn")}
           </button>
         </div>
         {testMsg && <p className={`text-xs ${testMsg.ok ? "text-success" : "text-danger"}`}>{testMsg.text}</p>}
@@ -1363,6 +1388,7 @@ export function DigestEmailCard() {
 }
 
 export function WinbackCard() {
+  const t = useT();
   const [cfg, setCfg] = useState<WinbackConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1390,7 +1416,7 @@ export function WinbackCard() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.settings.err_save"));
     } finally {
       setSaving(false);
     }
@@ -1398,34 +1424,34 @@ export function WinbackCard() {
 
   if (loading) return null;
   if (error === UNSUPPORTED) return null;
-  if (!cfg) return <Section title="Win-back истёкших">{error ?? "Ошибка"}</Section>;
+  if (!cfg) return <Section title={t("adm.settings.wb_title")}>{error ?? t("adm.settings.err_generic")}</Section>;
 
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
 
   return (
-    <Section title="Win-back истёкших" desc="Через N дней ПОСЛЕ окончания подписки юзеру приходит напоминание в Telegram/Push «вернись, вот скидка» + одноразовая скидка на возврат (применяется автоматически при следующей покупке).">
-      <Toggle label="Включить win-back" sub="По умолчанию выключено" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
+    <Section title={t("adm.settings.wb_title")} desc={t("adm.settings.wb_desc")}>
+      <Toggle label={t("adm.settings.wb_enable")} sub={t("adm.settings.off_by_default")} checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
       <div className="grid gap-3 sm:grid-cols-3">
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Скидка, %</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.f_percent")}</label>
           <input type="number" min={1} max={100} value={String(cfg.percent)} onChange={(e) => patch({ percent: Number(e.target.value) })} className={inputCls} />
         </div>
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Через сколько дней после окончания</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.wb_days_after")}</label>
           <input type="number" min={1} max={90} value={String(cfg.days_after)} onChange={(e) => patch({ days_after: Number(e.target.value) })} className={inputCls} />
         </div>
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Срок жизни промо, часов</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.f_promo_lifetime")}</label>
           <input type="number" min={1} max={1440} value={String(cfg.lifetime_hours)} onChange={(e) => patch({ lifetime_hours: Number(e.target.value) })} className={inputCls} />
         </div>
       </div>
       <div className="flex items-center justify-between gap-3 pt-1">
         <span className="text-xs">
           {error && <span className="text-danger">{error}</span>}
-          {saved && <span className="text-success">Сохранено</span>}
+          {saved && <span className="text-success">{t("adm.settings.saved")}</span>}
         </span>
         <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
-          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+          <Save className="h-4 w-4" /> {saving ? "…" : t("adm.settings.save")}
         </button>
       </div>
     </Section>
@@ -1435,10 +1461,10 @@ export function WinbackCard() {
 /** Кому скидка до окончания подписки не выдаётся — те же правила, что в бэкенде
  *  (services/overlay_renewal_discount.py, decide). Держим рядом с полями, чтобы
  *  владелец видел цену решения до того, как включит. */
-const RENEWAL_DISCOUNT_EXCLUSIONS =
-  "Кому не выдаётся: пробный период; подписка без оплаты (подарок, промокод, импорт); текущий срок подарен; автопродление с баланса; уже есть другая скидка или открыто другое предложение (win-back, скидка триальщикам); личная скидка не меньше этой; персонал; заблокированные; резерв и заморозка; оплата в процессе; некуда написать.";
+const RENEWAL_DISCOUNT_EXCLUSIONS = "adm.settings.rd_exclusions";
 
 export function RenewalDiscountCard() {
+  const t = useT();
   const [cfg, setCfg] = useState<RenewalDiscountConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1471,7 +1497,7 @@ export function RenewalDiscountCard() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.settings.err_save"));
     } finally {
       setSaving(false);
     }
@@ -1479,14 +1505,14 @@ export function RenewalDiscountCard() {
 
   if (loading) return null;
   if (error === UNSUPPORTED) return null;
-  if (!cfg) return <Section title="Скидка до окончания подписки">{error ?? "Ошибка"}</Section>;
+  if (!cfg) return <Section title={t("adm.settings.rd_title")}>{error ?? t("adm.settings.err_generic")}</Section>;
 
   const minDays = cfg.min_days_before ?? 4;
 
   return (
     <Section
-      title="Скидка до окончания подписки"
-      desc="За N дней до конца ПЛАТНОЙ подписки человеку выдаётся разовая скидка на продление и приходит сообщение в Telegram и push (тем, у кого только почта, — строкой в письме за 3 дня). Скидка применяется сама при следующей оплате и сгорает после покупки, по сроку или в момент окончания подписки — дальше работает win-back."
+      title={t("adm.settings.rd_title")}
+      desc={t("adm.settings.rd_desc")}
     >
       {cfg.note && (
         <p className="whitespace-pre-line rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-xs leading-relaxed text-fg">
@@ -1494,49 +1520,49 @@ export function RenewalDiscountCard() {
         </p>
       )}
       <Toggle
-        label="Включить"
-        sub="По умолчанию выключено. Пока выключено, никому ничего не выдаётся и не отправляется."
+        label={t("adm.settings.enable")}
+        sub={t("adm.settings.rd_enable_sub")}
         checked={cfg.enabled}
         onChange={(v) => patch({ enabled: v })}
       />
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Скидка, %" type="number" value={String(cfg.percent)} onChange={(v) => patch({ percent: Number(v) })} />
+        <Field label={t("adm.settings.f_percent")} type="number" value={String(cfg.percent)} onChange={(v) => patch({ percent: Number(v) })} />
         <Field
-          label="За сколько дней до конца"
+          label={t("adm.settings.rd_days_before")}
           type="number"
           value={String(cfg.days_before)}
           onChange={(v) => patch({ days_before: Number(v) })}
-          hint={`Не меньше ${minDays} — в последние дни уже приходят обычные напоминания о продлении, так сообщения не совпадут по дням.`}
+          hint={t("adm.settings.rd_days_before_hint", { n: minDays })}
         />
         <Field
-          label="Срок действия скидки, часов"
+          label={t("adm.settings.rd_lifetime")}
           type="number"
           value={String(cfg.lifetime_hours)}
           onChange={(v) => patch({ lifetime_hours: Number(v) })}
-          hint="Сгорает не позже окончания подписки. Если скидка сгорит раньше письма за 3 дня, людям только с почтой она не выдаётся — сообщить им будет нечем."
+          hint={t("adm.settings.rd_lifetime_hint")}
         />
         <Field
-          label="Не чаще, чем раз в N дней"
+          label={t("adm.settings.rd_cooldown")}
           type="number"
           value={String(cfg.cooldown_days)}
           onChange={(v) => patch({ cooldown_days: Number(v) })}
-          hint="0 — на каждый срок подписки. Без ограничения помесячные клиенты получают скидку каждый месяц."
+          hint={t("adm.settings.rd_cooldown_hint")}
         />
       </div>
       <Toggle
-        label="Не предлагать тем, кто и так продлевает заранее"
-        sub="Если человек хоть раз продлил без скидки до окончания срока, скидку ему не выдаём — он заплатил бы и так."
+        label={t("adm.settings.rd_skip_early")}
+        sub={t("adm.settings.rd_skip_early_sub")}
         checked={cfg.skip_early_renewers}
         onChange={(v) => patch({ skip_early_renewers: v })}
       />
-      <p className="text-xs leading-relaxed text-fg-muted">{RENEWAL_DISCOUNT_EXCLUSIONS}</p>
+      <p className="text-xs leading-relaxed text-fg-muted">{t(RENEWAL_DISCOUNT_EXCLUSIONS)}</p>
       <div className="flex items-center justify-between gap-3 pt-1">
         <span className="text-xs">
           {error && <span className="text-danger">{error}</span>}
-          {saved && <span className="text-success">Сохранено</span>}
+          {saved && <span className="text-success">{t("adm.settings.saved")}</span>}
         </span>
         <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
-          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+          <Save className="h-4 w-4" /> {saving ? "…" : t("adm.settings.save")}
         </button>
       </div>
     </Section>
@@ -1544,6 +1570,7 @@ export function RenewalDiscountCard() {
 }
 
 export function TrialDiscountCard() {
+  const t = useT();
   const [cfg, setCfg] = useState<TrialDiscountConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1568,7 +1595,7 @@ export function TrialDiscountCard() {
       setDry(await trialDiscountAdminApi.dryRun());
     } catch (e) {
       setDry(null);
-      setDryError(e instanceof ApiError ? e.detail : "Не удалось проверить");
+      setDryError(e instanceof ApiError ? e.detail : t("adm.settings.check_failed"));
     } finally {
       setChecking(false);
     }
@@ -1591,7 +1618,7 @@ export function TrialDiscountCard() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.settings.err_save"));
     } finally {
       setSaving(false);
     }
@@ -1599,12 +1626,12 @@ export function TrialDiscountCard() {
 
   if (loading) return null;
   if (error === UNSUPPORTED) return null;
-  if (!cfg) return <Section title="Скидка триальщикам">{error ?? "Ошибка"}</Section>;
+  if (!cfg) return <Section title={t("adm.settings.td_title_short")}>{error ?? t("adm.settings.err_generic")}</Section>;
 
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
 
   return (
-    <Section title="Скидка триальщикам на первую покупку" desc="За N дней до конца пробного периода юзеру выдаётся одноразовая скидка на первую оплату + баннер-таймер в кабинете и напоминание в Telegram. Скидка гаснет после покупки или по истечении срока.">
+    <Section title={t("adm.settings.td_title")} desc={t("adm.settings.td_desc")}>
       {/* Бэкенд рассказал, что у него это устроено иначе (промокод вместо
           молчаливой выдачи) — печатаем дословно: описание выше написано про наш. */}
       {/* Дословно, с переносами: бэкенд кладёт сюда не только описание механизма,
@@ -1615,18 +1642,18 @@ export function TrialDiscountCard() {
           {cfg.note}
         </p>
       )}
-      <Toggle label="Включить" sub="По умолчанию выключено" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
+      <Toggle label={t("adm.settings.enable")} sub={t("adm.settings.off_by_default")} checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
       <div className="grid gap-3 sm:grid-cols-3">
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Скидка, %</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.f_percent")}</label>
           <input type="number" min={1} max={100} value={String(cfg.percent)} onChange={(e) => patch({ percent: Number(e.target.value) })} className={inputCls} />
         </div>
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">За сколько дней до конца триала</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.td_days_before")}</label>
           <input type="number" min={1} max={30} value={String(cfg.days_before)} onChange={(e) => patch({ days_before: Number(e.target.value) })} className={inputCls} />
         </div>
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Срок жизни промо, часов</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.f_promo_lifetime")}</label>
           <input type="number" min={1} max={720} value={String(cfg.lifetime_hours)} onChange={(e) => patch({ lifetime_hours: Number(e.target.value) })} className={inputCls} />
         </div>
       </div>
@@ -1634,23 +1661,26 @@ export function TrialDiscountCard() {
         <div className="space-y-3 rounded-xl border border-border-subtle bg-bg px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs text-fg-muted">
-              Проверка без отправки: кому уйдёт предложение, если включить рассылку прямо сейчас.
-              Ничего не отправляется и не выдаётся.
+              {t("adm.settings.td_dry_note")}
             </p>
             <button
               onClick={check}
               disabled={checking}
               className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-border-subtle px-3 py-2 text-sm font-medium text-fg hover:bg-bg-subtle disabled:opacity-50"
             >
-              {checking ? "…" : "Проверить"}
+              {checking ? "…" : t("adm.settings.check_btn")}
             </button>
           </div>
           {dryError && <p className="text-xs text-danger">{dryError}</p>}
           {dry && (
             <div className="space-y-2 text-xs text-fg-muted">
               <p className="text-fg">
-                Осмотрено {dry.examined}, получат предложение {dry.previews.filter((p) => p.would_send).length}
-                {dry.truncated ? " (показана первая часть)" : ""}
+                {t(
+                  dry.truncated
+                    ? "adm.settings.td_dry_summary_truncated"
+                    : "adm.settings.td_dry_summary",
+                  { examined: dry.examined, n: dry.previews.filter((p) => p.would_send).length },
+                )}
               </p>
               {dry.skipped && Object.keys(dry.skipped).length > 0 && (
                 <ul className="space-y-0.5">
@@ -1661,7 +1691,7 @@ export function TrialDiscountCard() {
                   ))}
                 </ul>
               )}
-              {!!dry.has_discount && <p>У них уже есть другая скидка — {dry.has_discount} (предложим позже)</p>}
+              {!!dry.has_discount && <p>{t("adm.settings.td_has_discount", { n: dry.has_discount })}</p>}
               {dry.discount_check && <p className="text-warning">{dry.discount_check}</p>}
               {dry.lifetime_note && <p>{dry.lifetime_note}</p>}
               {dry.orphan_note && (
@@ -1684,10 +1714,10 @@ export function TrialDiscountCard() {
       <div className="flex items-center justify-between gap-3 pt-1">
         <span className="text-xs">
           {error && <span className="text-danger">{error}</span>}
-          {saved && <span className="text-success">Сохранено</span>}
+          {saved && <span className="text-success">{t("adm.settings.saved")}</span>}
         </span>
         <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
-          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+          <Save className="h-4 w-4" /> {saving ? "…" : t("adm.settings.save")}
         </button>
       </div>
     </Section>
@@ -1695,6 +1725,7 @@ export function TrialDiscountCard() {
 }
 
 export function MorningSummaryCard() {
+  const t = useT();
   const [cfg, setCfg] = useState<MorningSummaryConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1721,7 +1752,7 @@ export function MorningSummaryCard() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.settings.err_save"));
     } finally {
       setSaving(false);
     }
@@ -1729,30 +1760,30 @@ export function MorningSummaryCard() {
 
   if (loading) return null;
   if (error === UNSUPPORTED) return null;
-  if (!cfg) return <Section title="Утренняя сводка">{error ?? "Ошибка"}</Section>;
+  if (!cfg) return <Section title={t("adm.settings.ms_title_short")}>{error ?? t("adm.settings.err_generic")}</Section>;
 
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
 
   return (
-    <Section title="Сводка владельцу в Telegram" desc="Раз в сутки владельцу приходит сообщение: выручка, новые регистрации, активные подписки, сколько истекает в ближайшие дни.">
-      <Toggle label="Включить сводку" sub="Отправлять ежедневно в Telegram владельцу" checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
+    <Section title={t("adm.settings.ms_title")} desc={t("adm.settings.ms_desc")}>
+      <Toggle label={t("adm.settings.ms_enable")} sub={t("adm.settings.ms_enable_sub")} checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Час отправки (0–23, время сервера)</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.ms_hour")}</label>
           <input type="number" min={0} max={23} value={String(cfg.hour)} onChange={(e) => patch({ hour: Number(e.target.value) })} className={inputCls} />
         </div>
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Окно «истекают в N дней»</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.ms_expiring_days")}</label>
           <input type="number" min={1} value={String(cfg.expiring_days)} onChange={(e) => patch({ expiring_days: Number(e.target.value) })} className={inputCls} />
         </div>
       </div>
       <div className="flex items-center justify-between gap-3 pt-1">
         <span className="text-xs">
           {error && <span className="text-danger">{error}</span>}
-          {saved && <span className="text-success">Сохранено</span>}
+          {saved && <span className="text-success">{t("adm.settings.saved")}</span>}
         </span>
         <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
-          <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+          <Save className="h-4 w-4" /> {saving ? "…" : t("adm.settings.save")}
         </button>
       </div>
     </Section>
@@ -1760,6 +1791,7 @@ export function MorningSummaryCard() {
 }
 
 export function TopupSettingsCard({ applicability }: { applicability?: TopupApplicability } = {}) {
+  const t = useT();
   // На чужом бэкенде («Бедолага») условия пополнения СОБИРАЮТСЯ из настроек
   // каждого платёжного метода, и общего места, куда их записать, нет. Цифры при
   // этом настоящие и полезные — поэтому показываем их, но без кнопки, за которой
@@ -1809,7 +1841,7 @@ export function TopupSettingsCard({ applicability }: { applicability?: TopupAppl
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.settings.err_save"));
     } finally {
       setSaving(false);
     }
@@ -1817,7 +1849,7 @@ export function TopupSettingsCard({ applicability }: { applicability?: TopupAppl
 
   if (loading) return null;
   if (error === UNSUPPORTED) return null;
-  if (!cfg) return <Section title="Пополнение баланса">{error ?? "Ошибка"}</Section>;
+  if (!cfg) return <Section title={t("adm.settings.topup_title_short")}>{error ?? t("adm.settings.err_generic")}</Section>;
 
   const inputCls = "w-full rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-60";
   // Причина «правится не отсюда» — прямо под полем: без неё выключенный ввод
@@ -1830,17 +1862,17 @@ export function TopupSettingsCard({ applicability }: { applicability?: TopupAppl
 
   return (
     <Section
-      title="Пополнение через шлюзы"
+      title={t("adm.settings.topup_title")}
       desc={
         can("bonus_percent")
-          ? "Пользователь платит через платёжный шлюз, сумма (+бонус) зачисляется на ₽-баланс. Только рублёвые шлюзы."
-          : "Пользователь платит через платёжный шлюз, сумма зачисляется на ₽-баланс. Только рублёвые шлюзы."
+          ? t("adm.settings.topup_desc_bonus")
+          : t("adm.settings.topup_desc")
       }
     >
       {can("enabled") && (
         <Toggle
-          label="Включить пополнение"
-          sub={why("enabled") ?? "Показывать блок пополнения в кабинете"}
+          label={t("adm.settings.topup_enable")}
+          sub={why("enabled") ?? t("adm.settings.topup_enable_sub")}
           checked={cfg.enabled}
           disabled={!!why("enabled")}
           onChange={(v) => patch({ enabled: v })}
@@ -1850,21 +1882,21 @@ export function TopupSettingsCard({ applicability }: { applicability?: TopupAppl
         <div className={`grid gap-3 ${numberFields >= 3 ? "sm:grid-cols-3" : numberFields === 2 ? "sm:grid-cols-2" : ""}`}>
           {can("bonus_percent") && (
             <div>
-              <label className="mb-1 block text-xs text-fg-muted">Бонус, %</label>
+              <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.topup_bonus")}</label>
               <input type="number" min={0} max={100} disabled={!!why("bonus_percent")} value={String(cfg.bonus_percent)} onChange={(e) => patch({ bonus_percent: Number(e.target.value) })} className={inputCls} />
               {lockNote("bonus_percent")}
             </div>
           )}
           {can("min_amount") && (
             <div>
-              <label className="mb-1 block text-xs text-fg-muted">Мин. сумма, ₽</label>
+              <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.topup_min")}</label>
               <input type="number" min={1} disabled={!!why("min_amount")} value={String(cfg.min_amount)} onChange={(e) => patch({ min_amount: Number(e.target.value) })} className={inputCls} />
               {lockNote("min_amount")}
             </div>
           )}
           {can("max_amount") && (
             <div>
-              <label className="mb-1 block text-xs text-fg-muted">Макс. сумма, ₽</label>
+              <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.topup_max")}</label>
               <input type="number" min={1} disabled={!!why("max_amount")} value={String(cfg.max_amount)} onChange={(e) => patch({ max_amount: Number(e.target.value) })} className={inputCls} />
               {lockNote("max_amount")}
             </div>
@@ -1873,7 +1905,7 @@ export function TopupSettingsCard({ applicability }: { applicability?: TopupAppl
       )}
       {can("presets") && (
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">Пресеты сумм (через запятую)</label>
+          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.topup_presets")}</label>
           <input type="text" disabled={!!why("presets")} value={cfg.presets.join(", ")} onChange={(e) => patch({ presets: e.target.value.split(",").map((s) => Number(s.trim())).filter((n) => !Number.isNaN(n)) })} className={inputCls} />
           {lockNote("presets")}
         </div>
@@ -1881,10 +1913,10 @@ export function TopupSettingsCard({ applicability }: { applicability?: TopupAppl
       <div className="flex items-center justify-between gap-3 pt-1">
         <span className="text-xs">
           {error && <span className="text-danger">{error}</span>}
-          {saved && <span className="text-success">Сохранено</span>}
+          {saved && <span className="text-success">{t("adm.settings.saved")}</span>}
           {readonly && (
             <span className="text-fg-muted">
-              Условия берутся из настроек платёжных методов бота — меняйте их там.
+              {t("adm.settings.topup_readonly")}
             </span>
           )}
         </span>
@@ -1893,7 +1925,7 @@ export function TopupSettingsCard({ applicability }: { applicability?: TopupAppl
             наш, кнопка на месте. */}
         {!readonly && anyEditable && (
           <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:bg-accent/90 disabled:opacity-50">
-            <Save className="h-4 w-4" /> {saving ? "…" : "Сохранить"}
+            <Save className="h-4 w-4" /> {saving ? "…" : t("adm.settings.save")}
           </button>
         )}
       </div>

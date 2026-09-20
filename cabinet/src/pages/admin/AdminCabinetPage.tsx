@@ -5,6 +5,7 @@ import { useBranding } from "@/contexts/BrandingContext";
 import { ApiError } from "@/types/api";
 import { Flag } from "@/components/Flag";
 import { LANGUAGES } from "@/i18n/config";
+import { useT } from "@/i18n/I18nContext";
 
 const ALL_LANG_CODES = LANGUAGES.map((l) => l.code);
 
@@ -14,6 +15,7 @@ const ALL_LANG_CODES = LANGUAGES.map((l) => l.code);
  * (branding.json через appearance API), меняется только место в меню.
  */
 export default function AdminCabinetPage() {
+  const t = useT();
   const { refresh, can } = useBranding();
   const [form, setForm] = useState<AdminAppearance | null>(null);
   const [loading, setLoading] = useState(true);
@@ -25,8 +27,10 @@ export default function AdminCabinetPage() {
     appearanceAdminApi
       .get()
       .then(setForm)
-      .catch(() => setError("Не удалось загрузить"))
+      .catch(() => setError(t("adm.cabinet.load_error")))
       .finally(() => setLoading(false));
+    // перевод берём на момент загрузки; перезапрашивать при смене языка не нужно
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const save = async () => {
@@ -58,7 +62,7 @@ export default function AdminCabinetPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Не удалось сохранить");
+      setError(e instanceof ApiError ? e.detail : t("adm.cabinet.save_error"));
     } finally {
       setSaving(false);
     }
@@ -70,7 +74,7 @@ export default function AdminCabinetPage() {
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-border border-t-accent" />
       </div>
     );
-  if (!form) return <p className="text-sm text-danger">{error ?? "Ошибка"}</p>;
+  if (!form) return <p className="text-sm text-danger">{error ?? t("adm.cabinet.error")}</p>;
 
   const langActive = (code: string) => {
     const list = form.enabled_languages;
@@ -91,12 +95,12 @@ export default function AdminCabinetPage() {
     <div className="mx-auto max-w-3xl space-y-5">
       <div className="flex items-center gap-2 px-1 pt-1">
         <DoorOpen className="h-[18px] w-[18px] text-accent" />
-        <h1 className="text-lg font-bold text-fg md:text-xl">Доступ и язык</h1>
+        <h1 className="text-lg font-bold text-fg md:text-xl">{t("adm.cabinet.title")}</h1>
       </div>
 
       {/* Прямая ссылка подписки + тех-работы */}
       <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
-        <h2 className="mb-3 text-sm font-semibold text-fg">Кабинет и доступ</h2>
+        <h2 className="mb-3 text-sm font-semibold text-fg">{t("adm.cabinet.access_title")}</h2>
 
         <label className="flex items-center gap-2.5 py-1 text-sm text-fg">
           <input
@@ -105,11 +109,9 @@ export default function AdminCabinetPage() {
             onChange={(e) => setForm({ ...form, sub_link_enabled: e.target.checked })}
             className="h-4 w-4 accent-[var(--accent)]"
           />
-          Показывать прямую ссылку подписки и QR
+          {t("adm.cabinet.sub_link")}
         </label>
-        <p className="ml-6 text-xs text-fg-subtle">
-          Выключите, чтобы скрыть блок «Прямая ссылка подписки» и QR в разделе подключения.
-        </p>
+        <p className="ml-6 text-xs text-fg-subtle">{t("adm.cabinet.sub_link_hint")}</p>
 
         <label className="mt-3 flex items-center gap-2.5 py-1 text-sm text-fg">
           <input
@@ -118,13 +120,9 @@ export default function AdminCabinetPage() {
             onChange={(e) => setForm({ ...form, crypto_links_enabled: e.target.checked })}
             className="h-4 w-4 accent-[var(--accent)]"
           />
-          Крипто-ссылки (скрывать реальный адрес подписки)
+          {t("adm.cabinet.crypto_links")}
         </label>
-        <p className="ml-6 text-xs text-fg-subtle">
-          Все ссылки подключения (подписка, QR, deep-link'и приложений) идут через
-          непрозрачный крипто-алиас на домене кабинета — реальный адрес подписки не
-          виден ни в приложении, ни в коде страницы. Работает и когда кабинет на отдельном сервере.
-        </p>
+        <p className="ml-6 text-xs text-fg-subtle">{t("adm.cabinet.crypto_links_hint")}</p>
 
         {can("device_upsell") && (
           <>
@@ -135,15 +133,9 @@ export default function AdminCabinetPage() {
                 onChange={(e) => setForm({ ...form, device_upsell_enabled: e.target.checked })}
                 className="h-4 w-4 accent-[var(--accent)]"
               />
-              Предлагать тариф побольше, когда заняты все места для устройств
+              {t("adm.cabinet.device_upsell")}
             </label>
-            <p className="ml-6 text-xs text-fg-subtle">
-              На странице «Устройства» появится блок «Нужно больше устройств?» с ближайшим
-              тарифом, где устройств больше. На Главной — только в последнюю неделю срока,
-              когда смена тарифа почти ничего не сжигает. Если места заняты дублями одного
-              устройства, сначала предложим их освободить. Перед оплатой другого тарифа
-              человек увидит, сколько дней текущего срока пропадёт, и подтвердит смену.
-            </p>
+            <p className="ml-6 text-xs text-fg-subtle">{t("adm.cabinet.device_upsell_hint")}</p>
           </>
         )}
 
@@ -155,7 +147,7 @@ export default function AdminCabinetPage() {
               onChange={(e) => setForm({ ...form, maintenance_enabled: e.target.checked })}
               className="h-4 w-4 accent-[var(--accent)]"
             />
-            Режим тех-работ (кабинет закрыт для пользователей)
+            {t("adm.cabinet.maintenance")}
           </label>
           <label className="flex items-center gap-2.5 py-1 text-sm text-fg">
             <input
@@ -164,16 +156,16 @@ export default function AdminCabinetPage() {
               onChange={(e) => setForm({ ...form, maintenance_follow_bot: e.target.checked })}
               className="h-4 w-4 accent-[var(--accent)]"
             />
-            Следовать за режимом доступа бота («Запрещён для всех» → кабинет тоже закрыт)
+            {t("adm.cabinet.maintenance_follow_bot")}
           </label>
           <p className="ml-6 mb-2.5 mt-1 text-xs text-fg-subtle">
-            Админы заходят всегда; экран входа остаётся доступным.
+            {t("adm.cabinet.maintenance_hint")}
           </p>
 
           {(form.maintenance_enabled === true || form.maintenance_follow_bot === true) && (
             <div className="mb-3 ml-6 rounded-xl border border-border-subtle bg-bg px-3.5 py-3">
               <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-fg-subtle">
-                Что ограничивать
+                {t("adm.cabinet.restrict_title")}
               </p>
               <label className="flex items-center gap-2.5 py-1 text-sm text-fg">
                 <input
@@ -182,7 +174,7 @@ export default function AdminCabinetPage() {
                   onChange={(e) => setForm({ ...form, maintenance_block_login: e.target.checked })}
                   className="h-4 w-4 accent-[var(--accent)]"
                 />
-                Вход в кабинет (полностью закрыт для не-админов)
+                {t("adm.cabinet.block_login")}
               </label>
               <label className="flex items-center gap-2.5 py-1 text-sm text-fg">
                 <input
@@ -193,7 +185,7 @@ export default function AdminCabinetPage() {
                   }
                   className="h-4 w-4 accent-[var(--accent)]"
                 />
-                Новые регистрации
+                {t("adm.cabinet.block_registration")}
               </label>
               <label className="flex items-center gap-2.5 py-1 text-sm text-fg">
                 <input
@@ -204,19 +196,16 @@ export default function AdminCabinetPage() {
                   }
                   className="h-4 w-4 accent-[var(--accent)]"
                 />
-                Оплата и пополнение баланса
+                {t("adm.cabinet.block_payments")}
               </label>
-              <p className="mt-1.5 text-xs text-fg-subtle">
-                Снимите «Вход», чтобы кабинет оставался открытым, а ограничить только регистрацию
-                и/или оплату.
-              </p>
+              <p className="mt-1.5 text-xs text-fg-subtle">{t("adm.cabinet.restrict_hint")}</p>
             </div>
           )}
 
           <input
             value={form.maintenance_message ?? ""}
             onChange={(e) => setForm({ ...form, maintenance_message: e.target.value })}
-            placeholder="Текст на экране тех-работ (необязательно)"
+            placeholder={t("adm.cabinet.maintenance_message_ph")}
             className="w-full rounded-lg border border-border-subtle bg-bg px-3 py-2 text-sm text-fg outline-none focus:border-accent"
           />
         </div>
@@ -224,11 +213,8 @@ export default function AdminCabinetPage() {
 
       {/* Языки кабинета */}
       <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
-        <h2 className="mb-1 text-sm font-semibold text-fg">Языки кабинета</h2>
-        <p className="mb-3 text-xs text-fg-subtle">
-          Снимите галку, чтобы убрать язык из выбора. Русский отключить нельзя. Если пользователь
-          выбрал отключённый язык — кабинет вернёт его на русский.
-        </p>
+        <h2 className="mb-1 text-sm font-semibold text-fg">{t("adm.cabinet.langs_title")}</h2>
+        <p className="mb-3 text-xs text-fg-subtle">{t("adm.cabinet.langs_hint")}</p>
         <div className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
           {LANGUAGES.map((l) => {
             const isRu = l.code === "ru";
@@ -266,7 +252,7 @@ export default function AdminCabinetPage() {
           className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent/90 disabled:opacity-60"
         >
           {saved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
-          {saved ? "Сохранено" : saving ? "Сохранение…" : "Сохранить"}
+          {saved ? t("adm.cabinet.saved") : saving ? t("adm.cabinet.saving") : t("adm.cabinet.save")}
         </button>
       </div>
     </div>
