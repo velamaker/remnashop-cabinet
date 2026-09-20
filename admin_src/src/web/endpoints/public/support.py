@@ -37,8 +37,30 @@ def _support_link() -> str:
     return f"\n\nОткрыть: {cab}/admin/support" if cab else ""
 
 
+#: Предел одного сообщения в Telegram. Длиннее — sendMessage возвращает ошибку,
+#: и владелец не получает НИЧЕГО (ни обрезанного, ни короткого уведомления).
+TG_MESSAGE_LIMIT = 4096
+
+
+def _clip_for_telegram(message: str, limit: int = TG_MESSAGE_LIMIT) -> str:
+    """Уложить уведомление в лимит Telegram, сохранив начало И конец.
+
+    Тело тикета ограничено 4000 символами, а шапка (номер, подпись человека, тема)
+    и ссылка на админку добавляют ещё пару сотен — граничное обращение упиралось в
+    лимит, и уведомление молча не доходило. Режем середину: в начале остаётся, от
+    кого и что случилось, в конце — тех-строка самодиагностики и ссылка «Открыть».
+    """
+    if len(message) <= limit:
+        return message
+    marker = "\n… (обрезано, целиком — в админке)\n"
+    tail = message[-500:]
+    head = limit - len(marker) - len(tail)
+    return message[:head] + marker + tail
+
+
 async def _notify_owner(text_message: str) -> None:
     """Уведомление владельцу в Telegram + web-push админам (PWA). Не роняет запрос."""
+    text_message = _clip_for_telegram(text_message)
     # [OVERLAY] web-push админам (не зависит от BOT_TOKEN/owner) — best-effort.
     try:
         from src.infrastructure.services.overlay_push import push_admins_standalone

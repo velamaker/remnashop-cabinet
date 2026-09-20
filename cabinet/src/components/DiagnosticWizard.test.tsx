@@ -29,7 +29,8 @@ vi.mock("@/api/subscription", () => ({
     reissue: vi.fn(),
   },
 }));
-vi.mock("@/api/support", () => ({ supportApi: { create: vi.fn() } }));
+const createTicket = vi.fn();
+vi.mock("@/api/support", () => ({ supportApi: { create: (s: string, b: string) => createTicket(s, b) } }));
 
 const { DiagnosticWizard } = await import("./DiagnosticWizard");
 
@@ -62,11 +63,26 @@ async function run() {
   await waitFor(() => expect(screen.getByText(ru("diag.again"))).toBeTruthy());
 }
 
+function device(over: Record<string, unknown> = {}) {
+  return {
+    hwid: "hw-1",
+    platform: "ios",
+    device_model: "iPhone 14",
+    os_version: "iOS 17.4",
+    user_agent: "v2RayTun/2.1/ios/hw-1",
+    created_at: null,
+    updated_at: null,
+    ...over,
+  };
+}
+
 beforeEach(() => {
   localStorage.setItem(STORAGE_KEY, "ru");
   current.mockResolvedValue(sub());
   devices.mockResolvedValue({ current_count: 1, max_count: 3, devices: [] });
   serviceStatus.mockResolvedValue({ nodes: [{ online: true }], all_operational: true });
+  createTicket.mockReset();
+  createTicket.mockResolvedValue({ id: 7 });
 });
 afterEach(() => cleanup());
 
@@ -104,5 +120,76 @@ describe("самодиагностика: подключался ли челов
     await run();
     expect(screen.queryByText(ru("diag.conn.never"))).toBeNull();
     expect(screen.queryByText(ru("diag.conn.ok"))).toBeNull();
+  });
+});
+
+/**
+ * ЧТО ЗАПЕРТО ЗДЕСЬ — «паспорт обращения». Раньше тикет уходил владельцу с одними
+ * результатами проверок и строкой «Опишите проблему подробнее», то есть без
+ * главного: на каком аппарате и что именно не открывается. Теперь мастер спрашивает
+ * это перед отправкой, а ответы обязаны доехать в тело тикета.
+ */
+describe("самодиагностика: что уходит в тикет", () => {
+  it("без ответов тикет не отправить", async () => {
+    await run();
+    const btn = screen.getByText(ru("diag.ticket.create")).closest("button")!;
+    expect(btn.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText(ru("diag.ask.need"))).toBeTruthy();
+  });
+
+  it("аппарат предлагается свой — на кнопке модель и приложение", async () => {
+    // Версия ОС на кнопке лишняя (подпись и так длинная), но в тикет уходит
+    // целиком — это проверяет следующий кейс.
+    devices.mockResolvedValue({ current_count: 1, max_count: 3, devices: [device()] });
+    await run();
+    expect(screen.getByText("iPhone 14 · v2RayTun")).toBeTruthy();
+  });
+
+  it("устройство и «что не работает» уходят в тему и тело тикета", async () => {
+    devices.mockResolvedValue({ current_count: 1, max_count: 3, devices: [device()] });
+    await run();
+    fireEvent.click(screen.getByText(ru("diag.prob.instagram")));
+    fireEvent.click(screen.getByText(ru("diag.prob.youtube")));
+    fireEvent.click(screen.getByText(ru("diag.ticket.create")));
+    await waitFor(() => expect(createTicket).toHaveBeenCalled());
+
+    const [subject, body] = createTicket.mock.calls[0]!;
+    expect(subject).toContain("Instagram");
+    expect(subject).toContain("YouTube");
+    expect(body).toContain(`${ru("diag.ticket.f.device")}: iPhone 14 · v2RayTun · iOS 17.4`);
+    expect(body).toContain(`${ru("diag.ticket.f.problems")}: Instagram, YouTube`);
+    expect(body).toContain(ru("diag.ticket.f.checks"));
+    expect(body).toContain("problems=instagram,youtube");
+    expect(body).toContain("app=v2RayTun");
+  });
+
+  it("устройств в панели нет — спрашиваем платформу", async () => {
+    await run();
+    fireEvent.click(screen.getByText(ru("diag.plat.android")));
+    fireEvent.click(screen.getByText(ru("diag.prob.noconnect")));
+    fireEvent.click(screen.getByText(ru("diag.ticket.create")));
+    await waitFor(() => expect(createTicket).toHaveBeenCalled());
+
+    const [, body] = createTicket.mock.calls[0]!;
+    expect(body).toContain(`${ru("diag.ticket.f.device")}: ${ru("diag.plat.android")}`);
+    expect(body).toContain("platform=android");
+  });
+
+  it("«другое устройство» — свободный ответ, и он попадает в тикет", async () => {
+    await run();
+    fireEvent.click(screen.getByText(ru("diag.ask.deviceOther")));
+    fireEvent.change(screen.getByPlaceholderText(ru("diag.ask.devicePh")), {
+      target: { value: "роутер Keenetic" },
+    });
+    fireEvent.click(screen.getByText(ru("diag.prob.sites")));
+    fireEvent.change(screen.getByPlaceholderText(ru("diag.ask.commentPh")), {
+      target: { value: "перестало работать вчера" },
+    });
+    fireEvent.click(screen.getByText(ru("diag.ticket.create")));
+    await waitFor(() => expect(createTicket).toHaveBeenCalled());
+
+    const [, body] = createTicket.mock.calls[0]!;
+    expect(body).toContain(`${ru("diag.ticket.f.device")}: роутер Keenetic`);
+    expect(body).toContain(`${ru("diag.ticket.f.comment")}: перестало работать вчера`);
   });
 });

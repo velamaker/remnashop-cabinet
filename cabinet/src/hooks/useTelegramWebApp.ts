@@ -5,6 +5,8 @@ import { safeExternalUrl } from "@/lib/nav";
 interface TelegramWebApp {
   initData: string;
   colorScheme: "dark" | "light";
+  /** «ios» | «android» | «tdesktop» | «web» … — Telegram шлёт не всегда. */
+  platform?: string;
   ready: () => void;
   expand: () => void;
   close: () => void;

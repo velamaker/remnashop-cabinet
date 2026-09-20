@@ -3,8 +3,23 @@ import { Link } from "react-router-dom";
 import { Stethoscope, CheckCircle2, AlertTriangle, XCircle, Loader2, RefreshCw, Copy, LifeBuoy, ChevronRight } from "lucide-react";
 import { subscriptionApi } from "@/api/subscription";
 import { supportApi } from "@/api/support";
+import { getTelegramWebApp } from "@/hooks/useTelegramWebApp";
 import { useT } from "@/i18n/I18nContext";
+import { appFromUserAgent } from "@/lib/deviceGroups";
+import {
+  PLATFORM_KEYS,
+  PROBLEM_KEYS,
+  buildTicketBody,
+  buildTicketSubject,
+  deviceChipLabel,
+  deviceChoiceLabel,
+  guessPlatform,
+  techLine,
+  type PlatformKey,
+  type ProblemKey,
+} from "@/lib/diagReport";
 import { formatDate, trafficLimitBytes } from "@/lib/format";
+import type { DeviceResponse } from "@/types/api";
 
 // Автодиагностика «VPN не работает» — фронтовый визард поверх существующих
 // эндпоинтов (подписка / устройства / статус нод). Снижает нагрузку на поддержку:
@@ -22,6 +37,11 @@ interface Check {
 const ICON: Record<CheckStatus, typeof CheckCircle2> = { ok: CheckCircle2, warn: AlertTriangle, fail: XCircle };
 const TONE: Record<CheckStatus, string> = { ok: "text-success", warn: "text-amber-500", fail: "text-danger" };
 
+const CHIP =
+  "rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50";
+const CHIP_ON = "border-accent bg-accent/15 text-accent";
+const CHIP_OFF = "border-border-subtle bg-bg text-fg hover:bg-bg-subtle/70";
+
 export function DiagnosticWizard() {
   const t = useT();
   const [state, setState] = useState<"idle" | "run" | "done">("idle");
@@ -32,6 +52,12 @@ export function DiagnosticWizard() {
   const [copied, setCopied] = useState(false);
   const [ticket, setTicket] = useState<"idle" | "busy" | "done" | "err">("idle");
   const [ticketId, setTicketId] = useState<number | null>(null);
+  // Ответы человека для тикета: аппарат, что не работает, свободный комментарий.
+  const [deviceList, setDeviceList] = useState<DeviceResponse[]>([]);
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [deviceOther, setDeviceOther] = useState("");
+  const [problems, setProblems] = useState<ProblemKey[]>([]);
+  const [comment, setComment] = useState("");
 
   const run = async () => {
     setState("run");
@@ -71,6 +97,12 @@ export function DiagnosticWizard() {
 
       try {
         const d = await subscriptionApi.devices();
+        // Список аппаратов нужен не только для счётчика: из него человек выбирает,
+        // ГДЕ не работает, — с моделью, версией ОС и приложением из панели.
+        const list = d.devices ?? [];
+        setDeviceList(list);
+        const only = list.length === 1 ? list[0] : undefined;
+        if (only) setDeviceId((cur) => cur ?? `hwid:${only.hwid}`);
         if (d.current_count > d.max_count) out.push({ key: "dev", status: "fail", label: t("diag.dev.over", { cur: d.current_count, max: d.max_count }), hint: t("diag.dev.over.hint"), cta: { label: t("diag.cta.devices"), to: "/subscription" } });
         else if (d.current_count >= d.max_count) out.push({ key: "dev", status: "warn", label: t("diag.dev.reached", { cur: d.current_count, max: d.max_count }), hint: t("diag.dev.reached.hint"), cta: { label: t("diag.cta.devices"), to: "/subscription" } });
         else out.push({ key: "dev", status: "ok", label: t("diag.dev.ok", { cur: d.current_count, max: d.max_count }) });
@@ -148,11 +180,51 @@ export function DiagnosticWizard() {
     }
   };
 
+  const tgPlatform = getTelegramWebApp()?.platform ?? null;
+  const chosenDevice = deviceList.find((d) => `hwid:${d.hwid}` === deviceId) ?? null;
+  // Платформы показываем, когда выбирать не из чего: человек ни разу не подключался
+  // (у него нет устройств в панели) — а это как раз частый повод написать в поддержку.
+  const showPlatforms = deviceList.length === 0;
+  const guessed = guessPlatform(navigator.userAgent, tgPlatform);
+
+  /** Как назвать аппарат в тикете: своё устройство, платформа или ответ руками. */
+  const deviceAnswer = (): string => {
+    if (chosenDevice) return deviceChoiceLabel(chosenDevice, t("devices.unknown"));
+    if (deviceId?.startsWith("os:")) return t(`diag.plat.${deviceId.slice(3)}`);
+    return deviceOther.trim();
+  };
+
+  const toggleProblem = (key: ProblemKey) =>
+    setProblems((cur) => (cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]));
+
+  const device = deviceAnswer();
+  const ready = device.length > 0 && problems.length > 0;
+
   const createTicket = async () => {
     setTicket("busy");
     const summary = checks.map((c) => `${c.status === "ok" ? "✅" : c.status === "warn" ? "⚠️" : "❌"} ${c.label}`).join("\n");
+    const labels = problems.map((k) => t(`diag.prob.${k}`));
+    const body = buildTicketBody({
+      labels: {
+        device: t("diag.ticket.f.device"),
+        problems: t("diag.ticket.f.problems"),
+        comment: t("diag.ticket.f.comment"),
+        checks: t("diag.ticket.f.checks"),
+      },
+      device,
+      problems: labels,
+      comment,
+      summary,
+      tech: techLine({
+        platform: chosenDevice?.platform || (deviceId?.startsWith("os:") ? deviceId.slice(3) : guessed),
+        app: appFromUserAgent(chosenDevice?.user_agent),
+        problems,
+        miniApp: !!getTelegramWebApp(),
+        ua: navigator.userAgent,
+      }),
+    });
     try {
-      const { id } = await supportApi.create(t("diag.ticket.subject"), t("diag.ticket.body", { summary }));
+      const { id } = await supportApi.create(buildTicketSubject(t("diag.ticket.subject"), labels), body);
       setTicketId(id);
       setTicket("done");
     } catch {
@@ -235,21 +307,95 @@ export function DiagnosticWizard() {
             </div>
           </div>
 
-          {/* Создать тикет с уже собранной диагностикой */}
+          {/* Два вопроса перед тикетом: без них поддержка всё равно их задаст */}
           {ticket === "done" ? (
             <p className="rounded-xl border border-success/40 bg-success/10 px-3 py-2.5 text-sm text-success">
               {t("diag.ticket.done", { id: ticketId ?? 0 })}
             </p>
           ) : (
-            <button
-              type="button"
-              onClick={createTicket}
-              disabled={ticket === "busy"}
-              className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-border-subtle bg-bg px-3 py-2.5 text-sm font-semibold text-fg hover:bg-bg/70 disabled:opacity-50"
-            >
-              {ticket === "busy" ? <Loader2 className="h-4 w-4 animate-spin" /> : <LifeBuoy className="h-4 w-4" />}
-              {t("diag.ticket.create")}
-            </button>
+            <div className="rounded-xl border border-border-subtle bg-bg px-3 py-3">
+              <p className="text-sm font-medium text-fg">{t("diag.ask.title")}</p>
+              <p className="mt-1 text-xs text-fg-muted">{t("diag.ask.hint")}</p>
+
+              <p className="mt-3 text-xs font-semibold text-fg">{t("diag.ask.device")}</p>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {deviceList.map((d) => {
+                  const id = `hwid:${d.hwid}`;
+                  return (
+                    <button
+                      key={d.hwid}
+                      type="button"
+                      onClick={() => setDeviceId(id)}
+                      className={`${CHIP} ${deviceId === id ? CHIP_ON : CHIP_OFF}`}
+                    >
+                      {deviceChipLabel(d, t("devices.unknown"))}
+                    </button>
+                  );
+                })}
+                {showPlatforms &&
+                  PLATFORM_KEYS.filter((p) => p !== "other").map((p: PlatformKey) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setDeviceId(`os:${p}`)}
+                      className={`${CHIP} ${deviceId === `os:${p}` ? CHIP_ON : p === guessed ? `${CHIP_OFF} border-accent/40` : CHIP_OFF}`}
+                    >
+                      {t(`diag.plat.${p}`)}
+                    </button>
+                  ))}
+                <button
+                  type="button"
+                  onClick={() => setDeviceId("other")}
+                  className={`${CHIP} ${deviceId === "other" ? CHIP_ON : CHIP_OFF}`}
+                >
+                  {t("diag.ask.deviceOther")}
+                </button>
+              </div>
+              {deviceId === "other" && (
+                <input
+                  type="text"
+                  value={deviceOther}
+                  onChange={(e) => setDeviceOther(e.target.value)}
+                  maxLength={80}
+                  placeholder={t("diag.ask.devicePh")}
+                  className="mt-2 w-full rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2 text-sm text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none"
+                />
+              )}
+
+              <p className="mt-3 text-xs font-semibold text-fg">{t("diag.ask.what")}</p>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {PROBLEM_KEYS.map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => toggleProblem(k)}
+                    className={`${CHIP} ${problems.includes(k) ? CHIP_ON : CHIP_OFF}`}
+                  >
+                    {t(`diag.prob.${k}`)}
+                  </button>
+                ))}
+              </div>
+
+              <textarea
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                maxLength={1000}
+                rows={3}
+                placeholder={t("diag.ask.commentPh")}
+                className="mt-3 w-full resize-none rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2 text-sm text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none"
+              />
+
+              <button
+                type="button"
+                onClick={createTicket}
+                disabled={ticket === "busy" || !ready}
+                className="mt-2.5 inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-accent px-3 py-2.5 text-sm font-semibold text-accent-fg hover:bg-accent/90 disabled:opacity-50"
+              >
+                {ticket === "busy" ? <Loader2 className="h-4 w-4 animate-spin" /> : <LifeBuoy className="h-4 w-4" />}
+                {t("diag.ticket.create")}
+              </button>
+              {!ready && <p className="mt-1.5 text-center text-xs text-fg-muted">{t("diag.ask.need")}</p>}
+            </div>
           )}
           {ticket === "err" && <p className="text-xs text-danger">{t("diag.ticket.err")}</p>}
         </div>
