@@ -29,8 +29,25 @@ IMAGE="${IMAGE:-remnashop-remnashop:latest}"
 ENV_FILE="${ENV_FILE:-/opt/remnashop/.env}"
 DRILL_NET="remnashop-drill-net-$$"
 DRILL_HOOK="${DRILL_HOOK:-}"
+# Итог прогона кладём рядом с настройками установки: его читает крон мониторинга
+# бэкапов и говорит владельцу, если проверка давно не проходила или упала. Без
+# этого учение было честным, но невидимым: узнать о провале можно было только
+# заглянув в лог на сервере.
+DRILL_STATE="${DRILL_STATE:-/opt/remnashop/assets/restore_drill.json}"
 
-fail() { echo "$(date -Is) RESTORE-DRILL FAIL: $*" >&2; exit 1; }
+write_state() {
+    # $1 — ok|fail, $2 — сообщение. Пишем атомарно: подхватившая файл задача
+    # никогда не увидит половину JSON.
+    local status="$1" message="$2" tmp
+    mkdir -p "$(dirname "$DRILL_STATE")" 2>/dev/null || return 0
+    tmp="$(mktemp "${DRILL_STATE}.XXXXXX" 2>/dev/null)" || return 0
+    printf '{"status":"%s","at":"%s","backup":"%s","rows":%s,"message":"%s"}\n' \
+        "$status" "$(date -Is)" "${LATEST:-}" "${ROWS:-0}" \
+        "$(printf '%s' "$message" | tr -d '"' | tr '\n' ' ')" > "$tmp" 2>/dev/null || return 0
+    mv -f "$tmp" "$DRILL_STATE" 2>/dev/null || rm -f "$tmp"
+}
+
+fail() { write_state fail "$*"; echo "$(date -Is) RESTORE-DRILL FAIL: $*" >&2; exit 1; }
 
 # Последний бэкап (шифрованный или нет).
 LATEST="$(ls -1t "$BACKUP_DIR"/backup-*.sql.gz.enc "$BACKUP_DIR"/backup-*.sql.gz 2>/dev/null | head -1 || true)"
@@ -118,4 +135,5 @@ else
     [ -z "$DRILL_HOOK" ] || fail "DRILL_HOOK задан, но шаг миграции пропущен — проверять не на чем"
 fi
 
+write_state ok "$LATEST восстановлен, ${CHECK_TABLE}=${ROWS} строк"
 echo "$(date -Is) RESTORE-DRILL OK: $LATEST восстановлен, ${CHECK_TABLE}=${ROWS} строк"

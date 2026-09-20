@@ -523,8 +523,45 @@ check_registry() {
   warn "отключить его для docker или задать IPv4-DNS в /etc/docker/daemon.json."
 }
 
+# Учение «восстановись из бэкапа» — стоит ли оно в расписании?
+#
+# ЗАЧЕМ. Бэкап, который никто не разворачивал, — это надежда, а не резервная копия.
+# Мониторинг умеет сказать «бэкап не делается», но «бэкап не разворачивается» он
+# узнаёт только из учения (scripts/db-restore-verify.sh): оно поднимает одноразовый
+# Postgres, восстанавливает последний дамп, гонит по нему миграции и считает строки.
+# Ничего в проде не трогает. Раз в месяц — достаточно, чтобы поломка не ждала беды.
+check_restore_drill() {
+  command -v crontab >/dev/null 2>&1 || return 0
+  # Каталог установки — тот, из которого запущен update.sh: свой путь скрипт знает
+  # только так, отдельной переменной с корнем в нём нет.
+  local here; here="$(cd "$(dirname "$0")" && pwd)"
+  [ -f "$here/scripts/db-restore-verify.sh" ] || return 0
+  crontab -l 2>/dev/null | grep -q 'db-restore-verify.sh' && return 0
+
+  local line="17 5 1 * * $here/scripts/db-restore-verify.sh >> /var/log/remnashop_restore_drill.log 2>&1"
+  warn "Проверка восстановления бэкапа не стоит в расписании."
+  warn "Она раз в месяц разворачивает последний бэкап в одноразовый Postgres и проверяет, что он живой."
+  if [ ! -t 0 ] || [ "${RS_NO_CRON:-}" = "1" ]; then
+    warn "Поставить вручную:  (crontab -l 2>/dev/null; echo '$line') | crontab -"
+    return 0
+  fi
+  printf 'Добавить ежемесячную проверку восстановления бэкапа в cron? [Д/н]: ' >&2
+  local answer=""
+  IFS= read -r answer || answer=""
+  case "$answer" in
+    [нНnN]*) warn "Хорошо, пропускаю — поставить можно позже."; return 0 ;;
+  esac
+  if (crontab -l 2>/dev/null; echo "$line") | crontab - 2>/dev/null; then
+    ok "Проверка восстановления добавлена в cron (1-го числа в 05:17)."
+  else
+    warn "Не получилось записать cron — поставьте вручную:"
+    warn "  (crontab -l 2>/dev/null; echo '$line') | crontab -"
+  fi
+}
+
 check_build_memory
 check_registry
+check_restore_drill
 
 if [ "$SCOPE" = cabinet ]; then
   # Адаптер «Бедолаги» — реализация контракта кабинета, а не бот: он меняется в тех же

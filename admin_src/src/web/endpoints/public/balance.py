@@ -1,6 +1,6 @@
 import os
 from decimal import Decimal
-from typing import Any
+from typing import Any, Optional
 
 from dishka import FromDishka
 from dishka.integrations.fastapi import inject
@@ -21,7 +21,7 @@ from src.application.use_cases.subscription.commands.management import (
 )
 from src.application.use_cases.user.queries.plans import GetAvailablePlans
 from src.core.enums import Currency, PaymentGatewayType, PlanType, PurchaseType, TransactionStatus
-from src.infrastructure.services import overlay_cashback, overlay_topup
+from src.infrastructure.services import overlay_balance, overlay_cashback, overlay_topup
 from src.web.endpoints.public._common import CurrentUser
 
 router = APIRouter(prefix="/balance", tags=["Public - Balance"])
@@ -69,6 +69,11 @@ async def get_balance(
     user: CurrentUser,
     transaction_dao: FromDishka[TransactionDao],
     session: FromDishka[AsyncSession],
+    subscription_dao: FromDishka[SubscriptionDao],
+    payment_gateway_dao: FromDishka[PaymentGatewayDao],
+    pricing_service: FromDishka[PricingService],
+    get_available_plans: FromDishka[GetAvailablePlans],
+    match_plan: FromDishka[MatchPlan],
 ) -> dict[str, Any]:
     transactions = await transaction_dao.get_by_user(user.id)
     completed = [t for t in transactions if t.status == TransactionStatus.COMPLETED]
@@ -84,7 +89,27 @@ async def get_balance(
         )
     ).scalar_one_or_none()
 
+    # Сколько спишет автопродление. Тот же расчёт, что у самого списания
+    # (renewal_quote), поэтому кабинет называет человеку ровно ту сумму, которую
+    # снимут. Не посчиталось (нет подписки, тариф снят с продажи, нет ₽-шлюза) —
+    # поля нет, и кабинет просто не обещает сумму.
+    autopay_price: Optional[float] = None
+    try:
+        quote = await overlay_balance.renewal_quote(
+            user,
+            subscription_dao=subscription_dao,
+            payment_gateway_dao=payment_gateway_dao,
+            pricing_service=pricing_service,
+            get_available_plans=get_available_plans,
+            match_plan=match_plan,
+        )
+        if quote is not None:
+            autopay_price = float(quote.price)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"balance: цена автопродления не посчиталась: {exc}")
+
     return {
+        "autopay_price": autopay_price,
         "balance": float(balance),  # рублёвый кошелёк
         "points": user.points,  # баллы рефералки (отдельно)
         "point_value_rub": int(point_value_rub()),  # курс: 1 балл = столько ₽ (из настроек)

@@ -9,6 +9,8 @@ export interface BalanceResponse {
   autopay_enabled: boolean;
   /** За сколько дней до конца спишем. Старый бот поля не шлёт. */
   autopay_days_before?: number;
+  /** Сколько спишет автопродление: та же цена, что у самого списания. */
+  autopay_price?: number | null;
 }
 
 export interface BalanceTransaction {

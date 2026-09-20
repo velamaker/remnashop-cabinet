@@ -56,7 +56,11 @@ export function AutopayCard({ data, onChange }: Props) {
   const enabled = info.autopay_enabled;
   const balance = info.balance ?? 0;
   const days = info.autopay_days_before;
-  const empty = balance <= 0;
+  // Цену продления считает бэкенд той же функцией, что и само списание. Нет её
+  // (старый бот, тариф снят с продажи, нет ₽-шлюза) — говорим общими словами.
+  const price = info.autopay_price ?? null;
+  const short = price !== null && price > balance ? price - balance : 0;
+  const empty = price !== null ? short > 0 : balance <= 0;
 
   const toggle = async () => {
     setBusy(true);
@@ -71,9 +75,15 @@ export function AutopayCard({ data, onChange }: Props) {
     }
   };
 
-  // Что обещаем: с числом дней, если бот его прислал, иначе без него.
-  const sum = balance.toLocaleString(activeLocale(), { maximumFractionDigits: 2 });
-  const promise = days ? t("autopay.willCharge", { days, sum }) : t("autopay.willChargeNoDays", { sum });
+  // Что обещаем: с числом дней и с суммой списания, если бот их прислал.
+  const money = (v: number) => v.toLocaleString(activeLocale(), { maximumFractionDigits: 2 });
+  const sum = money(balance);
+  const promise =
+    price !== null && days
+      ? t("autopay.willChargeSum", { days, sum: money(price), balance: sum })
+      : days
+        ? t("autopay.willCharge", { days, sum })
+        : t("autopay.willChargeNoDays", { sum });
 
   return (
     <div className="rounded-2xl border border-border-subtle bg-bg-subtle p-4">
@@ -102,13 +112,17 @@ export function AutopayCard({ data, onChange }: Props) {
 
       {enabled && empty && (
         <div className="mt-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2">
-          <p className="text-xs text-fg">{t("autopay.emptyBalance")}</p>
+          <p className="text-xs text-fg">
+            {short > 0 ? t("autopay.short", { short: money(short) }) : t("autopay.emptyBalance")}
+          </p>
+          {/* Пополняем сразу на недостающую сумму: поле в «Балансе» откроется
+              заполненным, человеку остаётся выбрать способ оплаты. */}
           <Link
-            to="/balance"
+            to={short > 0 ? `/balance?topup=${Math.ceil(short)}` : "/balance"}
             className="mt-1.5 inline-flex items-center gap-1.5 text-xs font-semibold text-accent hover:underline"
           >
             <Wallet className="h-3.5 w-3.5" />
-            {t("autopay.topup")}
+            {short > 0 ? t("autopay.topupSum", { short: money(Math.ceil(short)) }) : t("autopay.topup")}
           </Link>
         </div>
       )}

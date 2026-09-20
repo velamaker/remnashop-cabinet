@@ -8,7 +8,7 @@ ProcessPayment (он продлевает подписку + начисляет 
 """
 
 from decimal import Decimal
-from typing import Optional
+from typing import Any, NamedTuple, Optional
 from uuid import uuid4
 
 from loguru import logger
@@ -151,6 +151,61 @@ async def _alert_admins_balance(message: str, title: str = "⚠️ Продле�
         logger.warning(f"renew_current_from_balance: не предупредил владельца: {exc}")
 
 
+class RenewalQuote(NamedTuple):
+    """Во сколько обойдётся продление текущего тарифа и чем платить."""
+
+    price: Decimal
+    days: int
+    gateway: Any
+    duration: Any
+    current: Any
+
+
+async def renewal_quote(
+    user: UserDto,
+    *,
+    subscription_dao: SubscriptionDao,
+    payment_gateway_dao: PaymentGatewayDao,
+    pricing_service: PricingService,
+    get_available_plans: GetAvailablePlans,
+    match_plan: MatchPlan,
+) -> Optional[RenewalQuote]:
+    """Цена продления БЕЗ списания.
+
+    Ровно тот же расчёт, что у автопродления: тот же тариф, тот же срок, те же
+    скидки. Вынесен отдельно, чтобы кабинет и предупреждение «не хватит денег»
+    называли человеку ту же сумму, которую спишут, а не считали свою.
+    """
+    current = await subscription_dao.get_current(user.id)
+    if not current:
+        return None
+
+    plans = await get_available_plans.system(user)
+    matched = await match_plan.system(
+        MatchPlanDto(plan_snapshot=current.plan_snapshot, plans=plans)
+    )
+    if not matched:
+        return None
+
+    days = current.plan_snapshot.duration
+    duration = matched.get_duration(days)
+    if not duration:
+        return None
+
+    gateway = await _first_rub_gateway(payment_gateway_dao)
+    if not gateway:
+        return None
+
+    pricing = pricing_service.calculate(user, duration.get_price(Currency.RUB), Currency.RUB)
+    return RenewalQuote(
+        price=Decimal(str(pricing.final_amount)),
+        days=days,
+        gateway=gateway,
+        duration=duration,
+        current=current,
+    )
+
+
 async def renew_current_from_balance(
     user: UserDto,
     *,
@@ -167,32 +222,21 @@ async def renew_current_from_balance(
 ) -> Optional[Decimal]:
     """Продлить текущий тариф юзера за ₽-баланс. Возвращает новый баланс или None
     (если продлевать нечего/тариф недоступен/не хватает средств/нет RUB-шлюза)."""
-    current = await subscription_dao.get_current(user.id)
-    if not current:
-        return None
-
-    plans = await get_available_plans.system(user)
-    matched = await match_plan.system(
-        MatchPlanDto(plan_snapshot=current.plan_snapshot, plans=plans)
+    quote = await renewal_quote(
+        user,
+        subscription_dao=subscription_dao,
+        payment_gateway_dao=payment_gateway_dao,
+        pricing_service=pricing_service,
+        get_available_plans=get_available_plans,
+        match_plan=match_plan,
     )
-    if not matched:
+    if not quote:
         return None
+    current, days, duration, gateway = quote.current, quote.days, quote.duration, quote.gateway
 
     # Срок ДО списания: по нему потом узнаем, выдалась подписка или нет.
     expire_before = getattr(current, "expire_at", None)
-
-    days = current.plan_snapshot.duration
-    duration = matched.get_duration(days)
-    if not duration:
-        return None
-
-    gateway = await _first_rub_gateway(payment_gateway_dao)
-    if not gateway:
-        logger.warning("autopay: нет активного RUB-шлюза — пропускаю")
-        return None
-
-    pricing = pricing_service.calculate(user, duration.get_price(Currency.RUB), Currency.RUB)
-    price = Decimal(str(pricing.final_amount))
+    price = quote.price
 
     new_balance = (
         await session.execute(

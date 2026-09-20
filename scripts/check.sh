@@ -91,6 +91,41 @@ if need_update_sh; then
   fi
 fi
 
+
+# ---------- Контракт кабинета против живого бэкенда ----------
+# ЗАЧЕМ. Кабинет один, а бэкендов под ним два: наш и адаптер поверх «Бедолаги».
+# Типы и линт не ловят расхождение «поле есть, но значит другое» (трафик в байтах
+# вместо гигабайт, деньги в копейках вместо рублей) — его ловит только прогон
+# контракта против ОТВЕЧАЮЩЕГО бэкенда. Поэтому: бэкенд рядом отвечает — гоняем,
+# не отвечает — честно говорим, что пропустили, и не притворяемся проверенными.
+#
+# Базы берём из CONTRACT_BASES (через запятую) или по умолчанию: наш бэкенд на
+# 127.0.0.1:5000 и адаптер «Бедолаги» на 127.0.0.1:8090, если они слушают.
+# Только GET и один вход — на бою безопасно (см. шапку run_contract.py).
+if [ "$STAGED_ONLY" = 0 ] && [ "${SKIP_CONTRACT:-}" != "1" ]; then
+  if command -v python3 >/dev/null 2>&1 && [ -f tests/contract/run_contract.py ]; then
+    alive() { curl -fsS -o /dev/null --max-time 2 "$1/api/v1/public/appearance" 2>/dev/null \
+              || curl -fsS -o /dev/null --max-time 2 "$1/api/appearance" 2>/dev/null; }
+    bases="${CONTRACT_BASES:-http://127.0.0.1:5000,http://127.0.0.1:8090}"
+    ran=0
+    IFS=',' read -r -a _bases <<< "$bases"
+    for base in "${_bases[@]}"; do
+      [ -n "$base" ] || continue
+      if alive "$base"; then
+        ran=1
+        echo "▶ контракт кабинета: $base…"
+        if ! out="$(python3 tests/contract/run_contract.py --base "$base" 2>&1)"; then
+          printf '%s\n' "$out" | tail -25 >&2
+          fail=1
+        else
+          printf '%s\n' "$out" | tail -1
+        fi
+      fi
+    done
+    [ "$ran" = 1 ] || echo "⏭  контракт: рядом не отвечает ни один бэкенд ($bases) — пропущено"
+  fi
+fi
+
 if [ "$fail" = 0 ]; then
   echo "✅ статанализ OK"
 else

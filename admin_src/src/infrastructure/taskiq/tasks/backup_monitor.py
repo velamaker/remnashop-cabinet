@@ -63,6 +63,39 @@ def _save_state(state: dict[str, Any]) -> None:
         logger.warning(f"backup_monitor: не смог сохранить состояние: {e}")
 
 
+def _drill_check() -> tuple[bool, str]:
+    """Учение «восстановись из бэкапа»: прошло ли и когда.
+
+    Файл пишет scripts/db-restore-verify.sh — он поднимает одноразовый Postgres,
+    разворачивает последний бэкап, гонит по нему overlay-миграции и считает строки.
+    Раньше учение было честным, но невидимым: провал жил в логе на сервере. Теперь
+    его состояние доезжает до владельца тем же путём, что и «бэкап не делается».
+
+    Нет файла — молчим НАМЕРЕННО: на установке, где учение не настроено, это не
+    поломка, а отсутствие функции; ругаться на неё каждые шесть часов — шум.
+    """
+    path = Path(os.environ.get("RESTORE_DRILL_STATE", str(ASSETS_DIR / "restore_drill.json")))
+    max_age_d = _env_int("RESTORE_DRILL_MAX_AGE_DAYS", 35)
+    try:
+        if not path.exists():
+            return False, ""
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001
+        return True, f"итог учения по бэкапу нечитаем ({e})"
+
+    status = str(data.get("status") or "").lower()
+    message = str(data.get("message") or "")[:200]
+    age_d = (time.time() - path.stat().st_mtime) / 86400.0
+    if status != "ok":
+        return True, f"учение «восстановись из бэкапа» УПАЛО: {message}"
+    if age_d > max_age_d:
+        return True, (
+            f"учение «восстановись из бэкапа» не проходило {int(age_d)} дн. "
+            f"(порог {max_age_d}). Бэкапы есть, но восстановимость не проверена"
+        )
+    return False, f"учение по бэкапу прошло {int(age_d)} дн. назад"
+
+
 def _check() -> tuple[bool, str]:
     """Проверить самый свежий бэкап. Возврат (bad, reason).
 
@@ -93,7 +126,13 @@ def _check() -> tuple[bool, str]:
         return True, f"последний бэкап <b>{fname}</b> подозрительно мал ({size} Б < {min_bytes})"
     if age_h > max_age_h:
         return True, f"последний бэкап <b>{fname}</b> устарел — {int(age_h)} ч назад (порог {max_age_h} ч). Бэкап не делается?"
-    return False, f"последний бэкап {fname}, {int(age_h)} ч назад, {size // 1024} КБ"
+
+    # Бэкап на месте и свежий — но разворачивается ли он? Об этом знает учение.
+    drill_bad, drill_reason = _drill_check()
+    if drill_bad:
+        return True, drill_reason
+    tail = f"; {drill_reason}" if drill_reason else ""
+    return False, f"последний бэкап {fname}, {int(age_h)} ч назад, {size // 1024} КБ{tail}"
 
 
 @broker.task(schedule=[{"cron": "0 */6 * * *"}], retry_on_error=False)

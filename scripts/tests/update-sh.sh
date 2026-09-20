@@ -90,6 +90,21 @@ exit 22
 EOF
 chmod +x "$BIN/docker" "$BIN/git" "$BIN/curl"
 
+# crontab — подделка: сценарии не имеют права трогать расписание машины, на которой
+# идут тесты. По умолчанию «пусто», то есть учение по бэкапу не настроено; запись
+# складываем в файл, чтобы сценарий мог её проверить.
+cat > "$BIN/crontab" <<'EOF'
+#!/usr/bin/env bash
+printf 'crontab %s\n' "$*" >> "$HARNESS_CALLS"
+case "$1" in
+  -l) [ -f "$HARNESS_TMP/crontab.txt" ] && cat "$HARNESS_TMP/crontab.txt"; exit 0 ;;
+  -)  cat > "$HARNESS_TMP/crontab.txt"; exit 0 ;;
+esac
+exit 0
+EOF
+chmod +x "$BIN/crontab"
+
+
 export PATH="$BIN:$PATH"
 # Предохранители: подделки обязаны стоять первыми, а проскочивший настоящий docker —
 # никуда не подключиться; дампы и снимки ассетов — только во временный каталог.
@@ -427,6 +442,39 @@ D="$(make_inst m3 bot git)"
 FAKE_BOT=none run_tty "$D" 'н\n'
 rc_is 0; out_has "Бот сейчас не запущен"; out_has "Версию работающего бота узнать не удалось"
 cabinet_only_calls cabinet
+
+# ── Учение «восстановись из бэкапа»: предложение поставить в расписание ───────
+# Бэкап, который никто не разворачивал, — надежда, а не копия. Здесь заперто, что
+# предложение появляется ровно тогда, когда проверки в расписании НЕТ, что согласие
+# действительно пишет строку в cron, и что уже настроенную машину мы не трогаем.
+case_ "N: проверки восстановления нет в cron — предложили и записали"
+D="$(make_inst n1 bot git)"
+# Сам скрипт учения должен лежать в установке — иначе предлагать нечего.
+mkdir -p "$D/scripts" && : > "$D/scripts/db-restore-verify.sh"
+rm -f "$HARNESS_TMP/crontab.txt"
+run_tty "$D" '\n\n'
+rc_is 0
+out_has "Проверка восстановления бэкапа не стоит в расписании"
+grep -q "db-restore-verify.sh" "$HARNESS_TMP/crontab.txt" 2>/dev/null \
+  || fail "строка проверки не записана в cron"
+
+case_ "N': проверка уже в cron — молчим и ничего не переписываем"
+D="$(make_inst n2 bot git)"
+mkdir -p "$D/scripts" && : > "$D/scripts/db-restore-verify.sh"
+printf '0 4 * * * /opt/remnashop/scripts/db-restore-verify.sh\n' > "$HARNESS_TMP/crontab.txt"
+run_tty "$D" '\n'
+rc_is 0
+out_lacks "Проверка восстановления бэкапа не стоит в расписании"
+[ "$(wc -l < "$HARNESS_TMP/crontab.txt")" = 1 ] || fail "чужой cron переписан"
+
+case_ "N'': без терминала — только совет, cron не трогаем"
+D="$(make_inst n3 bot git)"
+mkdir -p "$D/scripts" && : > "$D/scripts/db-restore-verify.sh"
+rm -f "$HARNESS_TMP/crontab.txt"
+run_notty "$D"
+rc_is 0
+out_has "Поставить вручную"
+[ ! -f "$HARNESS_TMP/crontab.txt" ] || fail "без терминала записали cron"
 
 echo
 if [ "$FAILS" = 0 ]; then

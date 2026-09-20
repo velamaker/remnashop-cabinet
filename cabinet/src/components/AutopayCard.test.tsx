@@ -46,6 +46,7 @@ const balance = (over: Record<string, unknown> = {}) => ({
   total_purchases: 0,
   autopay_enabled: true,
   autopay_days_before: 3,
+  autopay_price: 150,
   ...over,
 });
 
@@ -59,10 +60,33 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("карточка автопродления", () => {
-  it("включено — называет срок списания и остаток", async () => {
+  it("включено — называет сумму списания, срок и остаток", async () => {
     show();
     await waitFor(() => expect(screen.getByText(ru("autopay.title"))).toBeTruthy());
-    expect(screen.getByText(ru("autopay.willCharge", { days: 3, sum: "500" }))).toBeTruthy();
+    expect(
+      screen.getByText(ru("autopay.willChargeSum", { days: 3, sum: "150", balance: "500" })),
+    ).toBeTruthy();
+  });
+
+  it("цены от бота нет — обещаем без суммы, а не выдумываем её", async () => {
+    get.mockResolvedValue(balance({ autopay_price: undefined }));
+    show();
+    await waitFor(() => expect(screen.getByText(ru("autopay.willCharge", { days: 3, sum: "500" }))).toBeTruthy());
+  });
+
+  it("денег не хватает — говорим, сколько не хватает, и ведём пополнить ровно на столько", async () => {
+    get.mockResolvedValue(balance({ balance: 40, autopay_price: 150 }));
+    show();
+    await waitFor(() => expect(screen.getByText(ru("autopay.short", { short: "110" }))).toBeTruthy());
+    const link = screen.getByText(ru("autopay.topupSum", { short: "110" })).closest("a");
+    expect(link?.getAttribute("href")).toBe("/balance?topup=110");
+  });
+
+  it("денег хватает — предупреждения нет", async () => {
+    get.mockResolvedValue(balance({ balance: 500, autopay_price: 150 }));
+    show();
+    await waitFor(() => expect(screen.getByText(ru("autopay.title"))).toBeTruthy());
+    expect(screen.queryByText(/не хватает/i)).toBeNull();
   });
 
   it("бот не прислал срок — обещаем без числа, а не выдумываем своё", async () => {
@@ -71,8 +95,8 @@ describe("карточка автопродления", () => {
     await waitFor(() => expect(screen.getByText(ru("autopay.willChargeNoDays", { sum: "500" }))).toBeTruthy());
   });
 
-  it("включено при пустом балансе — предупреждаем и ведём пополнить", async () => {
-    get.mockResolvedValue(balance({ balance: 0 }));
+  it("включено при пустом балансе и неизвестной цене — общее предупреждение", async () => {
+    get.mockResolvedValue(balance({ balance: 0, autopay_price: undefined }));
     show();
     await waitFor(() => expect(screen.getByText(ru("autopay.emptyBalance"))).toBeTruthy());
     const link = screen.getByText(ru("autopay.topup")).closest("a");
@@ -80,7 +104,7 @@ describe("карточка автопродления", () => {
   });
 
   it("выключено — предупреждения о балансе нет", async () => {
-    get.mockResolvedValue(balance({ autopay_enabled: false, balance: 0 }));
+    get.mockResolvedValue(balance({ autopay_enabled: false, balance: 0, autopay_price: undefined }));
     show();
     await waitFor(() => expect(screen.getByText(ru("autopay.off"))).toBeTruthy());
     expect(screen.queryByText(ru("autopay.emptyBalance"))).toBeNull();

@@ -1,4 +1,5 @@
 import { GiftCard } from "@/components/GiftCard";
+import { useSearchParams } from "react-router-dom";
 import { useEffect, useState, useCallback } from "react";
 import { Wallet, TrendingUp, ShoppingBag, ChevronLeft, ChevronRight, AlertCircle, CreditCard, PlusCircle } from "lucide-react";
 import { balanceApi, POINT_VALUE_RUB, type BalanceResponse, type BalanceTransaction, type TopupConfig } from "@/api/balance";
@@ -188,9 +189,14 @@ function ConvertPoints({ points, rate, onConverted }: { points: number; rate: nu
   );
 }
 
-function TopupCard({ onPaid }: { onPaid: () => void }) {
+/**
+ * `initial` — сумма, с которой открыли пополнение (ссылка `/balance?topup=300`).
+ * Так приходит человек из карточки автопродления и из предупреждения «не хватит
+ * на списание»: ему сразу предложена нужная сумма, а не пустое поле.
+ */
+function TopupCard({ onPaid, initial }: { onPaid: () => void; initial?: string }) {
   const [cfg, setCfg] = useState<TopupConfig | null>(null);
-  const [amount, setAmount] = useState<string>("");
+  const [amount, setAmount] = useState<string>(initial ?? "");
   const [gateway, setGateway] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -449,6 +455,13 @@ function RenewFromBalance({ balance, onSpent }: { balance: number; onSpent: (b: 
 
 export default function BalancePage() {
   const tr = useT();
+  // «Пополнить на нужную сумму»: ссылка из карточки автопродления и из
+  // предупреждения «на балансе не хватит» приходит с ?topup=<сумма>.
+  const [searchParams] = useSearchParams();
+  const topupParam = (() => {
+    const raw = Number(searchParams.get("topup"));
+    return Number.isFinite(raw) && raw > 0 ? String(Math.ceil(raw)) : undefined;
+  })();
   // Блоки, которых бэкенд под кабинетом не умеет, не показываем: кнопка,
   // отвечающая ошибкой, для человека выглядит как сломанный сайт.
   const { can } = useBranding();
@@ -549,7 +562,7 @@ export default function BalancePage() {
       </div>
 
       {/* Пополнить баланс через шлюз (скроется, если выключено/нет шлюзов) */}
-      {can("topup") && <TopupCard onPaid={reloadBalance} />}
+      {can("topup") && <TopupCard onPaid={reloadBalance} initial={topupParam} />}
 
       {/* Подарить подписку с баланса */}
       {can("gift") && <GiftCard />}
