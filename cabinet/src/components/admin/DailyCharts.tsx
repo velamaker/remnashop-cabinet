@@ -9,6 +9,7 @@ import {
 import { LineChart } from "lucide-react";
 import { statisticsApi, type DailyStatsResponse } from "@/api/admin";
 import { formatAdminMoney as fmtMoney } from "@/lib/adminMoney";
+import { useT } from "@/i18n/I18nContext";
 
 const PERIODS = [30, 60, 90] as const;
 
@@ -26,6 +27,7 @@ const TOOLTIP_STYLE = {
 
 /** Графики регистраций и выручки по дням (данные /statistics/daily). */
 export function DailyCharts() {
+  const t = useT();
   const [days, setDays] = useState<(typeof PERIODS)[number]>(30);
   const [data, setData] = useState<DailyStatsResponse | null>(null);
   const [currency, setCurrency] = useState<string | null>(null);
@@ -70,7 +72,7 @@ export function DailyCharts() {
     <section>
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <LineChart className="h-5 w-5 text-accent" />
-        <h2 className="text-base font-semibold text-fg">Динамика по дням</h2>
+        <h2 className="text-base font-semibold text-fg">{t("adm.stats.daily_title")}</h2>
         <div className="ml-auto flex gap-1">
           {PERIODS.map((p) => (
             <button
@@ -82,7 +84,7 @@ export function DailyCharts() {
                   : "bg-bg-subtle text-fg-muted hover:text-fg"
               }`}
             >
-              {p} дней
+              {t("adm.stats.days_btn", { n: p })}
             </button>
           ))}
         </div>
@@ -92,8 +94,10 @@ export function DailyCharts() {
         {/* Регистрации */}
         <div className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
           <div className="mb-3 flex items-baseline justify-between">
-            <span className="text-sm font-semibold text-fg">Регистрации</span>
-            <span className="tabular text-xs text-fg-subtle">{totalRegs} всего</span>
+            <span className="text-sm font-semibold text-fg">{t("adm.stats.registrations")}</span>
+            <span className="tabular text-xs text-fg-subtle">
+              {t("adm.stats.total_n", { n: totalRegs })}
+            </span>
           </div>
           <div className="h-44 w-full">
             <ResponsiveContainer width="100%" height="100%">
@@ -110,7 +114,7 @@ export function DailyCharts() {
                   cursor={{ fill: "var(--bg-raised)" }}
                   contentStyle={TOOLTIP_STYLE}
                   labelStyle={{ color: "var(--fg)" }}
-                  formatter={(v: number) => [v, "Регистраций"]}
+                  formatter={(v: number) => [v, t("adm.stats.registrations_tt")]}
                 />
                 <Bar dataKey="registrations" fill="var(--accent)" radius={[3, 3, 0, 0]} />
               </BarChart>
@@ -121,7 +125,7 @@ export function DailyCharts() {
         {/* Выручка */}
         <div className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
           <div className="mb-3 flex items-baseline justify-between gap-2">
-            <span className="text-sm font-semibold text-fg">Выручка</span>
+            <span className="text-sm font-semibold text-fg">{t("adm.stats.revenue")}</span>
             <div className="flex items-center gap-2">
               {currency && (
                 <span className="tabular text-xs text-fg-subtle">
@@ -157,7 +161,7 @@ export function DailyCharts() {
                     cursor={{ fill: "var(--bg-raised)" }}
                     contentStyle={TOOLTIP_STYLE}
                     labelStyle={{ color: "var(--fg)" }}
-                    formatter={(v: number) => [fmtMoney(currency, v), "Выручка"]}
+                    formatter={(v: number) => [fmtMoney(currency, v), t("adm.stats.revenue")]}
                   />
                   <Bar dataKey="revenue" fill="var(--accent-2)" radius={[3, 3, 0, 0]} />
                 </BarChart>
@@ -165,7 +169,7 @@ export function DailyCharts() {
             </div>
           ) : (
             <div className="flex h-44 items-center justify-center text-sm text-fg-subtle">
-              нет продаж за период
+              {t("adm.stats.no_sales_period")}
             </div>
           )}
         </div>

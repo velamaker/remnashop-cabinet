@@ -11,14 +11,22 @@ function Flag({ country, className }: { country: string; className?: string }) {
 }
 
 /** Селектор языка — инлайн (ставится в шапку рядом с переключателем темы).
- * Дропдаун открывается вниз-вправо. Выбор запоминается (localStorage). */
-export function LanguageSwitcher() {
+ * Дропдаун открывается вниз-вправо. Выбор запоминается (localStorage).
+ *
+ * `only` сужает список: админка переведена на русский и английский (решение
+ * владельца), и предлагать там двенадцать языков — значит обещать перевод,
+ * которого нет: остальные показали бы русский.
+ */
+export function LanguageSwitcher({ only }: { only?: readonly string[] } = {}) {
   const { lang, setLang } = useI18n();
   const { appearance } = useBranding();
-  const languages = useMemo(
-    () => enabledLanguages(appearance?.enabled_languages),
-    [appearance?.enabled_languages],
-  );
+  const languages = useMemo(() => {
+    const list = enabledLanguages(appearance?.enabled_languages);
+    if (!only) return list;
+    // Текущий язык оставляем в списке всегда — иначе человек, пришедший из
+    // кабинета на турецком, не увидит, на каком языке он сейчас.
+    return list.filter((l) => only.includes(l.code) || l.code === lang);
+  }, [appearance?.enabled_languages, only, lang]);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { statisticsApi, type CohortsResponse } from "@/api/admin";
+import { useT } from "@/i18n/I18nContext";
 
 // Цвет ячейки по проценту удержания (0 → прозрачно, 100 → насыщенный акцент).
 function cellStyle(pct: number): React.CSSProperties {
@@ -9,6 +10,7 @@ function cellStyle(pct: number): React.CSSProperties {
 
 /** Когортное удержание: строки — месяц первой покупки, столбцы — смещение месяцев. */
 export function CohortHeatmap() {
+  const t = useT();
   const [data, setData] = useState<CohortsResponse | null>(null);
   const [error, setError] = useState(false);
 
@@ -21,8 +23,8 @@ export function CohortHeatmap() {
   if (data.cohorts.length === 0)
     return (
       <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
-        <h3 className="text-sm font-semibold text-fg">Когортное удержание</h3>
-        <p className="mt-2 text-sm text-fg-muted">Пока нет данных по платежам.</p>
+        <h3 className="text-sm font-semibold text-fg">{t("adm.stats.cohorts_title")}</h3>
+        <p className="mt-2 text-sm text-fg-muted">{t("adm.stats.cohorts_empty")}</p>
       </section>
     );
 
@@ -31,17 +33,19 @@ export function CohortHeatmap() {
   return (
     <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
       <div className="mb-1 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-fg">Когортное удержание</h3>
+        <h3 className="text-sm font-semibold text-fg">{t("adm.stats.cohorts_title")}</h3>
       </div>
-      <p className="mb-3 text-xs text-fg-muted">
-        Строка — месяц первой покупки. Столбец «+K» — доля когорты, заплативших через K месяцев.
-      </p>
+      <p className="mb-3 text-xs text-fg-muted">{t("adm.stats.cohorts_note")}</p>
       <div className="overflow-x-auto">
         <table className="w-full border-separate border-spacing-1 text-xs">
           <thead>
             <tr>
-              <th className="px-2 py-1 text-left font-medium text-fg-muted">Когорта</th>
-              <th className="px-2 py-1 text-right font-medium text-fg-muted">Размер</th>
+              <th className="px-2 py-1 text-left font-medium text-fg-muted">
+                {t("adm.stats.cohort_col")}
+              </th>
+              <th className="px-2 py-1 text-right font-medium text-fg-muted">
+                {t("adm.stats.cohort_size")}
+              </th>
               {cols.map((k) => (
                 <th key={k} className="px-2 py-1 text-center font-medium text-fg-muted">
                   +{k}
@@ -62,7 +66,7 @@ export function CohortHeatmap() {
                   return (
                     <td
                       key={k}
-                      title={`${cell.users} чел.`}
+                      title={t("adm.stats.cohort_users", { n: cell.users })}
                       className="rounded px-2 py-1 text-center font-medium text-fg"
                       style={cellStyle(cell.pct)}
                     >

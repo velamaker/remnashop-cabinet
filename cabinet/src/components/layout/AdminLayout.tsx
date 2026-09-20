@@ -53,6 +53,9 @@ import type { LucideIcon } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
+
+/** Языки админки: владелец 20.09 — «админка на русском и англ, больше не надо». */
+const ADMIN_LANGS = ["ru", "en"] as const;
 import { useT } from "@/i18n/I18nContext";
 import { Admin2FAUnlock } from "@/components/admin/Admin2FA";
 import { AdminNotifBell } from "@/components/admin/AdminNotifBell";
@@ -371,7 +374,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
               v{version}
             </NavLink>
           )}
-          <LanguageSwitcher />
+          <LanguageSwitcher only={ADMIN_LANGS} />
           <ThemeSwitcher />
         </div>
       </div>
@@ -438,7 +441,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
               v{version}
             </NavLink>
           )}
-          <LanguageSwitcher />
+          <LanguageSwitcher only={ADMIN_LANGS} />
           <ThemeSwitcher />
         </div>
         <div key={location.pathname} className="mx-auto max-w-6xl animate-fade-in">

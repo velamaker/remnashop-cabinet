@@ -2,54 +2,67 @@ import { useEffect, useState, useCallback } from "react";
 import { Plus, Trash2, ToggleLeft, ToggleRight, AlertCircle, X, ChevronLeft, ChevronRight, Shuffle } from "lucide-react";
 import { promocodesAdminApi, plansAdminApi, type AdminPromocode, type AdminPlan } from "@/api/admin";
 import { ApiError } from "@/types/api";
-import { formatDate } from "@/lib/format";
+import { activeLocale, formatDate } from "@/lib/format";
+import { useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
 
 const LIMIT = 25;
 
 // Значения ДОЛЖНЫ совпадать с enum бота (src/core/enums.py):
 // PromocodeRewardType / PromocodeAvailability. Иначе бэкенд вернёт 400.
-const REWARD_TYPES: { value: string; label: string }[] = [
-  { value: "DURATION", label: "Дни подписки" },
-  { value: "TRAFFIC", label: "Трафик (ГБ)" },
-  { value: "DEVICES", label: "Устройства" },
-  { value: "SUBSCRIPTION", label: "Тариф (подписка)" },
-  { value: "PERSONAL_DISCOUNT", label: "Личная скидка (%)" },
-  { value: "PURCHASE_DISCOUNT", label: "Скидка на покупку (%)" },
+const REWARD_TYPES: { value: string; labelKey: string }[] = [
+  { value: "DURATION", labelKey: "adm.promocodes.rt_duration" },
+  { value: "TRAFFIC", labelKey: "adm.promocodes.rt_traffic" },
+  { value: "DEVICES", labelKey: "adm.promocodes.rt_devices" },
+  { value: "SUBSCRIPTION", labelKey: "adm.promocodes.rt_subscription" },
+  { value: "PERSONAL_DISCOUNT", labelKey: "adm.promocodes.rt_personal_discount" },
+  { value: "PURCHASE_DISCOUNT", labelKey: "adm.promocodes.rt_purchase_discount" },
 ];
 
-const AVAILABILITY_OPTIONS: { value: string; label: string }[] = [
-  { value: "ALL", label: "Все пользователи" },
-  { value: "NEW", label: "Только новые" },
-  { value: "EXISTING", label: "Существующие" },
-  { value: "INVITED", label: "Приглашённые (по реф-ссылке)" },
+const AVAILABILITY_OPTIONS: { value: string; labelKey: string }[] = [
+  { value: "ALL", labelKey: "adm.promocodes.av_all" },
+  { value: "NEW", labelKey: "adm.promocodes.av_new" },
+  { value: "EXISTING", labelKey: "adm.promocodes.av_existing" },
+  { value: "INVITED", labelKey: "adm.promocodes.av_invited" },
 ];
 
 // Настройка поля «значение» под каждый тип награды.
 function rewardMeta(type: string): { label: string; hint: string; placeholder: string; discount: boolean; subscription: boolean } {
   switch (type) {
     case "DURATION":
-      return { label: "Дней подписки", hint: "0 — бессрочно", placeholder: "30", discount: false, subscription: false };
+      return { label: translate("adm.promocodes.val_days"), hint: translate("adm.promocodes.hint_days"), placeholder: "30", discount: false, subscription: false };
     case "TRAFFIC":
-      return { label: "Трафик, ГБ", hint: "0 — безлимит", placeholder: "50", discount: false, subscription: false };
+      return { label: translate("adm.promocodes.val_traffic"), hint: translate("adm.promocodes.hint_traffic"), placeholder: "50", discount: false, subscription: false };
     case "DEVICES":
-      return { label: "Устройств", hint: "0 — без лимита", placeholder: "3", discount: false, subscription: false };
+      return { label: translate("adm.promocodes.val_devices"), hint: translate("adm.promocodes.hint_devices"), placeholder: "3", discount: false, subscription: false };
     case "SUBSCRIPTION":
-      return { label: "Тариф", hint: "", placeholder: "", discount: false, subscription: true };
+      return { label: translate("adm.promocodes.val_plan"), hint: "", placeholder: "", discount: false, subscription: true };
     case "PERSONAL_DISCOUNT":
     case "PURCHASE_DISCOUNT":
-      return { label: "Скидка, %", hint: "от 1 до 100", placeholder: "20", discount: true, subscription: false };
+      return { label: translate("adm.promocodes.val_discount"), hint: translate("adm.promocodes.hint_discount"), placeholder: "20", discount: true, subscription: false };
     default:
-      return { label: "Значение", hint: "", placeholder: "", discount: false, subscription: false };
+      return { label: translate("adm.promocodes.f_value"), hint: "", placeholder: "", discount: false, subscription: false };
   }
 }
 
-const REWARD_LABEL: Record<string, string> = Object.fromEntries(
-  REWARD_TYPES.map((t) => [t.value, t.label]),
+const REWARD_LABEL_KEY: Record<string, string> = Object.fromEntries(
+  REWARD_TYPES.map((r) => [r.value, r.labelKey]),
 );
 
-const AVAILABILITY_LABEL: Record<string, string> = Object.fromEntries(
-  AVAILABILITY_OPTIONS.map((a) => [a.value, a.label]),
+const AVAILABILITY_LABEL_KEY: Record<string, string> = Object.fromEntries(
+  AVAILABILITY_OPTIONS.map((a) => [a.value, a.labelKey]),
 );
+
+// Незнакомое значение с бэкенда показываем как есть — перевода для него нет.
+function rewardLabel(type: string): string {
+  const key = REWARD_LABEL_KEY[type];
+  return key ? translate(key) : type;
+}
+
+function availabilityLabel(value: string): string {
+  const key = AVAILABILITY_LABEL_KEY[value];
+  return key ? translate(key) : value;
+}
 
 // Пункты конфигуратора: какой раскрыт сейчас.
 type RowKey = "code" | "type" | "reward" | "availability" | "expires" | "limit";
@@ -69,25 +82,34 @@ function generateCode(length = 6): string {
 // datetime-local отдаёт «2026-09-01T14:30» — показываем по-человечески.
 function formatDateTimeLocal(value: string): string {
   const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "short" });
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleString(activeLocale(), { dateStyle: "short", timeStyle: "short" });
 }
 
 // Человеко-читаемое значение награды с единицей — для таблицы.
 function rewardValueText(p: AdminPromocode): string {
   if (p.reward_type === "SUBSCRIPTION") {
     const snap = p.plan_snapshot as { name?: string; duration?: number } | null | undefined;
-    if (snap?.name) return snap.duration ? `${snap.name} · ${snap.duration} дн.` : snap.name;
-    return "тариф";
+    if (snap?.name)
+      return snap.duration
+        ? translate("adm.promocodes.rv_plan_days", { name: snap.name, n: snap.duration })
+        : snap.name;
+    return translate("adm.promocodes.rv_plan");
   }
   const reward = p.reward;
   if (reward == null) return "—";
   switch (p.reward_type) {
     case "DURATION":
-      return reward === 0 ? "бессрочно" : `${reward} дн.`;
+      return reward === 0
+        ? translate("adm.promocodes.rv_forever")
+        : translate("adm.promocodes.rv_days", { n: reward });
     case "TRAFFIC":
-      return reward === 0 ? "безлимит" : `${reward} ГБ`;
+      return reward === 0
+        ? translate("adm.promocodes.rv_unlimited")
+        : translate("adm.promocodes.rv_gb", { n: reward });
     case "DEVICES":
-      return reward === 0 ? "без лимита" : `${reward} шт.`;
+      return reward === 0
+        ? translate("adm.promocodes.rv_no_limit")
+        : translate("adm.promocodes.rv_pcs", { n: reward });
     case "PERSONAL_DISCOUNT":
     case "PURCHASE_DISCOUNT":
       return `${reward}%`;
@@ -97,6 +119,7 @@ function rewardValueText(p: AdminPromocode): string {
 }
 
 function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const t = useT();
   const [code, setCode] = useState("");
   const [rewardType, setRewardType] = useState("DURATION");
   const [reward, setReward] = useState("");
@@ -121,18 +144,20 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
     if (meta.subscription) {
       const plan = plans.find((pl) => pl.id === planId);
       if (!plan) return "—";
-      return duration === "" ? plan.name : `${plan.name} · ${duration} дн.`;
+      return duration === ""
+        ? plan.name
+        : t("adm.promocodes.rv_plan_days", { name: plan.name, n: duration });
     }
     if (reward.trim() === "") return "—";
     const n = Number(reward);
     if (Number.isNaN(n)) return "—";
     switch (rewardType) {
       case "DURATION":
-        return n === 0 ? "бессрочно" : `${n} дн.`;
+        return n === 0 ? t("adm.promocodes.rv_forever") : t("adm.promocodes.rv_days", { n });
       case "TRAFFIC":
-        return n === 0 ? "безлимит" : `${n} ГБ`;
+        return n === 0 ? t("adm.promocodes.rv_unlimited") : t("adm.promocodes.rv_gb", { n });
       case "DEVICES":
-        return n === 0 ? "без лимита" : `${n} шт.`;
+        return n === 0 ? t("adm.promocodes.rv_no_limit") : t("adm.promocodes.rv_pcs", { n });
       case "PERSONAL_DISCOUNT":
       case "PURCHASE_DISCOUNT":
         return `${n}%`;
@@ -170,7 +195,7 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
     let payload: Parameters<typeof promocodesAdminApi.create>[0];
     if (meta.subscription) {
       if (planId === "" || duration === "") {
-        setError("Выберите тариф и длительность");
+        setError(t("adm.promocodes.err_plan_required"));
         return;
       }
       payload = { ...base, plan_id: Number(planId), duration: Number(duration) };
@@ -178,15 +203,15 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
       // reward пустой → не отправляем (0 — валидное значение, проверяем строку).
       const rewardNum = reward.trim() !== "" ? Number(reward) : undefined;
       if (rewardNum == null || Number.isNaN(rewardNum)) {
-        setError(`Укажите значение (${meta.label.toLowerCase()})`);
+        setError(t("adm.promocodes.err_value_required", { what: meta.label.toLowerCase() }));
         return;
       }
       if (meta.discount && (rewardNum < 1 || rewardNum > 100)) {
-        setError("Скидка должна быть от 1 до 100%");
+        setError(t("adm.promocodes.err_discount_range"));
         return;
       }
       if (!meta.discount && rewardNum < 0) {
-        setError("Значение не может быть отрицательным");
+        setError(t("adm.promocodes.err_negative"));
         return;
       }
       payload = { ...base, reward: rewardNum };
@@ -199,7 +224,7 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
       onCreated();
       onClose();
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка создания");
+      setError(e instanceof ApiError ? e.detail : t("adm.promocodes.err_create"));
     } finally {
       setSaving(false);
     }
@@ -211,22 +236,29 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
   // длинная форма показывала все поля разом, включая те, что к выбранному типу
   // награды отношения не имеют; здесь на экране только то, что сейчас меняешь.
   const summary: { label: string; value: string; dim?: boolean }[] = [
-    { label: "Код", value: code || "не задан", dim: !code },
-    { label: "Тип", value: REWARD_LABEL[rewardType] ?? rewardType },
-    { label: "Награда", value: rewardSummary(), dim: rewardSummary() === "—" },
-    { label: "Доступ", value: AVAILABILITY_LABEL[availability] ?? availability },
-    { label: "Повторная активация", value: isReusable ? "Разрешена" : "Запрещена" },
-    { label: "Действует до", value: expiresAt ? formatDateTimeLocal(expiresAt) : "∞", dim: !expiresAt },
-    { label: "Лимит активаций", value: maxActivations || "∞", dim: !maxActivations },
+    { label: t("adm.promocodes.f_code"), value: code || t("adm.promocodes.code_unset"), dim: !code },
+    { label: t("adm.promocodes.f_type"), value: rewardLabel(rewardType) },
+    { label: t("adm.promocodes.f_reward"), value: rewardSummary(), dim: rewardSummary() === "—" },
+    { label: t("adm.promocodes.f_access"), value: availabilityLabel(availability) },
+    {
+      label: t("adm.promocodes.f_reusable"),
+      value: isReusable ? t("adm.promocodes.reusable_on") : t("adm.promocodes.reusable_off"),
+    },
+    { label: t("adm.promocodes.f_until"), value: expiresAt ? formatDateTimeLocal(expiresAt) : "∞", dim: !expiresAt },
+    { label: t("adm.promocodes.f_limit"), value: maxActivations || "∞", dim: !maxActivations },
   ];
 
   const rows: { key: RowKey; label: string; value: string }[] = [
-    { key: "code", label: "Код", value: code || "не задан" },
-    { key: "type", label: "Тип награды", value: REWARD_LABEL[rewardType] ?? rewardType },
-    { key: "reward", label: meta.subscription ? "Тариф и срок" : "Награда", value: rewardSummary() },
-    { key: "availability", label: "Доступ", value: AVAILABILITY_LABEL[availability] ?? availability },
-    { key: "expires", label: "Срок действия", value: expiresAt ? formatDateTimeLocal(expiresAt) : "∞" },
-    { key: "limit", label: "Лимит активаций", value: maxActivations || "∞" },
+    { key: "code", label: t("adm.promocodes.f_code"), value: code || t("adm.promocodes.code_unset") },
+    { key: "type", label: t("adm.promocodes.row_type"), value: rewardLabel(rewardType) },
+    {
+      key: "reward",
+      label: meta.subscription ? t("adm.promocodes.row_plan_period") : t("adm.promocodes.f_reward"),
+      value: rewardSummary(),
+    },
+    { key: "availability", label: t("adm.promocodes.f_access"), value: availabilityLabel(availability) },
+    { key: "expires", label: t("adm.promocodes.row_expires"), value: expiresAt ? formatDateTimeLocal(expiresAt) : "∞" },
+    { key: "limit", label: t("adm.promocodes.f_limit"), value: maxActivations || "∞" },
   ];
 
   const rowButton = (r: { key: RowKey; label: string; value: string }) => (
@@ -256,7 +288,7 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
       <div className="flex max-h-[90vh] w-full max-w-md flex-col rounded-2xl border border-border-subtle bg-bg shadow-xl">
         <div className="flex items-center justify-between border-b border-border-subtle px-6 py-4">
-          <h2 className="text-base font-semibold text-fg">Конфигуратор промокода</h2>
+          <h2 className="text-base font-semibold text-fg">{t("adm.promocodes.modal_title")}</h2>
           <button onClick={onClose} className="rounded-lg p-1 text-fg-muted hover:text-fg">
             <X className="h-5 w-5" />
           </button>
@@ -278,7 +310,7 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
               </dl>
             </div>
 
-            <p className="text-xs text-fg-subtle">Выберите пункт для изменения.</p>
+            <p className="text-xs text-fg-subtle">{t("adm.promocodes.pick_hint")}</p>
 
             <div className="divide-y divide-border-subtle overflow-hidden rounded-xl border border-border-subtle">
               {rows.map((r) => (
@@ -299,14 +331,14 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
                             <button
                               type="button"
                               onClick={() => setCode(generateCode())}
-                              title="Сгенерировать код"
+                              title={t("adm.promocodes.gen_title")}
                               className="flex-shrink-0 rounded-xl border border-border-subtle px-3 text-sm font-medium text-fg-muted transition-colors hover:text-fg"
                             >
                               <Shuffle className="h-4 w-4" />
                             </button>
                           </div>
                           <p className="text-[11px] text-fg-subtle">
-                            Можно придумать свой или нажать кнопку — код сгенерируется случайно.
+                            {t("adm.promocodes.code_hint")}
                           </p>
                         </>
                       )}
@@ -317,8 +349,8 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
                           onChange={(e) => setRewardType(e.target.value)}
                           className={inputCls}
                         >
-                          {REWARD_TYPES.map((t) => (
-                            <option key={t.value} value={t.value}>{t.label}</option>
+                          {REWARD_TYPES.map((rt) => (
+                            <option key={rt.value} value={rt.value}>{t(rt.labelKey)}</option>
                           ))}
                         </select>
                       )}
@@ -333,7 +365,7 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
                             }}
                             className={inputCls}
                           >
-                            <option value="">— выберите тариф —</option>
+                            <option value="">{t("adm.promocodes.plan_ph")}</option>
                             {plans.map((pl) => (
                               <option key={pl.id} value={pl.id}>{pl.name}</option>
                             ))}
@@ -344,13 +376,13 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
                             disabled={!selectedPlan}
                             className={`${inputCls} disabled:opacity-50`}
                           >
-                            <option value="">{selectedPlan ? "— выберите срок —" : "сначала тариф"}</option>
+                            <option value="">{selectedPlan ? t("adm.promocodes.duration_ph") : t("adm.promocodes.duration_ph_noplan")}</option>
                             {durations.map((d) => (
-                              <option key={d.days} value={d.days}>{d.days} дн.</option>
+                              <option key={d.days} value={d.days}>{t("adm.promocodes.rv_days", { n: d.days })}</option>
                             ))}
                           </select>
                           <p className="text-[11px] text-fg-subtle">
-                            Промокод выдаст этот тариф на выбранный срок.
+                            {t("adm.promocodes.plan_hint")}
                           </p>
                         </>
                       )}
@@ -377,7 +409,7 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
                           className={inputCls}
                         >
                           {AVAILABILITY_OPTIONS.map((a) => (
-                            <option key={a.value} value={a.value}>{a.label}</option>
+                            <option key={a.value} value={a.value}>{t(a.labelKey)}</option>
                           ))}
                         </select>
                       )}
@@ -396,7 +428,7 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
                               onClick={() => setExpiresAt("")}
                               className="text-[11px] text-fg-muted underline hover:text-fg"
                             >
-                              Сделать бессрочным
+                              {t("adm.promocodes.make_forever")}
                             </button>
                           )}
                         </>
@@ -412,7 +444,7 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
                             placeholder="∞"
                             className={inputCls}
                           />
-                          <p className="text-[11px] text-fg-subtle">Пусто — без ограничения.</p>
+                          <p className="text-[11px] text-fg-subtle">{t("adm.promocodes.limit_hint")}</p>
                         </>
                       )}
                     </div>
@@ -422,9 +454,11 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
 
               {/* Повтор — переключатель, разворачивать нечего. */}
               <label className="flex w-full cursor-pointer items-center justify-between gap-3 px-4 py-3">
-                <span className="text-sm text-fg">Повторная активация</span>
+                <span className="text-sm text-fg">{t("adm.promocodes.f_reusable")}</span>
                 <span className="flex items-center gap-2">
-                  <span className="text-sm text-fg-muted">{isReusable ? "Разрешена" : "Запрещена"}</span>
+                  <span className="text-sm text-fg-muted">
+                    {isReusable ? t("adm.promocodes.reusable_on") : t("adm.promocodes.reusable_off")}
+                  </span>
                   <input
                     type="checkbox"
                     checked={isReusable}
@@ -444,14 +478,14 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
               onClick={onClose}
               className="flex-1 rounded-xl border border-border-subtle px-4 py-2.5 text-sm font-medium text-fg-muted transition-colors hover:text-fg"
             >
-              Отмена
+              {t("adm.promocodes.cancel")}
             </button>
             <button
               type="submit"
               disabled={saving || !code.trim()}
               className="flex-1 rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-accent-fg transition-colors hover:bg-accent/90 disabled:opacity-50"
             >
-              {saving ? "Создание…" : "Создать промокод"}
+              {saving ? t("adm.promocodes.creating") : t("adm.promocodes.submit")}
             </button>
           </div>
         </form>
@@ -461,6 +495,7 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
 }
 
 export default function AdminPromocodesPage() {
+  const t = useT();
   const [items, setItems] = useState<AdminPromocode[]>([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -477,9 +512,9 @@ export default function AdminPromocodesPage() {
         setItems(res.items);
         setTotal(res.total);
       })
-      .catch((e) => setError(e instanceof ApiError ? e.detail : "Ошибка"))
+      .catch((e) => setError(e instanceof ApiError ? e.detail : t("adm.promocodes.error")))
       .finally(() => setLoading(false));
-  }, [offset]);
+  }, [offset, t]);
 
   useEffect(() => {
     load();
@@ -491,23 +526,33 @@ export default function AdminPromocodesPage() {
       await promocodesAdminApi.toggle(id, !is_active);
       load();
     } catch (e) {
-      alert(e instanceof ApiError ? e.detail : "Ошибка");
+      alert(e instanceof ApiError ? e.detail : t("adm.promocodes.error"));
     } finally {
       setActionId(null);
     }
   };
 
   const remove = async (id: number, code: string) => {
-    if (!confirm(`Удалить промокод ${code}?`)) return;
+    if (!confirm(t("adm.promocodes.confirm_delete", { code }))) return;
     setActionId(id);
     try {
       await promocodesAdminApi.delete(id);
       load();
     } catch (e) {
-      alert(e instanceof ApiError ? e.detail : "Ошибка");
+      alert(e instanceof ApiError ? e.detail : t("adm.promocodes.error"));
     } finally {
       setActionId(null);
     }
+  };
+
+  // Строка под кодом: награда · активации · срок. Собираем одним ключом, чтобы
+  // в других языках порядок слов задавал перевод, а не склейка кусков.
+  const metaLine = (p: AdminPromocode): string => {
+    const value = rewardValueText(p);
+    const acts = `${p.total_activations ?? 0}${p.max_activations != null ? `/${p.max_activations}` : ""}`;
+    return p.expires_at
+      ? t("adm.promocodes.card_meta_until", { value, acts, date: formatDate(p.expires_at) })
+      : t("adm.promocodes.card_meta", { value, acts });
   };
 
   const totalPages = Math.ceil(total / LIMIT);
@@ -516,13 +561,13 @@ export default function AdminPromocodesPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-fg">Промокоды</h1>
+        <h1 className="text-2xl font-bold text-fg">{t("adm.promocodes.title")}</h1>
         <button
           onClick={() => setShowCreate(true)}
           className="flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-accent-fg hover:bg-accent/90 transition-colors"
         >
           <Plus className="h-4 w-4" />
-          Создать
+          {t("adm.promocodes.create")}
         </button>
       </div>
 
@@ -544,7 +589,7 @@ export default function AdminPromocodesPage() {
           </div>
         ) : items.length === 0 ? (
           <p className="rounded-2xl border border-border-subtle py-12 text-center text-fg-muted">
-            Промокодов нет
+            {t("adm.promocodes.empty")}
           </p>
         ) : (
           items.map((p) => (
@@ -556,21 +601,19 @@ export default function AdminPromocodesPage() {
                 </span>
                 {p.is_active ? (
                   <span className="shrink-0 rounded-full bg-success/10 px-2 py-0.5 text-xs text-success">
-                    Активен
+                    {t("adm.promocodes.st_active")}
                   </span>
                 ) : (
                   <span className="shrink-0 rounded-full bg-fg-subtle/20 px-2 py-0.5 text-xs text-fg-muted">
-                    Отключён
+                    {t("adm.promocodes.st_disabled")}
                   </span>
                 )}
               </div>
               <p className="mt-1 text-sm text-fg-muted">
-                {REWARD_LABEL[p.reward_type] ?? p.reward_type}
+                {rewardLabel(p.reward_type)}
               </p>
               <p className="mt-0.5 text-[11px] leading-snug text-fg-subtle">
-                {rewardValueText(p)} · {p.total_activations ?? 0}
-                {p.max_activations != null ? `/${p.max_activations}` : ""} акт.
-                {p.expires_at ? ` · до ${formatDate(p.expires_at)}` : ""}
+                {metaLine(p)}
               </p>
               <div className="mt-2 flex items-center justify-end gap-1 border-t border-border-subtle pt-2">
                 <button
@@ -578,13 +621,13 @@ export default function AdminPromocodesPage() {
                   disabled={actionId === p.id}
                   className="rounded-lg px-2 py-1.5 text-sm text-fg-muted transition-colors hover:text-accent disabled:opacity-40"
                 >
-                  {p.is_active ? "Отключить" : "Включить"}
+                  {p.is_active ? t("adm.promocodes.act_disable") : t("adm.promocodes.act_enable")}
                 </button>
                 <button
                   onClick={() => remove(p.id, p.code)}
                   disabled={actionId === p.id}
                   className="rounded-lg p-1.5 text-fg-muted transition-colors hover:text-danger disabled:opacity-40"
-                  title="Удалить"
+                  title={t("adm.promocodes.delete")}
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -599,13 +642,13 @@ export default function AdminPromocodesPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border-subtle bg-bg-subtle">
-                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted">Код</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted">Тип</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden sm:table-cell">Значение</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden md:table-cell">Активации</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden lg:table-cell">Истекает</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted">Статус</th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-fg-muted">Действия</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted">{t("adm.promocodes.f_code")}</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted">{t("adm.promocodes.f_type")}</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden sm:table-cell">{t("adm.promocodes.f_value")}</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden md:table-cell">{t("adm.promocodes.col_activations")}</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden lg:table-cell">{t("adm.promocodes.col_expires")}</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted">{t("adm.promocodes.col_status")}</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-fg-muted">{t("adm.promocodes.col_actions")}</th>
               </tr>
             </thead>
             <tbody>
@@ -618,7 +661,7 @@ export default function AdminPromocodesPage() {
               ) : items.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="py-12 text-center text-fg-muted">
-                    Промокодов нет
+                    {t("adm.promocodes.empty")}
                   </td>
                 </tr>
               ) : (
@@ -631,10 +674,10 @@ export default function AdminPromocodesPage() {
                       <span className="font-mono font-semibold text-fg">{p.code}</span>
                     </td>
                     <td className="px-4 py-3 text-fg-muted">
-                      {REWARD_LABEL[p.reward_type] ?? p.reward_type}
+                      {rewardLabel(p.reward_type)}
                       {/* Моб.: значение/активации/срок скрыты столбцами — показываем строкой */}
                       <div className="mt-0.5 text-[11px] text-fg-subtle md:hidden">
-                        {rewardValueText(p)} · {p.total_activations ?? 0}{p.max_activations != null ? `/${p.max_activations}` : ""} акт.{p.expires_at ? ` · до ${formatDate(p.expires_at)}` : ""}
+                        {metaLine(p)}
                       </div>
                     </td>
                     <td className="px-4 py-3 text-fg-muted hidden sm:table-cell">
@@ -650,11 +693,11 @@ export default function AdminPromocodesPage() {
                     <td className="px-4 py-3">
                       {p.is_active ? (
                         <span className="rounded-full bg-success/10 px-2 py-0.5 text-xs text-success">
-                          Активен
+                          {t("adm.promocodes.st_active")}
                         </span>
                       ) : (
                         <span className="rounded-full bg-fg-subtle/20 px-2 py-0.5 text-xs text-fg-muted">
-                          Отключён
+                          {t("adm.promocodes.st_disabled")}
                         </span>
                       )}
                     </td>
@@ -664,7 +707,7 @@ export default function AdminPromocodesPage() {
                           onClick={() => toggle(p.id, p.is_active)}
                           disabled={actionId === p.id}
                           className="rounded-lg p-1.5 text-fg-muted hover:text-accent transition-colors disabled:opacity-40"
-                          title={p.is_active ? "Отключить" : "Включить"}
+                          title={p.is_active ? t("adm.promocodes.act_disable") : t("adm.promocodes.act_enable")}
                         >
                           {p.is_active ? (
                             <ToggleRight className="h-5 w-5" />
@@ -676,7 +719,7 @@ export default function AdminPromocodesPage() {
                           onClick={() => remove(p.id, p.code)}
                           disabled={actionId === p.id}
                           className="rounded-lg p-1.5 text-fg-muted hover:text-danger transition-colors disabled:opacity-40"
-                          title="Удалить"
+                          title={t("adm.promocodes.delete")}
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
@@ -693,7 +736,7 @@ export default function AdminPromocodesPage() {
       {totalPages > 1 && (
         <div className="flex items-center justify-between">
           <p className="text-xs text-fg-muted">
-            Страница {currentPage} из {totalPages}
+            {t("adm.promocodes.page_of", { cur: currentPage, total: totalPages })}
           </p>
           <div className="flex gap-2">
             <button

@@ -3,6 +3,8 @@ import { ChevronLeft, ChevronRight, AlertCircle, Filter, Download, X } from "luc
 import { transactionsAdminApi, type AdminTransaction, type AdminTransactionDetail } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { formatDate } from "@/lib/format";
+import { useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
 
 const LIMIT = 25;
 
@@ -51,11 +53,15 @@ function DetailRow({ label, value }: { label: string; value: React.ReactNode }) 
 }
 
 function TransactionDetailModal({ paymentId, onClose }: { paymentId: string; onClose: () => void }) {
+  const t = useT();
   const [d, setD] = useState<AdminTransactionDetail | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    transactionsAdminApi.get(paymentId).then(setD).catch((e) => setErr(e instanceof ApiError ? e.detail : "Ошибка"));
+    transactionsAdminApi
+      .get(paymentId)
+      .then(setD)
+      .catch((e) => setErr(e instanceof ApiError ? e.detail : translate("adm.transactions.err_generic")));
   }, [paymentId]);
 
   const pricing = d?.pricing as Record<string, unknown> | null | undefined;
@@ -65,7 +71,7 @@ function TransactionDetailModal({ paymentId, onClose }: { paymentId: string; onC
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" onClick={onClose}>
       <div className="surface max-h-[85vh] w-full max-w-lg overflow-y-auto p-5" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-fg">Детали транзакции</h2>
+          <h2 className="text-base font-semibold text-fg">{t("adm.transactions.detail_title")}</h2>
           <button onClick={onClose} className="text-fg-subtle hover:text-fg"><X className="h-5 w-5" /></button>
         </div>
         {err && <p className="text-sm text-danger">{err}</p>}
@@ -73,39 +79,39 @@ function TransactionDetailModal({ paymentId, onClose }: { paymentId: string; onC
         {d && (
           <div className="space-y-4">
             <div>
-              <DetailRow label="Статус" value={<span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusStyle(d.status)}`}>{d.status}</span>} />
-              <DetailRow label="Тип покупки" value={d.purchase_type} />
-              <DetailRow label="Тест" value={d.is_test ? "Да" : "Нет"} />
-              <DetailRow label="Валюта" value={d.currency} />
+              <DetailRow label={t("adm.transactions.f_status")} value={<span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusStyle(d.status)}`}>{d.status}</span>} />
+              <DetailRow label={t("adm.transactions.f_purchase_type")} value={d.purchase_type} />
+              <DetailRow label={t("adm.transactions.f_test")} value={d.is_test ? t("adm.transactions.yes") : t("adm.transactions.no")} />
+              <DetailRow label={t("adm.transactions.f_currency")} value={d.currency} />
             </div>
             <div>
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-subtle">Оплата</p>
-              <DetailRow label="Сумма (итог)" value={String(pricing?.final_amount ?? "—")} />
-              <DetailRow label="Сумма (до скидки)" value={String(pricing?.original_amount ?? "—")} />
-              <DetailRow label="Скидка, %" value={String(pricing?.discount_percent ?? 0)} />
-              <DetailRow label="Бесплатно" value={pricing?.is_free ? "Да" : "Нет"} />
-              <DetailRow label="Шлюз" value={`${d.gateway_type}${d.gateway_display_name ? ` (${d.gateway_display_name})` : ""}`} />
-              {d.payment_method && <DetailRow label="Метод" value={d.payment_method} />}
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-subtle">{t("adm.transactions.sec_payment")}</p>
+              <DetailRow label={t("adm.transactions.f_amount_final")} value={String(pricing?.final_amount ?? "—")} />
+              <DetailRow label={t("adm.transactions.f_amount_original")} value={String(pricing?.original_amount ?? "—")} />
+              <DetailRow label={t("adm.transactions.f_discount_pct")} value={String(pricing?.discount_percent ?? 0)} />
+              <DetailRow label={t("adm.transactions.f_free")} value={pricing?.is_free ? t("adm.transactions.yes") : t("adm.transactions.no")} />
+              <DetailRow label={t("adm.transactions.f_gateway")} value={`${d.gateway_type}${d.gateway_display_name ? ` (${d.gateway_display_name})` : ""}`} />
+              {d.payment_method && <DetailRow label={t("adm.transactions.f_method")} value={d.payment_method} />}
             </div>
             <div>
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-subtle">Тариф</p>
-              <DetailRow label="Название" value={String(plan?.name ?? "—")} />
-              <DetailRow label="Срок, дней" value={String(plan?.duration ?? "—")} />
-              <DetailRow label="Устройств" value={String(plan?.device_limit ?? "—")} />
-              <DetailRow label="Трафик" value={plan?.traffic_limit === 0 ? "Безлимит" : String(plan?.traffic_limit ?? "—")} />
-              <DetailRow label="Пробный" value={plan?.is_trial ? "Да" : "Нет"} />
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-subtle">{t("adm.transactions.f_plan")}</p>
+              <DetailRow label={t("adm.transactions.f_plan_name")} value={String(plan?.name ?? "—")} />
+              <DetailRow label={t("adm.transactions.f_duration_days")} value={String(plan?.duration ?? "—")} />
+              <DetailRow label={t("adm.transactions.f_devices")} value={String(plan?.device_limit ?? "—")} />
+              <DetailRow label={t("adm.transactions.f_traffic")} value={plan?.traffic_limit === 0 ? t("adm.transactions.unlimited") : String(plan?.traffic_limit ?? "—")} />
+              <DetailRow label={t("adm.transactions.f_trial")} value={plan?.is_trial ? t("adm.transactions.yes") : t("adm.transactions.no")} />
             </div>
             <div>
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-subtle">Пользователь</p>
-              <DetailRow label="Имя" value={d.user.name ?? `#${d.user.id}`} />
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-subtle">{t("adm.transactions.f_user")}</p>
+              <DetailRow label={t("adm.transactions.f_user_name")} value={d.user.name ?? `#${d.user.id}`} />
               {d.user.email && <DetailRow label="Email" value={d.user.email} />}
               {d.user.username && <DetailRow label="Telegram" value={`@${d.user.username}`} />}
             </div>
             <div>
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-subtle">Тайминги</p>
-              <DetailRow label="Создана" value={d.created_at ? formatDate(d.created_at) : "—"} />
-              <DetailRow label="Обновлена" value={d.updated_at ? formatDate(d.updated_at) : "—"} />
-              <DetailRow label="ID платежа" value={<span className="font-mono text-xs break-all">{d.payment_id}</span>} />
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-subtle">{t("adm.transactions.sec_timings")}</p>
+              <DetailRow label={t("adm.transactions.f_created")} value={d.created_at ? formatDate(d.created_at) : "—"} />
+              <DetailRow label={t("adm.transactions.f_updated")} value={d.updated_at ? formatDate(d.updated_at) : "—"} />
+              <DetailRow label={t("adm.transactions.f_payment_id")} value={<span className="font-mono text-xs break-all">{d.payment_id}</span>} />
             </div>
           </div>
         )}
@@ -115,6 +121,7 @@ function TransactionDetailModal({ paymentId, onClose }: { paymentId: string; onC
 }
 
 export default function AdminTransactionsPage() {
+  const t = useT();
   const [items, setItems] = useState<AdminTransaction[]>([]);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
@@ -138,7 +145,7 @@ export default function AdminTransactionsPage() {
         date_to: dateTo || undefined,
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Экспорт не удался");
+      setError(e instanceof Error ? e.message : translate("adm.transactions.export_failed"));
     } finally {
       setExporting(false);
     }
@@ -159,7 +166,7 @@ export default function AdminTransactionsPage() {
         setItems(res.items);
         setTotal(res.total);
       })
-      .catch((e) => setError(e instanceof ApiError ? e.detail : "Ошибка"))
+      .catch((e) => setError(e instanceof ApiError ? e.detail : translate("adm.transactions.err_generic")))
       .finally(() => setLoading(false));
   }, [offset, status, gateway, dateFrom, dateTo]);
 
@@ -173,17 +180,17 @@ export default function AdminTransactionsPage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold text-fg">Транзакции</h1>
+        <h1 className="text-2xl font-bold text-fg">{t("adm.transactions.title")}</h1>
         <div className="flex flex-shrink-0 items-center gap-3">
-          <span className="hidden text-sm text-fg-muted sm:inline">{total} всего</span>
+          <span className="hidden text-sm text-fg-muted sm:inline">{t("adm.transactions.total_count", { n: total })}</span>
           <button
             onClick={onExport}
             disabled={exporting || total === 0}
             className="inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-overlay disabled:opacity-50"
-            title="Скачать Excel (.xlsx) с учётом фильтров"
+            title={t("adm.transactions.export_hint")}
           >
             <Download className="h-4 w-4" />
-            {exporting ? "Готовим…" : "Экспорт Excel"}
+            {exporting ? t("adm.transactions.export_preparing") : t("adm.transactions.export_btn")}
           </button>
         </div>
       </div>
@@ -202,7 +209,7 @@ export default function AdminTransactionsPage() {
           >
             {STATUS_OPTIONS.map((s) => (
               <option key={s} value={s}>
-                {s || "Все статусы"}
+                {s || t("adm.transactions.all_statuses")}
               </option>
             ))}
           </select>
@@ -217,19 +224,19 @@ export default function AdminTransactionsPage() {
         >
           {GATEWAY_OPTIONS.map((g) => (
             <option key={g} value={g}>
-              {g || "Все шлюзы"}
+              {g || t("adm.transactions.all_gateways")}
             </option>
           ))}
         </select>
         <div className="flex items-center gap-1.5">
-          <span className="text-xs text-fg-muted">с</span>
+          <span className="text-xs text-fg-muted">{t("adm.transactions.date_from")}</span>
           <input
             type="date"
             value={dateFrom}
             onChange={(e) => { setDateFrom(e.target.value); setOffset(0); }}
             className="rounded-xl border border-border-subtle bg-bg-subtle px-3 py-2 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent"
           />
-          <span className="text-xs text-fg-muted">по</span>
+          <span className="text-xs text-fg-muted">{t("adm.transactions.date_to")}</span>
           <input
             type="date"
             value={dateTo}
@@ -242,7 +249,7 @@ export default function AdminTransactionsPage() {
               onClick={() => { setDateFrom(""); setDateTo(""); setOffset(0); }}
               className="rounded-lg px-2 py-1 text-xs text-fg-muted hover:text-fg"
             >
-              сброс
+              {t("adm.transactions.reset")}
             </button>
           )}
         </div>
@@ -260,14 +267,14 @@ export default function AdminTransactionsPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border-subtle bg-bg-subtle">
-                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted">ID платежа</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted">Пользователь</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted">Статус</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted">Сумма</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden md:table-cell">Тариф</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden sm:table-cell">Шлюз</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden lg:table-cell">Тип</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden lg:table-cell">Дата</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted">{t("adm.transactions.f_payment_id")}</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted">{t("adm.transactions.f_user")}</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted">{t("adm.transactions.f_status")}</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted">{t("adm.transactions.col_amount")}</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden md:table-cell">{t("adm.transactions.f_plan")}</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden sm:table-cell">{t("adm.transactions.f_gateway")}</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden lg:table-cell">{t("adm.transactions.col_type")}</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-muted hidden lg:table-cell">{t("adm.transactions.col_date")}</th>
               </tr>
             </thead>
             <tbody>
@@ -280,43 +287,43 @@ export default function AdminTransactionsPage() {
               ) : items.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="py-12 text-center text-fg-muted">
-                    Транзакции не найдены
+                    {t("adm.transactions.empty")}
                   </td>
                 </tr>
               ) : (
-                items.map((t, i) => (
+                items.map((tx, i) => (
                   <tr
-                    key={t.payment_id ?? `tx-${i}`}
-                    onClick={() => t.payment_id && setDetailId(t.payment_id)}
+                    key={tx.payment_id ?? `tx-${i}`}
+                    onClick={() => tx.payment_id && setDetailId(tx.payment_id)}
                     className="border-b border-border-subtle last:border-0 hover:bg-bg-raised transition-colors cursor-pointer"
                   >
                     <td className="px-4 py-3 font-mono text-xs text-fg-muted truncate max-w-[100px]">
-                      {t.payment_id ? `${t.payment_id.slice(0, 8)}…` : "—"}
+                      {tx.payment_id ? `${tx.payment_id.slice(0, 8)}…` : "—"}
                     </td>
                     <td className="px-4 py-3">
                       <div>
-                        <p className="font-medium text-fg">{t.user_name ?? (t.user_id != null ? `#${t.user_id}` : "—")}</p>
-                        {t.user_email && (
-                          <p className="text-xs text-fg-muted">{t.user_email}</p>
+                        <p className="font-medium text-fg">{tx.user_name ?? (tx.user_id != null ? `#${tx.user_id}` : "—")}</p>
+                        {tx.user_email && (
+                          <p className="text-xs text-fg-muted">{tx.user_email}</p>
                         )}
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusStyle(t.status)}`}>
-                        {t.status}
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusStyle(tx.status)}`}>
+                        {tx.status}
                       </span>
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap font-semibold text-fg">
-                      {t.amount != null && t.amount !== ""
-                        ? `${formatAmount(t.amount)} ${currencySymbol(t.currency)}`
+                      {tx.amount != null && tx.amount !== ""
+                        ? `${formatAmount(tx.amount)} ${currencySymbol(tx.currency)}`
                         : "—"}
                     </td>
                     <td className="px-4 py-3 hidden md:table-cell">
-                      {t.plan_name ? (
+                      {tx.plan_name ? (
                         <div>
-                          <p className="text-fg">{t.plan_name}</p>
-                          {t.plan_duration != null && (
-                            <p className="text-xs text-fg-subtle">{t.plan_duration} дн.</p>
+                          <p className="text-fg">{tx.plan_name}</p>
+                          {tx.plan_duration != null && (
+                            <p className="text-xs text-fg-subtle">{t("adm.transactions.days_short", { n: tx.plan_duration })}</p>
                           )}
                         </div>
                       ) : (
@@ -324,18 +331,18 @@ export default function AdminTransactionsPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-fg-muted hidden sm:table-cell">
-                      {t.gateway_type}
+                      {tx.gateway_type}
                     </td>
                     <td className="px-4 py-3 text-fg-muted hidden lg:table-cell">
-                      {t.purchase_type}
-                      {t.is_test && (
+                      {tx.purchase_type}
+                      {tx.is_test && (
                         <span className="ml-1 rounded bg-warning/10 px-1 text-xs text-warning">
                           TEST
                         </span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-xs text-fg-muted hidden lg:table-cell">
-                      {t.created_at ? formatDate(t.created_at) : "—"}
+                      {tx.created_at ? formatDate(tx.created_at) : "—"}
                     </td>
                   </tr>
                 ))
@@ -348,7 +355,7 @@ export default function AdminTransactionsPage() {
       {totalPages > 1 && (
         <div className="flex items-center justify-between">
           <p className="text-xs text-fg-muted">
-            Страница {currentPage} из {totalPages}
+            {t("adm.transactions.page_of", { cur: currentPage, total: totalPages })}
           </p>
           <div className="flex gap-2">
             <button

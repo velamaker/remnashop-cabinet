@@ -2,6 +2,19 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, act, within } from "@testing-library/react";
 import { ApiError } from "@/types/api";
 import type { MetricsResponse } from "@/api/admin";
+import { translate } from "@/i18n/translate";
+import { I18nProvider } from "@/i18n/I18nContext";
+import { STORAGE_KEY } from "@/i18n/config";
+
+// Подписи плиток теперь из словаря: ищем по ключу, а не по русской строке —
+// иначе тест сломается от правки перевода, а не от поломки в коде.
+const ru = (key: string, vars?: Record<string, string | number>): string =>
+  translate(key, vars, "ru");
+
+// Оговорка про чарджбэк стоит в одном абзаце с общим пояснением блока, поэтому
+// ищем абзац, ТЕКСТ которого её содержит, а не совпадает с ней целиком.
+const hasRefundsNote = (content: string): boolean =>
+  content.includes(ru("adm.stats.kpi_refunds_note"));
 
 // Плитка «Возвраты (30 дн)» опасна одним: нулём, который врёт. Бот узнаёт о
 // возврате, только если шлюз о нём сообщает, а через шлюзы, которые молчат
@@ -47,18 +60,30 @@ async function tile(label: string): Promise<HTMLElement> {
   return node.parentElement as HTMLElement;
 }
 
+// Язык прибиваем к русскому: сравниваем с translate(..., "ru"), а в jsdom
+// язык «устройства» английский — без этого тест сравнивал бы разные языки.
+function renderCards() {
+  localStorage.setItem(STORAGE_KEY, "ru");
+  return render(
+    <I18nProvider>
+      <MetricsCards />
+    </I18nProvider>,
+  );
+}
+
 afterEach(() => {
   cleanup();
+  localStorage.removeItem(STORAGE_KEY);
   metrics = () => Promise.resolve(base());
 });
 
 describe("MetricsCards: плитка «Возвраты (30 дн)»", () => {
   it("нет поля refunds (старый бэкенд) → нет плитки и нет оговорки про возвраты", async () => {
-    render(<MetricsCards />);
+    renderCards();
 
-    await screen.findByText("Успешность оплат (30 дн)");
-    expect(screen.queryByText("Возвраты (30 дн)")).toBeNull();
-    expect(screen.queryByText(/чарджбэк/)).toBeNull();
+    await screen.findByText(ru("adm.stats.payments_success"));
+    expect(screen.queryByText(ru("adm.stats.refunds"))).toBeNull();
+    expect(screen.queryByText(hasRefundsNote)).toBeNull();
   });
 
   it("валюты не складываются: 499 ₽ и $5 — не «504»", async () => {
@@ -76,14 +101,14 @@ describe("MetricsCards: плитка «Возвраты (30 дн)»", () => {
           },
         }),
       );
-    render(<MetricsCards />);
+    renderCards();
 
-    const card = await tile("Возвраты (30 дн)");
+    const card = await tile(ru("adm.stats.refunds"));
     expect(within(card).getByText("499 ₽ · $5")).toBeInTheDocument();
-    expect(within(card).getByText("платежей: 2")).toBeInTheDocument();
+    expect(within(card).getByText(ru("adm.stats.refunds_hint", { n: 2 }))).toBeInTheDocument();
     expect(card.textContent).not.toContain("504");
     // Оговорка про то, чего бот не видит, стоит в пояснении блока.
-    expect(screen.getByText(/чарджбэк/)).toBeInTheDocument();
+    expect(screen.getByText(hasRefundsNote)).toBeInTheDocument();
   });
 
   it("возвратов нет, но шлюз о них сообщает → «0 ₽» и список молчащих шлюзов", async () => {
@@ -98,11 +123,15 @@ describe("MetricsCards: плитка «Возвраты (30 дн)»", () => {
           },
         }),
       );
-    render(<MetricsCards />);
+    renderCards();
 
-    const card = await tile("Возвраты (30 дн)");
+    const card = await tile(ru("adm.stats.refunds"));
     expect(within(card).getByText("0 ₽")).toBeInTheDocument();
-    expect(within(card).getByText("платежей: 0 · не сообщают: ЮMoney")).toBeInTheDocument();
+    expect(
+      within(card).getByText(
+        ru("adm.stats.refunds_hint_silent", { n: 0, gateways: "ЮMoney" }),
+      ),
+    ).toBeInTheDocument();
   });
 
   it("ни один подключённый шлюз о возвратах не сообщает → прочерк, а не ноль", async () => {
@@ -117,11 +146,11 @@ describe("MetricsCards: плитка «Возвраты (30 дн)»", () => {
           },
         }),
       );
-    render(<MetricsCards />);
+    renderCards();
 
-    const card = await tile("Возвраты (30 дн)");
+    const card = await tile(ru("adm.stats.refunds"));
     expect(within(card).getByText("—")).toBeInTheDocument();
-    expect(within(card).getByText("подключённые шлюзы о возвратах не сообщают")).toBeInTheDocument();
+    expect(within(card).getByText(ru("adm.stats.refunds_silent_all"))).toBeInTheDocument();
     expect(card.textContent).not.toContain("0 ₽");
   });
 
@@ -131,12 +160,12 @@ describe("MetricsCards: плитка «Возвраты (30 дн)»", () => {
       new Promise((_, rej) => {
         reject = rej;
       });
-    render(<MetricsCards />);
+    renderCards();
 
     await act(async () => {
       reject(new ApiError(501, "Not implemented"));
     });
-    expect(screen.queryByText("Ключевые метрики")).toBeNull();
-    expect(screen.queryByText("Возвраты (30 дн)")).toBeNull();
+    expect(screen.queryByText(ru("adm.stats.kpi_title"))).toBeNull();
+    expect(screen.queryByText(ru("adm.stats.refunds"))).toBeNull();
   });
 });

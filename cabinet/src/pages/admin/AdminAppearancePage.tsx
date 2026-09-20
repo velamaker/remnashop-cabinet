@@ -3,6 +3,7 @@ import { Save, CheckCircle2, RotateCcw, Palette, ImagePlus, Trash2 } from "lucid
 import { appearanceAdminApi, type AdminAppearance } from "@/api/appearance";
 import { useBranding, applyAccent, applyBackground } from "@/contexts/BrandingContext";
 import { useTheme } from "@/contexts/ThemeContext";
+import { useT } from "@/i18n/I18nContext";
 import { normalizeHex } from "@/lib/color";
 import { ApiError } from "@/types/api";
 
@@ -23,6 +24,7 @@ function ColorField({
   presets: string[];
   onChange: (v: string | null) => void;
 }) {
+  const t = useT();
   const current = normalizeHex(value);
   return (
     <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
@@ -38,7 +40,7 @@ function ColorField({
             className="inline-flex items-center gap-1 rounded-lg border border-border-subtle bg-bg px-2.5 py-1 text-xs font-medium text-fg-muted transition-colors hover:text-fg"
           >
             <RotateCcw className="h-3.5 w-3.5" />
-            Из темы
+            {t("adm.appearance.from_theme")}
           </button>
         )}
       </div>
@@ -65,16 +67,19 @@ function ColorField({
             onChange={(e) => onChange(e.target.value)}
             className="h-5 w-5 cursor-pointer rounded border-0 bg-transparent p-0"
           />
-          Свой цвет
+          {t("adm.appearance.custom_color")}
         </label>
 
-        <span className="tabular text-xs text-fg-subtle">{current || "по умолчанию"}</span>
+        <span className="tabular text-xs text-fg-subtle">
+          {current || t("adm.appearance.default_value")}
+        </span>
       </div>
     </section>
   );
 }
 
 export default function AdminAppearancePage() {
+  const t = useT();
   const { refresh } = useBranding();
   const { resolved } = useTheme();  // активная тема для предпросмотра фона
   const [form, setForm] = useState<AdminAppearance | null>(null);
@@ -89,8 +94,10 @@ export default function AdminAppearancePage() {
     appearanceAdminApi
       .get()
       .then(setForm)
-      .catch((e) => setError(e instanceof ApiError ? e.detail : "Ошибка загрузки"))
+      .catch((e) => setError(e instanceof ApiError ? e.detail : t("adm.appearance.load_error")))
       .finally(() => setLoading(false));
+    // перевод берём на момент загрузки; перезапрашивать при смене языка не нужно
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Живой предпросмотр: применяем цвета сразу. Фон — по активной теме
@@ -128,7 +135,7 @@ export default function AdminAppearancePage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.appearance.save_error"));
     } finally {
       setSaving(false);
     }
@@ -145,7 +152,7 @@ export default function AdminAppearancePage() {
       setForm({ ...form, logo_url });
       await refresh(); // применить логотип во всём кабинете сразу
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Не удалось загрузить логотип");
+      setError(e instanceof ApiError ? e.detail : t("adm.appearance.logo_upload_error"));
     } finally {
       setLogoBusy(false);
     }
@@ -160,7 +167,7 @@ export default function AdminAppearancePage() {
       setForm({ ...form, logo_url: null });
       await refresh();
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Не удалось удалить логотип");
+      setError(e instanceof ApiError ? e.detail : t("adm.appearance.logo_delete_error"));
     } finally {
       setLogoBusy(false);
     }
@@ -174,13 +181,17 @@ export default function AdminAppearancePage() {
     );
   if (!form) return null;
 
+  // Подсказка про название: {name} внутри перевода — место для имени бота,
+  // чтобы в других языках порядок слов задавал переводчик.
+  const brandHint = t("adm.appearance.brand_hint").split("{name}");
+
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       {/* Sticky header */}
       <div className="sticky top-0 z-10 -mx-5 flex items-center justify-between border-b border-border-subtle bg-bg/80 px-5 py-3 backdrop-blur-md md:-mx-8 md:px-8">
         <h1 className="flex items-center gap-2 text-xl font-bold text-fg md:text-2xl">
           <Palette className="h-5 w-5 text-accent" />
-          Оформление
+          {t("adm.appearance.title")}
         </h1>
         <button
           onClick={save}
@@ -188,7 +199,11 @@ export default function AdminAppearancePage() {
           className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-accent-fg transition-opacity hover:opacity-90 disabled:opacity-60"
         >
           {saved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
-          {saved ? "Сохранено" : saving ? "Сохранение…" : "Сохранить"}
+          {saved
+            ? t("adm.appearance.saved")
+            : saving
+              ? t("adm.appearance.saving")
+              : t("adm.appearance.save")}
         </button>
       </div>
 
@@ -196,29 +211,26 @@ export default function AdminAppearancePage() {
 
       {/* Название сервиса */}
       <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
-        <h2 className="text-sm font-semibold text-fg">Название сервиса</h2>
+        <h2 className="text-sm font-semibold text-fg">{t("adm.appearance.brand_title")}</h2>
         <p className="mt-0.5 text-xs text-fg-muted">
-          Отображается в шапке кабинета, на экране входа и в заголовке вкладки.
-          Оставьте пустым — подхватится автоматически (имя бота):{" "}
-          <span className="text-fg">{form.brand_name_resolved}</span>.
+          {brandHint[0]}
+          <span className="text-fg">{form.brand_name_resolved}</span>
+          {brandHint.slice(1).join("")}
         </p>
         <input
           type="text"
           maxLength={40}
           value={form.brand_name ?? ""}
           onChange={(e) => setForm({ ...form, brand_name: e.target.value })}
-          placeholder={`Авто: ${form.brand_name_resolved}`}
+          placeholder={t("adm.appearance.brand_auto_ph", { name: form.brand_name_resolved })}
           className="input mt-3"
         />
       </section>
 
       {/* Логотип */}
       <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
-        <h2 className="text-sm font-semibold text-fg">Логотип</h2>
-        <p className="mt-0.5 text-xs text-fg-muted">
-          Значок рядом с названием на входе и в меню. PNG, JPG, WEBP, SVG или GIF до 2 МБ,
-          лучше квадратный. Без логотипа показывается иконка по умолчанию.
-        </p>
+        <h2 className="text-sm font-semibold text-fg">{t("adm.appearance.logo_title")}</h2>
+        <p className="mt-0.5 text-xs text-fg-muted">{t("adm.appearance.logo_hint")}</p>
 
         <div className="mt-4 flex items-center gap-4">
           <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl border border-border-subtle bg-bg">
@@ -244,7 +256,11 @@ export default function AdminAppearancePage() {
               className="inline-flex items-center gap-2 rounded-xl border border-border-subtle bg-bg px-3.5 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-overlay disabled:opacity-60"
             >
               <ImagePlus className="h-4 w-4" />
-              {logoBusy ? "Загрузка…" : form.logo_url ? "Заменить" : "Загрузить"}
+              {logoBusy
+                ? t("adm.appearance.logo_uploading")
+                : form.logo_url
+                  ? t("adm.appearance.logo_replace")
+                  : t("adm.appearance.logo_upload")}
             </button>
             {form.logo_url && (
               <button
@@ -254,7 +270,7 @@ export default function AdminAppearancePage() {
                 className="inline-flex items-center gap-2 rounded-xl border border-danger/30 bg-danger/5 px-3.5 py-2 text-sm font-medium text-danger transition-colors hover:bg-danger/10 disabled:opacity-60"
               >
                 <Trash2 className="h-4 w-4" />
-                Удалить
+                {t("adm.appearance.logo_delete")}
               </button>
             )}
           </div>
@@ -262,24 +278,24 @@ export default function AdminAppearancePage() {
       </section>
 
       <ColorField
-        label="Акцентный цвет"
-        hint="Кнопки, ссылки, выделения и свечения во всём кабинете."
+        label={t("adm.appearance.accent_title")}
+        hint={t("adm.appearance.accent_hint")}
         value={form.accent}
         presets={ACCENT_PRESETS}
         onChange={(v) => setForm({ ...form, accent: v })}
       />
 
       <ColorField
-        label="Фон — тёмная тема"
-        hint="Применяется, когда у пользователя включена тёмная тема. Оттенки поверхностей и текст подбираются автоматически."
+        label={t("adm.appearance.bg_dark_title")}
+        hint={t("adm.appearance.bg_dark_hint")}
         value={form.background_dark}
         presets={DARK_BG_PRESETS}
         onChange={(v) => setForm({ ...form, background_dark: v })}
       />
 
       <ColorField
-        label="Фон — светлая тема"
-        hint="Применяется при светлой теме. Переключите тему кабинета, чтобы увидеть предпросмотр этого фона."
+        label={t("adm.appearance.bg_light_title")}
+        hint={t("adm.appearance.bg_light_hint")}
         value={form.background_light}
         presets={LIGHT_BG_PRESETS}
         onChange={(v) => setForm({ ...form, background_light: v })}
@@ -287,26 +303,24 @@ export default function AdminAppearancePage() {
 
       {/* Превью */}
       <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
-        <h2 className="mb-3 text-sm font-semibold text-fg">Предпросмотр</h2>
+        <h2 className="mb-3 text-sm font-semibold text-fg">{t("adm.appearance.preview_title")}</h2>
         <div className="surface flex flex-col gap-3 p-5">
           <span className="brand-wordmark text-xl font-bold tracking-tight">
             {form.brand_name || form.brand_name_resolved}
           </span>
           <div className="flex flex-wrap items-center gap-2">
             <span className="btn-gradient inline-flex h-9 items-center rounded-xl px-4 text-sm font-semibold text-white">
-              Кнопка
+              {t("adm.appearance.preview_button")}
             </span>
             <span className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent-subtle px-2.5 py-0.5 text-xs font-medium text-accent">
-              ★ Бейдж
+              {t("adm.appearance.preview_badge")}
             </span>
             <a className="text-sm font-medium text-accent" href="#" onClick={(e) => e.preventDefault()}>
-              Ссылка
+              {t("adm.appearance.preview_link")}
             </a>
           </div>
         </div>
-        <p className="mt-2 text-xs text-fg-subtle">
-          Изменения применяются в кабинете сразу после «Сохранить».
-        </p>
+        <p className="mt-2 text-xs text-fg-subtle">{t("adm.appearance.preview_note")}</p>
       </section>
     </div>
   );

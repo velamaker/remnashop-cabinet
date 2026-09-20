@@ -7,23 +7,25 @@ import {
   type TicketStatus,
 } from "@/api/support";
 import { TicketThread } from "@/components/TicketThread";
+import { useT } from "@/i18n/I18nContext";
 
-const STATUS_META: Record<TicketStatus, { label: string; cls: string }> = {
-  open: { label: "Открыт", cls: "bg-warning/10 text-warning" },
-  answered: { label: "Отвечен", cls: "bg-success/10 text-success" },
-  closed: { label: "Закрыт", cls: "bg-fg-subtle/15 text-fg-muted" },
+const STATUS_META: Record<TicketStatus, { key: string; cls: string }> = {
+  open: { key: "adm.support.status_open", cls: "bg-warning/10 text-warning" },
+  answered: { key: "adm.support.status_answered", cls: "bg-success/10 text-success" },
+  closed: { key: "adm.support.status_closed", cls: "bg-fg-subtle/15 text-fg-muted" },
 };
 
 function StatusPill({ status }: { status: TicketStatus }) {
+  const t = useT();
   const m = STATUS_META[status];
-  return <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${m.cls}`}>{m.label}</span>;
+  return <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${m.cls}`}>{t(m.key)}</span>;
 }
 
-const FILTERS: { value: TicketStatus | "all"; label: string }[] = [
-  { value: "all", label: "Все" },
-  { value: "open", label: "Открытые" },
-  { value: "answered", label: "Отвеченные" },
-  { value: "closed", label: "Закрытые" },
+const FILTERS: { value: TicketStatus | "all"; key: string }[] = [
+  { value: "all", key: "adm.support.filter_all" },
+  { value: "open", key: "adm.support.filter_open" },
+  { value: "answered", key: "adm.support.filter_answered" },
+  { value: "closed", key: "adm.support.filter_closed" },
 ];
 
 function userLabel(u: AdminTicketListItem["user"]): string {
@@ -31,6 +33,7 @@ function userLabel(u: AdminTicketListItem["user"]): string {
 }
 
 export default function AdminSupportPage() {
+  const t = useT();
   const [tickets, setTickets] = useState<AdminTicketListItem[]>([]);
   const [active, setActive] = useState<AdminTicketDetail | null>(null);
   const [filter, setFilter] = useState<TicketStatus | "all">("all");
@@ -70,7 +73,7 @@ export default function AdminSupportPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <h1 className="text-2xl font-bold text-fg">Поддержка</h1>
+      <h1 className="text-2xl font-bold text-fg">{t("adm.support.title")}</h1>
 
       <div className="flex flex-wrap gap-1.5">
         {FILTERS.map((f) => (
@@ -83,7 +86,7 @@ export default function AdminSupportPage() {
                 : "border border-[var(--border)] bg-bg-raised text-fg-muted hover:text-fg"
             }`}
           >
-            {f.label}
+            {t(f.key)}
           </button>
         ))}
       </div>
@@ -92,30 +95,35 @@ export default function AdminSupportPage() {
         {/* List */}
         <div className={`surface min-w-0 p-4 ${active ? "hidden lg:block" : ""}`}>
           <h2 className="mb-3 text-sm font-semibold text-fg">
-            Тикеты {tickets.length > 0 && <span className="text-fg-subtle">({tickets.length})</span>}
+            {t("adm.support.list_title")}{" "}
+            {tickets.length > 0 && <span className="text-fg-subtle">({tickets.length})</span>}
           </h2>
           {loading ? (
-            <p className="py-8 text-center text-sm text-fg-subtle">Загрузка…</p>
+            <p className="py-8 text-center text-sm text-fg-subtle">{t("adm.support.loading")}</p>
           ) : tickets.length === 0 ? (
-            <p className="py-10 text-center text-sm text-fg-muted">Тикетов нет</p>
+            <p className="py-10 text-center text-sm text-fg-muted">{t("adm.support.empty")}</p>
           ) : (
             <div className="flex flex-col gap-1.5">
-              {tickets.map((t) => (
+              {tickets.map((ticket) => (
                 <button
-                  key={t.id}
-                  onClick={() => openTicket(t.id)}
+                  key={ticket.id}
+                  onClick={() => openTicket(ticket.id)}
                   className={`flex flex-col gap-1 rounded-xl border p-3 text-left transition-colors ${
-                    active?.id === t.id
+                    active?.id === ticket.id
                       ? "border-accent/40 bg-accent-subtle"
                       : "border-[var(--border-subtle)] bg-bg-subtle hover:border-[var(--border)]"
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-sm font-medium text-fg">{t.subject}</span>
-                    <StatusPill status={t.status} />
+                    <span className="truncate text-sm font-medium text-fg">{ticket.subject}</span>
+                    <StatusPill status={ticket.status} />
                   </div>
                   <span className="truncate text-xs text-fg-subtle">
-                    #{t.id} · {userLabel(t.user)} · {t.messages_count} сообщ.
+                    {t("adm.support.ticket_meta", {
+                      id: ticket.id,
+                      user: userLabel(ticket.user),
+                      n: ticket.messages_count,
+                    })}
                   </span>
                 </button>
               ))}
@@ -134,19 +142,24 @@ export default function AdminSupportPage() {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold text-fg">{active.subject}</p>
                   <p className="truncate text-xs text-fg-subtle">
-                    #{active.id} · {userLabel(active.user)}
-                    {active.user.email ? ` · ${active.user.email}` : ""}
+                    {active.user.email
+                      ? t("adm.support.head_meta_email", {
+                          id: active.id,
+                          user: userLabel(active.user),
+                          email: active.user.email,
+                        })
+                      : t("adm.support.head_meta", { id: active.id, user: userLabel(active.user) })}
                   </p>
                 </div>
                 <StatusPill status={active.status} />
                 {active.status !== "closed" && (
                   <button
                     onClick={handleClose}
-                    title="Закрыть тикет"
+                    title={t("adm.support.close_title")}
                     className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--border)] bg-bg-raised px-2.5 text-xs font-medium text-fg-muted transition-colors hover:text-fg"
                   >
                     <CheckCheck className="h-3.5 w-3.5" />
-                    Закрыть
+                    {t("adm.support.btn_close")}
                   </button>
                 )}
               </div>
@@ -164,7 +177,7 @@ export default function AdminSupportPage() {
               <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-bg-subtle text-fg-subtle">
                 <MessageCircle className="h-7 w-7" />
               </div>
-              <p className="text-sm text-fg-muted">Выберите тикет</p>
+              <p className="text-sm text-fg-muted">{t("adm.support.pick_ticket")}</p>
             </div>
           )}
         </div>

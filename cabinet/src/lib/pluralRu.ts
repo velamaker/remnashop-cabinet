@@ -12,3 +12,22 @@ export function pluralRu(n: number, one: string, few: string, many: string): str
 export function ruDays(n: number): string {
   return `${n} ${pluralRu(n, "день", "дня", "дней")}`;
 }
+
+/**
+ * Форма счётного слова по числу И ПО ЯЗЫКУ.
+ *
+ * Админка теперь русская и английская, а правила разные: «1 день / 2 дня / 5 дней»
+ * против «1 day / 2 days». Раньше форму выбирал pluralRu независимо от языка — в
+ * английском это давало «1 devices» и «21 day». Для нерусских языков правило
+ * простое: один — одна форма, остальное — другая.
+ */
+export function pluralFor(
+  lang: string,
+  n: number,
+  one: string,
+  few: string,
+  many: string,
+): string {
+  if (lang === "ru" || lang === "be" || lang === "uk") return pluralRu(n, one, few, many);
+  return Math.abs(n) === 1 ? one : many;
+}

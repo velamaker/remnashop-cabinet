@@ -3,7 +3,9 @@ import { RefreshCw, AlertCircle, CheckCircle, XCircle, Clock, Send, Eye, EyeOff 
 import { broadcastsAdminApi, plansAdminApi, type AdminBroadcast, type AdminPlan, type BroadcastChannel } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { formatDate } from "@/lib/format";
-import { ruDays } from "@/lib/pluralRu";
+import { pluralFor } from "@/lib/pluralRu";
+import { useT } from "@/i18n/I18nContext";
+import { getActiveLang, translate } from "@/i18n/translate";
 
 // Предпросмотр «как в Telegram»: экранируем всё, затем возвращаем только
 // разрешённый Telegram whitelist тегов (b/i/u/s/code/pre/a). Скрипты/атрибуты
@@ -29,54 +31,73 @@ function toPreviewHtml(raw: string): string {
   return s;
 }
 
-const AUDIENCE_LABELS: Record<string, string> = {
+// «7 дней» / «3 дня» / «1 день» — и «1 day» / «7 days» по-английски: форму выбирает
+// pluralFor ПО ЯЗЫКУ, сам текст — из словаря. Через pluralRu на английском выходило
+// бы «21 day», потому что русское правило смотрит на последнюю цифру.
+function daysLabel(n: number): string {
+  return translate(
+    pluralFor(
+      getActiveLang(),
+      n,
+      "adm.broadcasts.days_one",
+      "adm.broadcasts.days_few",
+      "adm.broadcasts.days_many",
+    ),
+    { n },
+  );
+}
+
+const AUDIENCE_KEYS: Record<string, string> = {
   // TG-история хранит аудиторию enum'ом базы (ALL/SUBSCRIBED/…).
-  ALL: "Telegram · все",
-  SUBSCRIBED: "Telegram · с подпиской",
-  UNSUBSCRIBED: "Telegram · без подписки",
-  TRIAL: "Telegram · пробный период",
-  EXPIRED: "Telegram · подписка истекла",
-  PLAN: "Telegram · по тарифу",
+  ALL: "adm.broadcasts.aud_all",
+  SUBSCRIBED: "adm.broadcasts.aud_subscribed",
+  UNSUBSCRIBED: "adm.broadcasts.aud_unsubscribed",
+  TRIAL: "adm.broadcasts.aud_trial",
+  EXPIRED: "adm.broadcasts.aud_expired",
+  PLAN: "adm.broadcasts.aud_plan",
   // Бэкенд узнаёт «Истекают скоро» по payload и отдаёт отдельным ключом.
-  TG_EXPIRING: "Telegram · истекают скоро",
+  TG_EXPIRING: "adm.broadcasts.aud_tg_expiring",
   // Email-история хранит сегмент (EMAIL_*).
-  EMAIL_ALL: "Email · все",
-  EMAIL_SUBSCRIBED: "Email · с подпиской",
-  EMAIL_TRIAL: "Email · пробный период",
-  EMAIL_EXPIRING: "Email · заканчивается",
-  EMAIL_EXPIRED: "Email · подписка истекла",
-  EMAIL: "Email · без Telegram", // legacy-записи без сегмента
+  EMAIL_ALL: "adm.broadcasts.aud_email_all",
+  EMAIL_SUBSCRIBED: "adm.broadcasts.aud_email_subscribed",
+  EMAIL_TRIAL: "adm.broadcasts.aud_email_trial",
+  EMAIL_EXPIRING: "adm.broadcasts.aud_email_expiring",
+  EMAIL_EXPIRED: "adm.broadcasts.aud_email_expired",
+  EMAIL: "adm.broadcasts.aud_email", // legacy-записи без сегмента
 };
 
-const STATUS_CONFIG: Record<string, { label: string; icon: React.ElementType; cls: string }> = {
-  PROCESSING: { label: "В процессе", icon: Clock, cls: "text-warning" },
-  COMPLETED: { label: "Завершена", icon: CheckCircle, cls: "text-success" },
-  CANCELED: { label: "Отменена", icon: XCircle, cls: "text-danger" },
-  ERROR: { label: "Ошибка", icon: XCircle, cls: "text-danger" },
+const STATUS_CONFIG: Record<string, { labelKey: string; icon: React.ElementType; cls: string }> = {
+  PROCESSING: { labelKey: "adm.broadcasts.status_processing", icon: Clock, cls: "text-warning" },
+  COMPLETED: { labelKey: "adm.broadcasts.status_completed", icon: CheckCircle, cls: "text-success" },
+  CANCELED: { labelKey: "adm.broadcasts.status_canceled", icon: XCircle, cls: "text-danger" },
+  ERROR: { labelKey: "adm.broadcasts.status_error", icon: XCircle, cls: "text-danger" },
 };
 
-type ChannelItem = { key: BroadcastChannel; label: string; hint: string };
-const CHANNEL_GROUPS: { title: string; items: ChannelItem[] }[] = [
+type ChannelItem = { key: BroadcastChannel; labelKey: string; hintKey: string };
+// id — для логики (какие подблоки показывать), titleKey — то, что видит человек.
+const CHANNEL_GROUPS: { id: "TG" | "EMAIL"; titleKey: string; items: ChannelItem[] }[] = [
   {
-    title: "Telegram",
+    id: "TG",
+    titleKey: "adm.broadcasts.grp_tg",
     items: [
-      { key: "TG_ALL", label: "Все", hint: "все зарегистрированные в боте" },
-      { key: "TG_PLAN", label: "По тарифу", hint: "активные на выбранном тарифе" },
-      { key: "TG_SUBSCRIBED", label: "С подпиской", hint: "активная (вкл. пробные)" },
-      { key: "TG_UNSUBSCRIBED", label: "Без подписки", hint: "нет активной подписки" },
-      { key: "TG_TRIAL", label: "Пробный период", hint: "сейчас на триале" },
-      { key: "TG_EXPIRING", label: "Истекают скоро", hint: "активная, без пробных, заканчивается в ближайшие N дней" },
-      { key: "TG_EXPIRED", label: "Подписка истекла", hint: "закончилась" },
+      { key: "TG_ALL", labelKey: "adm.broadcasts.ch_all", hintKey: "adm.broadcasts.hint_tg_all" },
+      { key: "TG_PLAN", labelKey: "adm.broadcasts.ch_plan", hintKey: "adm.broadcasts.hint_tg_plan" },
+      { key: "TG_SUBSCRIBED", labelKey: "adm.broadcasts.ch_subscribed", hintKey: "adm.broadcasts.hint_tg_subscribed" },
+      { key: "TG_UNSUBSCRIBED", labelKey: "adm.broadcasts.ch_unsubscribed", hintKey: "adm.broadcasts.hint_tg_unsubscribed" },
+      { key: "TG_TRIAL", labelKey: "adm.broadcasts.ch_trial", hintKey: "adm.broadcasts.hint_trial" },
+      { key: "TG_EXPIRING", labelKey: "adm.broadcasts.ch_expiring", hintKey: "adm.broadcasts.hint_tg_expiring" },
+      { key: "TG_EXPIRED", labelKey: "adm.broadcasts.ch_expired", hintKey: "adm.broadcasts.hint_expired" },
     ],
   },
   {
-    title: "Email · только у кого нет Telegram",
+    id: "EMAIL",
+    titleKey: "adm.broadcasts.grp_email",
     items: [
-      { key: "EMAIL_ALL", label: "Все", hint: "все email-без-Telegram" },
-      { key: "EMAIL_SUBSCRIBED", label: "С подпиской", hint: "активная, без пробных" },
-      { key: "EMAIL_TRIAL", label: "Пробный период", hint: "сейчас на триале" },
-      { key: "EMAIL_EXPIRING", label: "Заканчивается", hint: "истекает в ≤ 7 дней" },
-      { key: "EMAIL_EXPIRED", label: "Подписка истекла", hint: "закончилась" },
+      { key: "EMAIL_ALL", labelKey: "adm.broadcasts.ch_all", hintKey: "adm.broadcasts.hint_email_all" },
+      { key: "EMAIL_SUBSCRIBED", labelKey: "adm.broadcasts.ch_subscribed", hintKey: "adm.broadcasts.hint_email_subscribed" },
+      { key: "EMAIL_TRIAL", labelKey: "adm.broadcasts.ch_trial", hintKey: "adm.broadcasts.hint_trial" },
+      { key: "EMAIL_EXPIRING", labelKey: "adm.broadcasts.ch_email_expiring", hintKey: "adm.broadcasts.hint_email_expiring" },
+      { key: "EMAIL_EXPIRED", labelKey: "adm.broadcasts.ch_expired", hintKey: "adm.broadcasts.hint_expired" },
     ],
   },
 ];
@@ -93,12 +114,14 @@ const EXPIRING_DEFAULT_DAYS = 7;
 /** Подпись рассылки в истории; у «Истекают скоро» — с числом дней. */
 function audienceLabel(b: AdminBroadcast): string {
   if (b.audience === "TG_EXPIRING" && b.expiring_days) {
-    return `${AUDIENCE_LABELS.TG_EXPIRING} (${ruDays(b.expiring_days)})`;
+    return translate("adm.broadcasts.aud_tg_expiring_days", { days: daysLabel(b.expiring_days) });
   }
-  return AUDIENCE_LABELS[b.audience] ?? b.audience;
+  const key = AUDIENCE_KEYS[b.audience];
+  return key ? translate(key) : b.audience;
 }
 
 function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
+  const t = useT();
   const [text, setText] = useState("");
   const [selected, setSelected] = useState<Set<BroadcastChannel>>(new Set());
   const [counts, setCounts] = useState<Record<string, number> | null>(null);
@@ -147,8 +170,8 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
   const conflictReason = (k: BroadcastChannel): string =>
     (k === "TG_EXPIRING" && EXPIRING_OVERLAPS.some((x) => selected.has(x))) ||
     (EXPIRING_OVERLAPS.includes(k) && selected.has("TG_EXPIRING"))
-      ? "Пересекается с «Истекают скоро» (задвоение получателей)"
-      : "Нельзя вместе с «Все» этого канала (задвоение получателей)";
+      ? t("adm.broadcasts.conflict_expiring")
+      : t("adm.broadcasts.conflict_all");
 
   const toggle = (k: BroadcastChannel) => {
     if (!selected.has(k) && conflicts(k, selected)) return; // заблокирован — игнор
@@ -178,9 +201,9 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
   const submit = async () => {
     setErr(null);
     setMsg(null);
-    if (!text.trim()) return setErr("Введите текст сообщения");
-    if (selected.size === 0) return setErr("Выберите хотя бы один канал");
-    if (planSelected && typeof planId !== "number") return setErr("Выберите тариф для рассылки по тарифу");
+    if (!text.trim()) return setErr(t("adm.broadcasts.err_text"));
+    if (selected.size === 0) return setErr(t("adm.broadcasts.err_channel"));
+    if (planSelected && typeof planId !== "number") return setErr(t("adm.broadcasts.err_plan"));
     if (!confirm) return setConfirm(true);
     setSending(true);
     try {
@@ -190,7 +213,7 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
         typeof planId === "number" ? planId : undefined,
         expiringSelected ? expiringDays : undefined,
       );
-      setMsg("Рассылка запущена — прогресс появится в истории ниже");
+      setMsg(t("adm.broadcasts.started"));
       setText("");
       setSelected(new Set());
       setPlanId("");
@@ -198,7 +221,7 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
       setConfirm(false);
       onCreated();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.detail : "Не удалось запустить рассылку");
+      setErr(e instanceof ApiError ? e.detail : t("adm.broadcasts.err_create"));
     } finally {
       setSending(false);
     }
@@ -207,9 +230,9 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
   return (
     <div className="rounded-2xl border border-border-subtle bg-bg-subtle p-5 space-y-4">
       <div>
-        <h2 className="text-base font-semibold text-fg">Новая рассылка</h2>
+        <h2 className="text-base font-semibold text-fg">{t("adm.broadcasts.new_title")}</h2>
         <p className="mt-0.5 text-xs text-fg-muted">
-          Текст уходит выбранным группам. В Telegram поддерживается HTML-разметка; в email — обычным текстом.
+          {t("adm.broadcasts.new_hint")}
         </p>
       </div>
 
@@ -219,7 +242,7 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
           onChange={(e) => { setText(e.target.value); setConfirm(false); }}
           rows={5}
           maxLength={4000}
-          placeholder="Текст сообщения…"
+          placeholder={t("adm.broadcasts.text_ph")}
           className="w-full resize-none rounded-xl border border-[var(--border)] bg-bg-raised px-3 py-2.5 text-sm text-fg placeholder:text-fg-subtle focus:outline-none focus:ring-2 focus:ring-accent"
         />
         <div className="mt-1.5 flex items-center justify-between">
@@ -230,7 +253,7 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
             className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-muted transition-colors hover:text-fg disabled:opacity-40"
           >
             {preview ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-            {preview ? "Скрыть предпросмотр" : "Предпросмотр"}
+            {preview ? t("adm.broadcasts.preview_hide") : t("adm.broadcasts.preview_show")}
           </button>
           <span className="text-xs text-fg-subtle">{text.length}/4000</span>
         </div>
@@ -238,7 +261,7 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
 
       {preview && text.trim() && (
         <div className="rounded-xl border border-border-subtle bg-bg-raised p-4">
-          <p className="mb-2 text-xs text-fg-subtle">Так увидят в Telegram (в email — обычным текстом, без разметки):</p>
+          <p className="mb-2 text-xs text-fg-subtle">{t("adm.broadcasts.preview_note")}</p>
           <div className="max-w-md rounded-2xl rounded-tl-sm bg-accent-subtle px-4 py-2.5">
             <p
               className="whitespace-pre-wrap break-words text-sm text-fg"
@@ -250,8 +273,8 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
 
       <div className="space-y-4">
         {CHANNEL_GROUPS.map((group) => (
-          <div key={group.title}>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-fg-subtle">{group.title}</p>
+          <div key={group.id}>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-fg-subtle">{t(group.titleKey)}</p>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {group.items.filter(supported).map((c) => {
                 const on = selected.has(c.key);
@@ -277,10 +300,10 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-medium text-fg">{c.label}</span>
+                        <span className="text-sm font-medium text-fg">{t(c.labelKey)}</span>
                         <span className="flex-shrink-0 text-xs text-fg-muted">{cnt ?? "…"}</span>
                       </span>
-                      <span className="block text-xs text-fg-subtle">{c.hint}</span>
+                      <span className="block text-xs text-fg-subtle">{t(c.hintKey)}</span>
                     </span>
                   </button>
                 );
@@ -289,10 +312,10 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
 
             {/* Выбор тарифа появляется только под группой Telegram и только когда
                 выбран канал «По тарифу» — иначе он был бы мёртвым полем на экране. */}
-            {group.title === "Telegram" && expiringSelected && (
+            {group.id === "TG" && expiringSelected && (
               <div className="mt-2 rounded-xl border border-accent/40 bg-accent-subtle/40 p-3">
                 <label htmlFor="broadcast-expiring-days" className="mb-1.5 block text-xs font-medium text-fg-muted">
-                  Истекают в ближайшие
+                  {t("adm.broadcasts.expiring_days_label")}
                 </label>
                 <select
                   id="broadcast-expiring-days"
@@ -306,21 +329,23 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
                 >
                   {EXPIRING_DAY_OPTIONS.map((d) => (
                     <option key={d} value={d}>
-                      {ruDays(d)}
+                      {daysLabel(d)}
                     </option>
                   ))}
                 </select>
                 <p className="mt-1.5 text-xs text-fg-subtle">
-                  {`Получат те, у кого подписка заканчивается в ближайшие ${ruDays(expiringDays)}: ${counts?.TG_EXPIRING ?? "…"}. `}
-                  Это не то же, что фильтр «Истечение» в списке пользователей: здесь без пробных и резерва.
+                  {t("adm.broadcasts.expiring_hint", {
+                    days: daysLabel(expiringDays),
+                    n: counts?.TG_EXPIRING ?? "…",
+                  })}
                 </p>
               </div>
             )}
 
-            {group.title === "Telegram" && planSelected && (
+            {group.id === "TG" && planSelected && (
               <div className="mt-2 rounded-xl border border-accent/40 bg-accent-subtle/40 p-3">
                 <label className="mb-1.5 block text-xs font-medium text-fg-muted">
-                  Тариф для рассылки *
+                  {t("adm.broadcasts.plan_label")}
                 </label>
                 <select
                   value={planId}
@@ -331,7 +356,7 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
                   }}
                   className="w-full rounded-xl border border-[var(--border)] bg-bg-raised px-3 py-2 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent"
                 >
-                  <option value="">— выберите тариф —</option>
+                  <option value="">{t("adm.broadcasts.plan_ph")}</option>
                   {plans.map((pl) => (
                     <option key={pl.id} value={pl.id}>
                       {pl.name}
@@ -340,8 +365,8 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
                 </select>
                 <p className="mt-1.5 text-xs text-fg-subtle">
                   {typeof planId === "number"
-                    ? `Получат только те, у кого сейчас активна эта подписка: ${counts?.TG_PLAN ?? "…"}`
-                    : "Пока тариф не выбран, рассылка не отправится"}
+                    ? t("adm.broadcasts.plan_hint", { n: counts?.TG_PLAN ?? "…" })
+                    : t("adm.broadcasts.plan_hint_empty")}
                 </p>
               </div>
             )}
@@ -354,7 +379,9 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
 
       <div className="flex items-center justify-between gap-3">
         <span className="text-xs text-fg-muted">
-          {selected.size > 0 ? `Получателей: ~${recipients}` : "Каналы не выбраны"}
+          {selected.size > 0
+            ? t("adm.broadcasts.recipients", { n: recipients })
+            : t("adm.broadcasts.no_channels")}
         </span>
         <button
           onClick={submit}
@@ -364,7 +391,11 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
           }`}
         >
           <Send className="h-4 w-4" />
-          {sending ? "Запуск…" : confirm ? `Точно отправить ~${recipients}?` : "Отправить"}
+          {sending
+            ? t("adm.broadcasts.sending")
+            : confirm
+              ? t("adm.broadcasts.confirm_send", { n: recipients })
+              : t("adm.broadcasts.send")}
         </button>
       </div>
     </div>
@@ -372,8 +403,11 @@ function CreateBroadcast({ onCreated }: { onCreated: () => void }) {
 }
 
 function BroadcastCard({ b, onRefresh }: { b: AdminBroadcast; onRefresh: (id: string) => void }) {
-  const cfg = STATUS_CONFIG[b.status] ?? { label: b.status, icon: Clock, cls: "text-fg-muted" };
-  const Icon = cfg.icon;
+  const t = useT();
+  const cfg = STATUS_CONFIG[b.status];
+  const Icon = cfg?.icon ?? Clock;
+  const label = cfg ? t(cfg.labelKey) : b.status;
+  const cls = cfg?.cls ?? "text-fg-muted";
   const successRate = b.total_count > 0 ? Math.round(b.success_count / b.total_count * 100) : 0;
 
   return (
@@ -381,8 +415,8 @@ function BroadcastCard({ b, onRefresh }: { b: AdminBroadcast; onRefresh: (id: st
       <div className="flex items-start justify-between gap-4 mb-4">
         <div>
           <div className="flex items-center gap-2">
-            <Icon className={`h-4 w-4 ${cfg.cls}`} />
-            <span className={`text-sm font-medium ${cfg.cls}`}>{cfg.label}</span>
+            <Icon className={`h-4 w-4 ${cls}`} />
+            <span className={`text-sm font-medium ${cls}`}>{label}</span>
           </div>
           <p className="mt-1 text-xs text-fg-muted">
             {audienceLabel(b)}
@@ -390,7 +424,7 @@ function BroadcastCard({ b, onRefresh }: { b: AdminBroadcast; onRefresh: (id: st
           </p>
         </div>
         {b.status === "PROCESSING" && (
-          <button onClick={() => onRefresh(b.task_id)} className="rounded-lg p-1.5 text-fg-muted hover:text-accent transition-colors" title="Обновить">
+          <button onClick={() => onRefresh(b.task_id)} className="rounded-lg p-1.5 text-fg-muted hover:text-accent transition-colors" title={t("adm.broadcasts.refresh")}>
             <RefreshCw className="h-4 w-4" />
           </button>
         )}
@@ -399,7 +433,7 @@ function BroadcastCard({ b, onRefresh }: { b: AdminBroadcast; onRefresh: (id: st
       {b.total_count > 0 && (
         <>
           <div className="mb-2 flex items-center justify-between text-xs">
-            <span className="text-fg-muted">Прогресс</span>
+            <span className="text-fg-muted">{t("adm.broadcasts.progress")}</span>
             <span className="font-medium text-fg">{b.success_count + b.failed_count} / {b.total_count}</span>
           </div>
           <div className="mb-4 h-2 w-full overflow-hidden rounded-full bg-bg-raised">
@@ -411,15 +445,15 @@ function BroadcastCard({ b, onRefresh }: { b: AdminBroadcast; onRefresh: (id: st
           <div className="grid grid-cols-3 gap-3 text-xs text-center">
             <div className="rounded-xl bg-bg-raised p-3">
               <p className="text-2xl font-bold text-fg">{b.total_count}</p>
-              <p className="text-fg-muted mt-0.5">Всего</p>
+              <p className="text-fg-muted mt-0.5">{t("adm.broadcasts.stat_total")}</p>
             </div>
             <div className="rounded-xl bg-success/10 p-3">
               <p className="text-2xl font-bold text-success">{b.success_count}</p>
-              <p className="text-fg-muted mt-0.5">Доставлено</p>
+              <p className="text-fg-muted mt-0.5">{t("adm.broadcasts.stat_delivered")}</p>
             </div>
             <div className="rounded-xl bg-danger/10 p-3">
               <p className="text-2xl font-bold text-danger">{b.failed_count}</p>
-              <p className="text-fg-muted mt-0.5">Ошибок</p>
+              <p className="text-fg-muted mt-0.5">{t("adm.broadcasts.stat_failed")}</p>
             </div>
           </div>
         </>
@@ -431,6 +465,7 @@ function BroadcastCard({ b, onRefresh }: { b: AdminBroadcast; onRefresh: (id: st
 }
 
 export default function AdminBroadcastsPage() {
+  const t = useT();
   const [broadcasts, setBroadcasts] = useState<AdminBroadcast[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -439,7 +474,7 @@ export default function AdminBroadcastsPage() {
     setLoading(true);
     broadcastsAdminApi.list()
       .then(r => setBroadcasts(r.items))
-      .catch(e => setError(e instanceof ApiError ? e.detail : "Ошибка"))
+      .catch(e => setError(e instanceof ApiError ? e.detail : translate("adm.broadcasts.err_generic")))
       .finally(() => setLoading(false));
   }, []);
 
@@ -457,22 +492,22 @@ export default function AdminBroadcastsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-fg">Рассылки</h1>
+        <h1 className="text-2xl font-bold text-fg">{t("adm.broadcasts.title")}</h1>
         <button onClick={load} className="flex items-center gap-2 rounded-xl border border-border-subtle px-3 py-2 text-sm text-fg-muted hover:text-fg transition-colors">
-          <RefreshCw className="h-4 w-4" /> Обновить
+          <RefreshCw className="h-4 w-4" /> {t("adm.broadcasts.refresh")}
         </button>
       </div>
 
       <CreateBroadcast onCreated={load} />
 
-      <h2 className="text-sm font-semibold text-fg-muted">История</h2>
+      <h2 className="text-sm font-semibold text-fg-muted">{t("adm.broadcasts.history")}</h2>
 
       {error && <div className="flex items-center gap-2 rounded-xl bg-danger/10 px-4 py-3 text-sm text-danger"><AlertCircle className="h-4 w-4" />{error}</div>}
 
       {loading ? (
         <div className="flex justify-center py-20"><div className="h-8 w-8 animate-spin rounded-full border-2 border-border border-t-accent" /></div>
       ) : broadcasts.length === 0 ? (
-        <div className="py-20 text-center text-fg-muted">Рассылок пока нет</div>
+        <div className="py-20 text-center text-fg-muted">{t("adm.broadcasts.empty")}</div>
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {broadcasts.map(b => <BroadcastCard key={b.task_id} b={b} onRefresh={refreshOne} />)}

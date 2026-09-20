@@ -4,6 +4,9 @@ import { ApiError } from "@/types/api";
 import type { BulkDaysPreview, BulkJob, BulkMessagePreview } from "@/api/admin";
 import type { Appearance } from "@/api/appearance";
 import { canFeature } from "@/lib/features";
+import { I18nProvider } from "@/i18n/I18nContext";
+import { STORAGE_KEY } from "@/i18n/config";
+import { translate } from "@/i18n/translate";
 
 // «Массово по фильтру»: добавить дни и написать сообщение. Заперто то, что
 // защищает людей от случайной массовой раздачи:
@@ -105,10 +108,22 @@ const job = (over: Partial<BulkJob> = {}): BulkJob => ({
 
 const noop = () => {};
 
+// Страница «Пользователи» больше не хранит русский текст в коде: подписи приходят
+// из словаря по ключам adm.users.*. Тест сверяется с тем же словарём (и держит
+// кабинет на русском), иначе он проверял бы не интерфейс, а копию строки.
+const ru = (key: string) => translate(key, {}, "ru");
+const renderUsersPage = () =>
+  render(
+    <I18nProvider>
+      <AdminUsersPage />
+    </I18nProvider>,
+  );
+
 beforeEach(() => {
   for (const fn of [daysPreview, startDays, messagePreview, startMessage, testMessage, jobs, jobById, usersList]) fn.mockReset();
   auth = { isReadonlyAdmin: false, fullAccess: true, isOwner: true, canSection: () => true };
   features = { can: () => true };
+  localStorage.setItem(STORAGE_KEY, "ru");
 });
 afterEach(() => {
   cleanup();
@@ -307,32 +322,32 @@ describe("«Фоновые задачи»", () => {
 });
 
 describe("«Пользователи»: пункты массовых задач", () => {
-  const options = () => Array.from(screen.getByLabelText("Массовое действие").querySelectorAll("option")).map((o) => o.textContent);
+  const options = () => Array.from(screen.getByLabelText(ru("adm.users.bulk_aria")).querySelectorAll("option")).map((o) => o.textContent);
 
   it("без полного доступа пунктов нет, с полным — есть", async () => {
     usersList.mockResolvedValue({ items: [], total: 0, limit: 25, offset: 0 });
     jobs.mockResolvedValue({ items: [], active: { days: null, message: null } });
     auth = { ...auth, fullAccess: false };
-    render(<AdminUsersPage />);
+    renderUsersPage();
     await waitFor(() => expect(usersList).toHaveBeenCalled());
-    expect(options()).not.toContain("Добавить дни подписки…");
-    expect(options()).not.toContain("Написать сообщение…");
+    expect(options()).not.toContain(ru("adm.users.bulk_opt_days"));
+    expect(options()).not.toContain(ru("adm.users.bulk_opt_message"));
     cleanup();
 
     auth = { ...auth, fullAccess: true };
-    render(<AdminUsersPage />);
-    await waitFor(() => expect(options()).toContain("Добавить дни подписки…"));
-    expect(options()).toContain("Написать сообщение…");
+    renderUsersPage();
+    await waitFor(() => expect(options()).toContain(ru("adm.users.bulk_opt_days")));
+    expect(options()).toContain(ru("adm.users.bulk_opt_message"));
   });
 
   it("бэкенд выключил массовые задачи — ни пунктов, ни журнала, ни запросов", async () => {
     usersList.mockResolvedValue({ items: [], total: 0, limit: 25, offset: 0 });
     jobs.mockResolvedValue({ items: [job({ status: "PAUSED" })], active: { days: 7, message: null } });
     features = { can: (key: string) => key !== "bulk_days" && key !== "bulk_message" };
-    render(<AdminUsersPage />);
+    renderUsersPage();
     await waitFor(() => expect(usersList).toHaveBeenCalled());
-    expect(options()).not.toContain("Добавить дни подписки…");
-    expect(options()).not.toContain("Написать сообщение…");
+    expect(options()).not.toContain(ru("adm.users.bulk_opt_days"));
+    expect(options()).not.toContain(ru("adm.users.bulk_opt_message"));
     expect(screen.queryByText("Фоновые задачи")).toBeNull();
     expect(jobs).not.toHaveBeenCalled();
   });
@@ -345,11 +360,11 @@ describe("«Пользователи»: пункты массовых задач
     jobs.mockResolvedValue({ items: [job({ status: "PAUSED" })], active: { days: 7, message: null } });
     const oldBot = { brand_name: "X" } as Appearance;
     features = { can: (key: string) => canFeature(oldBot, key as Parameters<typeof canFeature>[1]) };
-    render(<AdminUsersPage />);
+    renderUsersPage();
     await waitFor(() => expect(usersList).toHaveBeenCalled());
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
-    expect(options()).not.toContain("Добавить дни подписки…");
-    expect(options()).not.toContain("Написать сообщение…");
+    expect(options()).not.toContain(ru("adm.users.bulk_opt_days"));
+    expect(options()).not.toContain(ru("adm.users.bulk_opt_message"));
     expect(screen.queryByText("Фоновые задачи")).toBeNull();
     expect(jobs).not.toHaveBeenCalled();
     expect(daysPreview).not.toHaveBeenCalled();
@@ -358,8 +373,8 @@ describe("«Пользователи»: пункты массовых задач
 
     const newBot = { brand_name: "X", bot_capabilities: ["bulk_jobs"] } as Appearance;
     features = { can: (key: string) => canFeature(newBot, key as Parameters<typeof canFeature>[1]) };
-    render(<AdminUsersPage />);
-    await waitFor(() => expect(options()).toContain("Добавить дни подписки…"));
-    expect(options()).toContain("Написать сообщение…");
+    renderUsersPage();
+    await waitFor(() => expect(options()).toContain(ru("adm.users.bulk_opt_days")));
+    expect(options()).toContain(ru("adm.users.bulk_opt_message"));
   });
 });

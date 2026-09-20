@@ -11,6 +11,8 @@ import { DailyCharts } from "@/components/admin/DailyCharts";
 import { CohortHeatmap } from "@/components/admin/CohortHeatmap";
 import { MetricsCards } from "@/components/admin/MetricsCards";
 import { formatAdminMoney as fmtMoney } from "@/lib/adminMoney";
+import { useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
 
 function StatCard({
   label,
@@ -31,35 +33,36 @@ function StatCard({
 }
 
 function GatewayCard({ g }: { g: GatewayStats }) {
+  const t = useT();
   return (
     <div className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
       <div className="mb-3 flex items-center justify-between">
         <span className="text-sm font-semibold text-fg">{g.gateway_type}</span>
         <span className="rounded-full bg-accent-subtle px-2 py-0.5 text-xs text-accent">
-          {g.paid_count} платежей
+          {t("adm.stats.gw_payments", { n: g.paid_count })}
         </span>
       </div>
       <div className="grid grid-cols-2 gap-3 text-xs">
         <div>
-          <p className="text-fg-muted">Всего</p>
+          <p className="text-fg-muted">{t("adm.stats.total")}</p>
           <p className="font-semibold text-fg">
             {g.total_income.toLocaleString("ru-RU", { maximumFractionDigits: 0 })} ₽
           </p>
         </div>
         <div>
-          <p className="text-fg-muted">За месяц</p>
+          <p className="text-fg-muted">{t("adm.stats.month")}</p>
           <p className="font-semibold text-fg">
             {g.monthly_income.toLocaleString("ru-RU", { maximumFractionDigits: 0 })} ₽
           </p>
         </div>
         <div>
-          <p className="text-fg-muted">За неделю</p>
+          <p className="text-fg-muted">{t("adm.stats.week")}</p>
           <p className="font-semibold text-fg">
             {g.weekly_income.toLocaleString("ru-RU", { maximumFractionDigits: 0 })} ₽
           </p>
         </div>
         <div>
-          <p className="text-fg-muted">За сегодня</p>
+          <p className="text-fg-muted">{t("adm.stats.today")}</p>
           <p className="font-semibold text-fg">
             {g.daily_income.toLocaleString("ru-RU", { maximumFractionDigits: 0 })} ₽
           </p>
@@ -70,6 +73,7 @@ function GatewayCard({ g }: { g: GatewayStats }) {
 }
 
 export default function AdminDashboardPage() {
+  const t = useT();
   const [data, setData] = useState<AdminOverviewResponse | null>(null);
   const [sales, setSales] = useState<SalesStatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -80,7 +84,8 @@ export default function AdminDashboardPage() {
       .overview()
       .then(setData)
       .catch((e) => {
-        setError(e instanceof ApiError ? e.detail : "Ошибка загрузки");
+        // Вне рендера: берём перевод модульной функцией, а не хуком.
+        setError(e instanceof ApiError ? e.detail : translate("adm.stats.load_error"));
       })
       .finally(() => setLoading(false));
     // Продажи грузим отдельно — не блокируют обзор, если что-то пойдёт не так.
@@ -110,23 +115,23 @@ export default function AdminDashboardPage() {
 
   return (
     <div className="space-y-8">
-      <h1 className="text-2xl font-bold text-fg">Статистика</h1>
+      <h1 className="text-2xl font-bold text-fg">{t("adm.stats.title")}</h1>
 
       {/* Users */}
       <section>
         <div className="mb-4 flex items-center gap-2">
           <Users className="h-5 w-5 text-accent" />
-          <h2 className="text-base font-semibold text-fg">Пользователи</h2>
+          <h2 className="text-base font-semibold text-fg">{t("adm.stats.users")}</h2>
         </div>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-          <StatCard label="Всего" value={users.total} />
-          <StatCard label="Активных" value={users.active} />
-          <StatCard label="Заблокированных" value={users.blocked} />
-          <StatCard label="Платящих" value={users.paying} />
-          <StatCard label="Новых сегодня" value={users.new_today} />
-          <StatCard label="За неделю" value={users.new_week} />
-          <StatCard label="За месяц" value={users.new_month} />
-          <StatCard label="Пробные" value={users.with_trial} />
+          <StatCard label={t("adm.stats.total")} value={users.total} />
+          <StatCard label={t("adm.stats.active")} value={users.active} />
+          <StatCard label={t("adm.stats.blocked")} value={users.blocked} />
+          <StatCard label={t("adm.stats.paying")} value={users.paying} />
+          <StatCard label={t("adm.stats.new_today")} value={users.new_today} />
+          <StatCard label={t("adm.stats.week")} value={users.new_week} />
+          <StatCard label={t("adm.stats.month")} value={users.new_month} />
+          <StatCard label={t("adm.stats.users_trial")} value={users.with_trial} />
         </div>
       </section>
 
@@ -134,18 +139,18 @@ export default function AdminDashboardPage() {
       <section>
         <div className="mb-4 flex items-center gap-2">
           <Activity className="h-5 w-5 text-accent" />
-          <h2 className="text-base font-semibold text-fg">Подписки</h2>
+          <h2 className="text-base font-semibold text-fg">{t("adm.stats.subs")}</h2>
         </div>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-          <StatCard label="Всего" value={subscriptions.total} />
-          <StatCard label="Активных" value={subscriptions.active} />
-          <StatCard label="Истекших" value={subscriptions.expired} />
-          <StatCard label="Отключённых" value={subscriptions.disabled} />
-          <StatCard label="Пробных" value={subscriptions.trial} />
-          <StatCard label="Безлимит" value={subscriptions.unlimited} />
-          <StatCard label="Ограниченных" value={subscriptions.limited} />
+          <StatCard label={t("adm.stats.total")} value={subscriptions.total} />
+          <StatCard label={t("adm.stats.active")} value={subscriptions.active} />
+          <StatCard label={t("adm.stats.expired")} value={subscriptions.expired} />
+          <StatCard label={t("adm.stats.disabled")} value={subscriptions.disabled} />
+          <StatCard label={t("adm.stats.subs_trial")} value={subscriptions.trial} />
+          <StatCard label={t("adm.stats.unlimited")} value={subscriptions.unlimited} />
+          <StatCard label={t("adm.stats.limited")} value={subscriptions.limited} />
           <StatCard
-            label="Истекают скоро"
+            label={t("adm.stats.expiring_soon")}
             value={subscriptions.expiring_soon}
           />
         </div>
@@ -156,16 +161,18 @@ export default function AdminDashboardPage() {
         <section>
           <div className="mb-4 flex items-center gap-2">
             <ShoppingCart className="h-5 w-5 text-accent" />
-            <h2 className="text-base font-semibold text-fg">Продажи</h2>
-            <span className="text-xs text-fg-subtle">оплаченные заказы за период</span>
+            <h2 className="text-base font-semibold text-fg">{t("adm.stats.sales")}</h2>
+            <span className="text-xs text-fg-subtle">{t("adm.stats.sales_hint")}</span>
           </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             {sales.periods.map((p) => (
               <div key={p.days} className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
                 <div className="mb-3 flex items-baseline justify-between">
-                  <span className="text-sm font-semibold text-fg">за {p.days} дней</span>
+                  <span className="text-sm font-semibold text-fg">
+                    {t("adm.stats.sales_period", { n: p.days })}
+                  </span>
                   <span className="rounded-full bg-accent-subtle px-2 py-0.5 text-xs text-accent">
-                    {p.sales_count} продаж
+                    {t("adm.stats.sales_count", { n: p.sales_count })}
                   </span>
                 </div>
                 {p.revenue.length > 0 ? (
@@ -178,7 +185,7 @@ export default function AdminDashboardPage() {
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-fg-subtle">нет продаж</p>
+                  <p className="text-sm text-fg-subtle">{t("adm.stats.no_sales")}</p>
                 )}
               </div>
             ))}
@@ -198,7 +205,7 @@ export default function AdminDashboardPage() {
         <section>
           <div className="mb-4 flex items-center gap-2">
             <TrendingUp className="h-5 w-5 text-accent" />
-            <h2 className="text-base font-semibold text-fg">Платёжные шлюзы</h2>
+            <h2 className="text-base font-semibold text-fg">{t("adm.stats.gateways")}</h2>
           </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {transactions.gateways.map((g) => (
@@ -212,11 +219,11 @@ export default function AdminDashboardPage() {
       <section>
         <div className="mb-4 flex items-center gap-2">
           <CreditCard className="h-5 w-5 text-accent" />
-          <h2 className="text-base font-semibold text-fg">Транзакции</h2>
+          <h2 className="text-base font-semibold text-fg">{t("adm.stats.tx")}</h2>
         </div>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          <StatCard label="Всего" value={transactions.total} />
-          <StatCard label="Успешных" value={transactions.completed} />
+          <StatCard label={t("adm.stats.total")} value={transactions.total} />
+          <StatCard label={t("adm.stats.tx_completed")} value={transactions.completed} />
         </div>
       </section>
     </div>

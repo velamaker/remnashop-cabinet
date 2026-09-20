@@ -2,8 +2,7 @@ import { useEffect, useState } from "react";
 import { statisticsApi, type MetricsRefunds, type MetricsResponse } from "@/api/admin";
 import { formatAdminMoney } from "@/lib/adminMoney";
 import { gatewayName } from "@/lib/gatewayNames";
-
-// Админка осознанно на русском (см. роадмап, Фаза 12) — не i18n.
+import { useT } from "@/i18n/I18nContext";
 
 function fmtMoney(v: number, currency: string): string {
   return `${Math.round(v).toLocaleString("ru-RU")} ${currency === "RUB" ? "₽" : currency}`;
@@ -24,18 +23,26 @@ function fmtMoney(v: number, currency: string): string {
 export function refundsTile(
   r: MetricsRefunds,
   blockCurrency: string,
+  // Перевод передаём АРГУМЕНТОМ, а не берём модульным translate: функция зовётся
+  // во время первого рендера, когда провайдер ещё не успел выставить активный
+  // язык, и подсказка приезжала на языке браузера, а не кабинета.
+  t: (key: string, vars?: Record<string, string | number>) => string,
 ): { value: string; hint: string; tone?: "warning" } {
   if (r.count_30d === 0 && r.reporting_gateways.length === 0) {
-    return { value: "—", hint: "подключённые шлюзы о возвратах не сообщают" };
+    return { value: "—", hint: t("adm.stats.refunds_silent_all") };
   }
   const value =
     r.count_30d > 0
       ? r.by_currency.map((c) => formatAdminMoney(c.currency, c.amount)).join(" · ")
       : formatAdminMoney(blockCurrency, 0);
-  let hint = `платежей: ${r.count_30d}`;
-  if (r.silent_gateways.length > 0) {
-    hint += ` · не сообщают: ${r.silent_gateways.map(gatewayName).join(", ")}`;
-  }
+  // Подсказку не склеиваем из кусков: у варианта с молчащими шлюзами свой ключ целиком.
+  const hint =
+    r.silent_gateways.length > 0
+      ? t("adm.stats.refunds_hint_silent", {
+          n: r.count_30d,
+          gateways: r.silent_gateways.map(gatewayName).join(", "),
+        })
+      : t("adm.stats.refunds_hint", { n: r.count_30d });
   return r.count_30d > 0 ? { value, hint, tone: "warning" } : { value, hint };
 }
 
@@ -70,6 +77,7 @@ function Tile({
 
 /** Продуктовые KPI: MRR, ARPU/ARPPU, конверсия trial→оплата, отток, возвраты, топы. */
 export function MetricsCards() {
+  const t = useT();
   const [data, setData] = useState<MetricsResponse | null>(null);
   const [error, setError] = useState(false);
 
@@ -89,77 +97,81 @@ export function MetricsCards() {
   const convTone: "success" | "warning" | "danger" =
     data.conversion.pct >= 15 ? "success" : data.conversion.pct >= 5 ? "warning" : "danger";
   // Старый бэкенд и адаптер «Бедолаги» поля не отдают — тогда плитки просто нет.
-  const refunds = data.refunds ? refundsTile(data.refunds, cur) : null;
+  const refunds = data.refunds ? refundsTile(data.refunds, cur, t) : null;
 
   return (
     <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
       <div className="mb-1 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-fg">Ключевые метрики</h3>
-        <span className="text-xs text-fg-subtle">валюта: {cur === "RUB" ? "₽" : cur}</span>
+        <h3 className="text-sm font-semibold text-fg">{t("adm.stats.kpi_title")}</h3>
+        <span className="text-xs text-fg-subtle">
+          {t("adm.stats.kpi_currency", { cur: cur === "RUB" ? "₽" : cur })}
+        </span>
       </div>
       <p className="mb-3 text-xs text-fg-muted">
-        Денежные метрики — в {cur === "RUB" ? "рублях" : cur} (валюты не суммируются). MRR — оценка по
-        последнему платежу активных подписчиков, нормированному к 30 дням.
+        {t("adm.stats.kpi_note", { cur: cur === "RUB" ? t("adm.stats.rubles") : cur })}
         {data.refunds && (
           <>
             {" "}
-            Возвраты — платежи, которые шлюз отозвал уже после оплаты (чарджбэк), по дню, когда
-            бот об этом узнал; в выручку и MRR они не входят. Возврат, сделанный вручную в кабинете
-            шлюза или кошелька, и возвраты по выключенным шлюзам бот не видит.
+            {t("adm.stats.kpi_refunds_note")}
           </>
         )}
       </p>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         <Tile
-          label="MRR (оценка)"
+          label={t("adm.stats.mrr")}
           value={fmtMoney(data.mrr, cur)}
-          hint={`по ${data.mrr_subs} подпискам`}
+          hint={t("adm.stats.mrr_hint", { n: data.mrr_subs })}
           tone="accent"
         />
         <Tile
-          label="ARPU (30 дн)"
+          label={t("adm.stats.arpu")}
           value={fmtMoney(data.arpu, cur)}
-          hint={`на ${data.active_users} активных`}
+          hint={t("adm.stats.arpu_hint", { n: data.active_users })}
         />
         <Tile
-          label="ARPPU (30 дн)"
+          label={t("adm.stats.arppu")}
           value={fmtMoney(data.arppu, cur)}
-          hint={`на ${data.payers_30d} плативших`}
+          hint={t("adm.stats.arppu_hint", { n: data.payers_30d })}
         />
         <Tile
-          label="Выручка 30 дн"
+          label={t("adm.stats.revenue_30d")}
           value={fmtMoney(data.revenue_30d, cur)}
           tone="accent"
         />
         <Tile
-          label="Конверсия trial→оплата"
+          label={t("adm.stats.conversion")}
           value={`${data.conversion.pct}%`}
-          hint={`${data.conversion.converted} из ${data.conversion.trials}`}
+          hint={t("adm.stats.conversion_hint", { n: data.conversion.converted, total: data.conversion.trials })}
           tone={convTone}
         />
         <Tile
-          label="Отток (30 дн)"
+          label={t("adm.stats.churn")}
           value={`${data.churn.pct}%`}
-          hint={`ушло ${data.churn.churned_30d} · активно ${data.churn.active_now}`}
+          hint={t("adm.stats.churn_hint", { gone: data.churn.churned_30d, active: data.churn.active_now })}
           tone={churnTone}
         />
         <Tile
-          label="Успешность оплат (30 дн)"
+          label={t("adm.stats.payments_success")}
           value={`${data.payments.success_pct}%`}
-          hint={`${data.payments.completed_30d} ок · ${data.payments.canceled_30d} отмен`}
+          hint={t("adm.stats.payments_hint", { ok: data.payments.completed_30d, canceled: data.payments.canceled_30d })}
           tone={successTone}
         />
         {refunds && (
-          <Tile label="Возвраты (30 дн)" value={refunds.value} hint={refunds.hint} tone={refunds.tone} />
+          <Tile
+            label={t("adm.stats.refunds")}
+            value={refunds.value}
+            hint={refunds.hint}
+            tone={refunds.tone}
+          />
         )}
       </div>
 
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         <div>
-          <h4 className="mb-2 text-xs font-semibold text-fg-muted">Топ-тарифы по выручке</h4>
+          <h4 className="mb-2 text-xs font-semibold text-fg-muted">{t("adm.stats.top_plans")}</h4>
           {data.top_plans.length === 0 ? (
-            <p className="text-xs text-fg-subtle">Нет данных.</p>
+            <p className="text-xs text-fg-subtle">{t("adm.stats.no_data")}</p>
           ) : (
             <ul className="space-y-1">
               {data.top_plans.map((p, i) => (
@@ -174,9 +186,9 @@ export function MetricsCards() {
           )}
         </div>
         <div>
-          <h4 className="mb-2 text-xs font-semibold text-fg-muted">Топ-шлюзы по выручке</h4>
+          <h4 className="mb-2 text-xs font-semibold text-fg-muted">{t("adm.stats.top_gateways")}</h4>
           {data.top_gateways.length === 0 ? (
-            <p className="text-xs text-fg-subtle">Нет данных.</p>
+            <p className="text-xs text-fg-subtle">{t("adm.stats.no_data")}</p>
           ) : (
             <ul className="space-y-1">
               {data.top_gateways.map((g, i) => (
