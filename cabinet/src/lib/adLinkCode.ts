@@ -8,6 +8,10 @@
  * увидел причину до нажатия «Создать», а не после.
  */
 
+// Функция чистая (её зовут из рендера и из тестов), поэтому перевод берём через
+// translate, а не через хук: ключи те же, что у страницы рекламных ссылок.
+import { translate } from "@/i18n/translate";
+
 export const AD_CODE_MAX = 61;
 
 const ALLOWED = /^[A-Za-z0-9_-]+$/;
@@ -24,8 +28,8 @@ const TRANSLIT: Record<string, string> = {
 export function adCodeProblem(code: string): string | null {
   const value = code.trim();
   if (!value) return null;
-  if (value.length > AD_CODE_MAX) return `Код длиннее ${AD_CODE_MAX} символов`;
-  if (!ALLOWED.test(value)) return "Только латиница, цифры, «_» и «-» — без пробелов и русских букв";
+  if (value.length > AD_CODE_MAX) return translate("adm.adlinks.code_too_long", { max: AD_CODE_MAX });
+  if (!ALLOWED.test(value)) return translate("adm.adlinks.code_bad_chars");
   return null;
 }
 

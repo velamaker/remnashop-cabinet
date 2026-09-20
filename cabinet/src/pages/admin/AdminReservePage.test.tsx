@@ -44,7 +44,7 @@ const renderPage = () =>
     </I18nProvider>,
   );
 
-const card = () => screen.queryByText("Кто на резерве");
+const card = () => screen.queryByText(ru("adm.reserve.grants_title"));
 
 /**
  * Дождаться, пока приедут ВЫДАЧИ, а не пока появится заголовок блока.
@@ -92,8 +92,10 @@ describe("Кто на резерве", () => {
     await waitForGrants(() => screen.queryByText("vasya"));
     expect(screen.queryByText("vasya")).not.toBeNull();
     expect(screen.queryByText("Reserve-1GB")).not.toBeNull();
-    expect(screen.queryByText("0.2 / 1 ГБ")).not.toBeNull();
-    expect(screen.queryByText(/не работает/)).toBeNull();
+    expect(
+      screen.queryByText(ru("adm.reserve.traffic_value", { used: 0.2, limit: 1 })),
+    ).not.toBeNull();
+    expect(screen.queryByText(rx("adm.reserve.stat_broken"))).toBeNull();
   });
 
   it("выдан, но сквадов нет → строка помечена проблемой и счётчик её считает", async () => {
@@ -108,7 +110,7 @@ describe("Кто на резерве", () => {
 
     await waitForGrants(() => screen.queryByText("нет активных сквадов — в приложении будет пусто"));
     expect(screen.queryByText("нет активных сквадов — в приложении будет пусто")).not.toBeNull();
-    expect(screen.queryByText(/не работает/)).not.toBeNull();
+    expect(screen.queryByText(rx("adm.reserve.stat_broken"))).not.toBeNull();
   });
 
   it("израсходованный гигабайт — обычная пометка, а не предупреждение", async () => {
@@ -123,7 +125,7 @@ describe("Кто на резерве", () => {
 
     await waitForGrants(() => screen.queryByText("резерв израсходован"));
     expect(screen.queryByText("резерв израсходован")).not.toBeNull();
-    expect(screen.queryByText(/не работает/)).toBeNull();
+    expect(screen.queryByText(rx("adm.reserve.stat_broken"))).toBeNull();
   });
 
   it("сломанные строки идут выше здоровых", async () => {
@@ -155,9 +157,9 @@ describe("Кто на резерве", () => {
       });
     renderPage();
 
-    await waitForGrants(() => screen.queryByText("закончился"));
+    await waitForGrants(() => screen.queryByText(ru("adm.reserve.ended")));
     expect(screen.getAllByText("vasya")).toHaveLength(2);
-    expect(screen.queryByText("закончился")).not.toBeNull();
+    expect(screen.queryByText(ru("adm.reserve.ended"))).not.toBeNull();
   });
 
   it("адаптер «Бедолаги»: ручки нет (501) → блока нет, страница цела", async () => {
@@ -172,7 +174,7 @@ describe("Кто на резерве", () => {
     // getAllByText, а не queryByText: после того как блок «Кто на резерве» ушёл,
     // этот заголовок остаётся на странице не в одном месте, а queryByText на
     // нескольких совпадениях не возвращает null, а бросает.
-    expect(screen.getAllByText("Резервный доступ истёкшим").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(ru("adm.reserve.title")).length).toBeGreaterThan(0);
   });
 
   it("настоящая ошибка бэкенда не прячется, в отличие от 501", async () => {
@@ -209,14 +211,14 @@ describe("Кто на резерве", () => {
       Promise.resolve({ checked: false, ok: false, name: null, hosts: 0, problems: ["панель недоступна"] });
     renderPage();
 
-    await waitFor(() => expect(screen.queryByText("Резервный доступ истёкшим")).not.toBeNull());
+    await waitFor(() => expect(screen.getAllByText(ru("adm.reserve.title")).length).toBeGreaterThan(0));
     expect(screen.queryByText(/панель недоступна/)).toBeNull();
   });
 
   it("резерв ещё никому не выдавали → таблицы нет, но блок на месте", async () => {
     renderPage();
 
-    await waitForGrants(() => screen.queryByText("Резерв пока никому не выдавался."));
-    expect(screen.queryByText("Резерв пока никому не выдавался.")).not.toBeNull();
+    await waitForGrants(() => screen.queryByText(ru("adm.reserve.empty")));
+    expect(screen.queryByText(ru("adm.reserve.empty"))).not.toBeNull();
   });
 });

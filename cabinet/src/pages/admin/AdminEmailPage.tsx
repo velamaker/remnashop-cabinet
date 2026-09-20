@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { Save, CheckCircle2, Mail, Send, Server, AlertTriangle } from "lucide-react";
 import {
   emailTemplateAdminApi,
@@ -12,14 +12,29 @@ import {
   type EmailProvider,
 } from "@/api/emailSettings";
 import { ApiError } from "@/types/api";
+import { useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
 
-const PROVIDER_LABELS: Record<EmailProvider, string> = {
+// Порядок провайдеров в списке. Подписи: бренды одинаковы на любом языке,
+// переводится только «свой SMTP».
+const PROVIDERS: EmailProvider[] = ["gmail", "yandex", "mailru", "brevo", "custom"];
+const PROVIDER_BRANDS: Partial<Record<EmailProvider, string>> = {
   gmail: "Gmail",
   yandex: "Yandex",
   mailru: "Mail.ru",
   brevo: "Brevo (API)",
-  custom: "Свой SMTP",
 };
+
+// Фраза переводится ЦЕЛИКОМ, а на месте {плейсхолдеров} подставляются узлы —
+// так оформление (чип <code>, выделенное значение) не заставляет склеивать
+// перевод из кусков и не мешает переводчику менять порядок слов.
+function withNodes(text: string, nodes: Record<string, ReactNode>): ReactNode[] {
+  const re = new RegExp(`(\\{(?:${Object.keys(nodes).join("|")})\\})`, "g");
+  return text.split(re).map((part, i) => {
+    const name = part.startsWith("{") && part.endsWith("}") ? part.slice(1, -1) : "";
+    return <Fragment key={i}>{name in nodes ? nodes[name] : part}</Fragment>;
+  });
+}
 
 // --- договор применимости, общий для обеих карточек экрана --------------------
 //
@@ -77,6 +92,7 @@ function applicability(data: Applicability | null | undefined) {
 // assets/email.json и применяется сразу (без рестарта). Пустой пароль/ключ при
 // сохранении = «не менять».
 function SmtpSettingsCard() {
+  const t = useT();
   const [s, setS] = useState<EmailSettings | null>(null);
   const [provider, setProvider] = useState<EmailProvider>("custom");
   const [host, setHost] = useState("");
@@ -112,7 +128,12 @@ function SmtpSettingsCard() {
     emailSettingsAdminApi
       .get()
       .then(apply)
-      .catch((e) => setMsg({ type: "error", text: e instanceof ApiError ? e.detail : "Ошибка" }))
+      .catch((e) =>
+        setMsg({
+          type: "error",
+          text: e instanceof ApiError ? e.detail : translate("adm.email.err_generic"),
+        }),
+      )
       .finally(() => setLoading(false));
   }, []);
 
@@ -150,9 +171,12 @@ function SmtpSettingsCard() {
       if (editable("brevo_api_key")) body.brevo_api_key = brevoKey; // "" = не менять
       const next = await emailSettingsAdminApi.update(body);
       apply(next);
-      setMsg({ type: "success", text: "Сохранено" });
+      setMsg({ type: "success", text: t("adm.email.saved") });
     } catch (e) {
-      setMsg({ type: "error", text: e instanceof ApiError ? e.detail : "Ошибка сохранения" });
+      setMsg({
+        type: "error",
+        text: e instanceof ApiError ? e.detail : t("adm.email.err_save"),
+      });
     } finally {
       setSaving(false);
     }
@@ -163,9 +187,12 @@ function SmtpSettingsCard() {
     setMsg(null);
     try {
       await emailSettingsAdminApi.sendTest(testTo);
-      setMsg({ type: "success", text: `Тестовое письмо отправлено на ${testTo}` });
+      setMsg({ type: "success", text: t("adm.email.test_sent", { to: testTo }) });
     } catch (e) {
-      setMsg({ type: "error", text: e instanceof ApiError ? e.detail : "Не удалось отправить" });
+      setMsg({
+        type: "error",
+        text: e instanceof ApiError ? e.detail : t("adm.email.err_send"),
+      });
     } finally {
       setSending(false);
     }
@@ -178,9 +205,10 @@ function SmtpSettingsCard() {
   // Список провайдеров: Brevo убираем там, где отправки через его API нет вовсе
   // (у чужого бота бывает только SMTP). Текущее значение оставляем всегда —
   // иначе выпадающий список показал бы не то, что настроено.
-  const providers = (Object.keys(PROVIDER_LABELS) as EmailProvider[]).filter(
+  const providers = PROVIDERS.filter(
     (p) => p === provider || p !== "brevo" || can("brevo_api_key"),
   );
+  const providerLabel = (p: EmailProvider) => PROVIDER_BRANDS[p] ?? t("adm.email.provider_custom");
   // Менять нечего — нечего и сохранять: кнопка отправила бы пустое тело и
   // ответила «Сохранено», ничего не изменив.
   const anyEditable = [
@@ -201,19 +229,19 @@ function SmtpSettingsCard() {
       <div className="flex items-center justify-between">
         <h2 className="flex items-center gap-2 text-sm font-semibold text-fg">
           <Server className="h-4 w-4 text-accent" />
-          Подключение почты (SMTP)
+          {t("adm.email.smtp_title")}
         </h2>
         <span
           className={`text-xs font-medium ${s?.is_enabled ? "text-success" : "text-fg-subtle"}`}
         >
-          {s?.is_enabled ? "● Готово к отправке" : "○ Не настроено"}
+          {s?.is_enabled ? t("adm.email.smtp_ready") : t("adm.email.smtp_not_set")}
         </span>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
         {can("provider") && (
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-fg">Провайдер</label>
+            <label className="mb-1.5 block text-sm font-medium text-fg">{t("adm.email.f_provider")}</label>
             <select
               value={provider}
               disabled={ro("provider")}
@@ -222,7 +250,7 @@ function SmtpSettingsCard() {
             >
               {providers.map((p) => (
                 <option key={p} value={p}>
-                  {PROVIDER_LABELS[p]}
+                  {providerLabel(p)}
                 </option>
               ))}
             </select>
@@ -232,7 +260,9 @@ function SmtpSettingsCard() {
         )}
         {can("from_email") && (
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-fg">Отправитель (From)</label>
+            <label className="mb-1.5 block text-sm font-medium text-fg">
+              {t("adm.email.f_from_email")}
+            </label>
             <input
               type="email"
               value={fromEmail}
@@ -249,7 +279,9 @@ function SmtpSettingsCard() {
 
       {can("from_name") && (
         <div>
-          <label className="mb-1.5 block text-sm font-medium text-fg">Имя отправителя</label>
+          <label className="mb-1.5 block text-sm font-medium text-fg">
+            {t("adm.email.f_from_name")}
+          </label>
           <input
             type="text"
             value={fromName}
@@ -271,7 +303,7 @@ function SmtpSettingsCard() {
             value={brevoKey}
             disabled={ro("brevo_api_key")}
             onChange={(e) => setBrevoKey(e.target.value)}
-            placeholder={s?.has_brevo_key ? "•••••• (сохранён) — оставьте пустым, чтобы не менять" : "xkeysib-…"}
+            placeholder={s?.has_brevo_key ? t("adm.email.ph_brevo_saved") : "xkeysib-…"}
             className={`input w-full ${ro("brevo_api_key") ? "cursor-not-allowed opacity-60" : ""}`}
             autoComplete="off"
           />
@@ -338,8 +370,18 @@ function SmtpSettingsCard() {
           {isPreset && (
             <div>
               <p className="text-xs text-fg-subtle">
-                Сервер: <span className="text-fg">{host}:{port}</span> ({useSsl ? "SSL" : useTls ? "STARTTLS" : "без шифрования"}) — задаётся автоматически.
-                Пароль — это <span className="text-fg">пароль приложения</span> (app password), а не пароль от аккаунта.
+                {withNodes(
+                  t("adm.email.preset_server", {
+                    enc: useSsl ? "SSL" : useTls ? "STARTTLS" : t("adm.email.enc_none"),
+                  }),
+                  {
+                    server: (
+                      <span className="text-fg">
+                        {host}:{port}
+                      </span>
+                    ),
+                  },
+                )}
               </p>
               {/* Про сервер и шифрование бэкенд тоже может иметь что сказать —
                   например, что на порту 465 он включает SSL сам. Поля скрыты
@@ -350,7 +392,9 @@ function SmtpSettingsCard() {
           <div className="grid gap-3 sm:grid-cols-2">
             {can("username") && (
               <div>
-                <label className="mb-1.5 block text-sm font-medium text-fg">Логин (email)</label>
+                <label className="mb-1.5 block text-sm font-medium text-fg">
+                  {t("adm.email.f_username")}
+                </label>
                 <input type="text" value={username} disabled={ro("username")}
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="you@gmail.com" autoComplete="off"
@@ -361,10 +405,12 @@ function SmtpSettingsCard() {
             )}
             {can("password") && (
               <div>
-                <label className="mb-1.5 block text-sm font-medium text-fg">Пароль</label>
+                <label className="mb-1.5 block text-sm font-medium text-fg">
+                  {t("adm.email.f_password")}
+                </label>
                 <input type="password" value={password} disabled={ro("password")}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder={s?.has_password ? "•••••• (сохранён) — пусто, чтобы не менять" : "app password"}
+                  placeholder={s?.has_password ? t("adm.email.ph_password_saved") : "app password"}
                   autoComplete="off"
                   className={`input w-full ${ro("password") ? "cursor-not-allowed opacity-60" : ""}`} />
                 {note("password")}
@@ -386,7 +432,7 @@ function SmtpSettingsCard() {
             className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-accent-fg transition-opacity hover:opacity-90 disabled:opacity-60"
           >
             <Save className="h-4 w-4" />
-            {saving ? "Сохранение…" : "Сохранить"}
+            {saving ? t("adm.email.saving") : t("adm.email.save")}
           </button>
         )}
         {can("test") && (
@@ -404,7 +450,7 @@ function SmtpSettingsCard() {
               className="inline-flex items-center gap-2 rounded-xl border border-border-subtle bg-bg px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-overlay disabled:opacity-50"
             >
               <Send className="h-4 w-4" />
-              {sending ? "Отправка…" : "Тест"}
+              {sending ? t("adm.email.sending") : t("adm.email.test_btn")}
             </button>
           </>
         )}
@@ -421,15 +467,16 @@ function SmtpSettingsCard() {
 
 type Key = keyof EmailTemplate;
 
-const FIELDS: { key: Key; label: string; hint?: string; multiline?: boolean }[] = [
-  { key: "subject", label: "Тема письма", hint: "Например: Код подтверждения — {brand}" },
-  { key: "heading", label: "Заголовок в письме" },
-  { key: "intro", label: "Текст перед кодом", multiline: true },
-  { key: "expire_note", label: "Про срок действия", hint: "Можно использовать {minutes}" },
-  { key: "ignore_note", label: "Примечание внизу", multiline: true },
+const FIELDS: { key: Key; labelKey: string; hintKey?: string; multiline?: boolean }[] = [
+  { key: "subject", labelKey: "adm.email.f_subject", hintKey: "adm.email.hint_subject" },
+  { key: "heading", labelKey: "adm.email.f_heading" },
+  { key: "intro", labelKey: "adm.email.f_intro", multiline: true },
+  { key: "expire_note", labelKey: "adm.email.f_expire_note", hintKey: "adm.email.hint_expire" },
+  { key: "ignore_note", labelKey: "adm.email.f_ignore_note", multiline: true },
 ];
 
 export default function AdminEmailPage() {
+  const t = useT();
   const [form, setForm] = useState<EmailTemplateResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -444,7 +491,7 @@ export default function AdminEmailPage() {
     emailTemplateAdminApi
       .get()
       .then(setForm)
-      .catch((e) => setError(e instanceof ApiError ? e.detail : "Ошибка загрузки"))
+      .catch((e) => setError(e instanceof ApiError ? e.detail : translate("adm.email.err_load")))
       .finally(() => setLoading(false));
   }, []);
 
@@ -467,7 +514,7 @@ export default function AdminEmailPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Ошибка сохранения");
+      setError(e instanceof ApiError ? e.detail : t("adm.email.err_save"));
     } finally {
       setSaving(false);
     }
@@ -478,11 +525,11 @@ export default function AdminEmailPage() {
     setTestMsg(null);
     try {
       await emailTemplateAdminApi.sendTest(testTo);
-      setTestMsg({ type: "success", text: `Тестовое письмо отправлено на ${testTo}` });
+      setTestMsg({ type: "success", text: t("adm.email.test_sent", { to: testTo }) });
     } catch (e) {
       setTestMsg({
         type: "error",
-        text: e instanceof ApiError ? e.detail : "Не удалось отправить",
+        text: e instanceof ApiError ? e.detail : t("adm.email.err_send"),
       });
     } finally {
       setSending(false);
@@ -502,7 +549,7 @@ export default function AdminEmailPage() {
       <div className="sticky top-0 z-10 -mx-5 flex items-center justify-between border-b border-border-subtle bg-bg/80 px-5 py-3 backdrop-blur-md md:-mx-8 md:px-8">
         <h1 className="flex items-center gap-2 text-xl font-bold text-fg md:text-2xl">
           <Mail className="h-5 w-5 text-accent" />
-          Письмо с кодом
+          {t("adm.email.title")}
         </h1>
         {anyEditable && (
           <button
@@ -511,7 +558,7 @@ export default function AdminEmailPage() {
             className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-accent-fg transition-opacity hover:opacity-90 disabled:opacity-60"
           >
             {saved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
-            {saved ? "Сохранено" : saving ? "Сохранение…" : "Сохранить"}
+            {saved ? t("adm.email.saved") : saving ? t("adm.email.saving") : t("adm.email.save")}
           </button>
         )}
       </div>
@@ -520,18 +567,14 @@ export default function AdminEmailPage() {
 
       {anyEditable ? (
         <p className="text-sm text-fg-muted">
-          Текст письма с кодом подтверждения. Доступные подстановки:{" "}
-          <code className="rounded bg-bg-subtle px-1 text-fg">{"{brand}"}</code> (имя из
-          EMAIL_FROM_NAME),{" "}
-          <code className="rounded bg-bg-subtle px-1 text-fg">{"{code}"}</code>,{" "}
-          <code className="rounded bg-bg-subtle px-1 text-fg">{"{minutes}"}</code>. Применяется
-          сразу после «Сохранить». Пустое поле вернётся к стандартному тексту.
+          {withNodes(t("adm.email.tpl_hint"), {
+            brand: <code className="rounded bg-bg-subtle px-1 text-fg">{"{brand}"}</code>,
+            code: <code className="rounded bg-bg-subtle px-1 text-fg">{"{code}"}</code>,
+            minutes: <code className="rounded bg-bg-subtle px-1 text-fg">{"{minutes}"}</code>,
+          })}
         </p>
       ) : (
-        <p className="text-sm text-fg-muted">
-          Тексты писем на этом бэкенде правятся не здесь — причина под полем ниже. Показано то,
-          что реально уходит людям.
-        </p>
+        <p className="text-sm text-fg-muted">{t("adm.email.tpl_locked")}</p>
       )}
 
       {error && <p className="text-sm text-danger">{error}</p>}
@@ -539,7 +582,7 @@ export default function AdminEmailPage() {
       <div className="space-y-4">
         {shown.map((f) => (
           <div key={f.key}>
-            <label className="mb-1.5 block text-sm font-medium text-fg">{f.label}</label>
+            <label className="mb-1.5 block text-sm font-medium text-fg">{t(f.labelKey)}</label>
             {f.multiline ? (
               <textarea
                 rows={2}
@@ -559,8 +602,8 @@ export default function AdminEmailPage() {
             )}
             {/* Подсказка про подстановки — только пока поле правится: в чужом
                 письме наших {brand}/{minutes} нет, и звать их вписывать нельзя. */}
-            {f.hint && editable(f.key) && (
-              <p className="mt-1 text-xs text-fg-subtle">{f.hint}</p>
+            {f.hintKey && editable(f.key) && (
+              <p className="mt-1 text-xs text-fg-subtle">{t(f.hintKey)}</p>
             )}
             {note(f.key)}
             {warn(f.key)}
@@ -571,19 +614,13 @@ export default function AdminEmailPage() {
       {/* Тест-отправка */}
       {can("test") && (
         <section className="rounded-2xl border border-border-subtle bg-bg-subtle p-5">
-          <h2 className="text-sm font-semibold text-fg">Проверить отправку</h2>
+          <h2 className="text-sm font-semibold text-fg">{t("adm.email.test_title")}</h2>
           <p className="mt-0.5 text-xs text-fg-muted">
-            {anyEditable ? (
-              <>
-                Отправит тестовое письмо с кодом <span className="text-fg">123456</span> на
-                указанный адрес (текущим сохранённым шаблоном).
-              </>
-            ) : (
-              <>
-                Отправит на указанный адрес настоящее письмо — тем шаблоном, которым бэкенд шлёт
-                его людям. Проверяется именно отправка: дошло или нет.
-              </>
-            )}
+            {anyEditable
+              ? withNodes(t("adm.email.test_hint"), {
+                  code: <span className="text-fg">123456</span>,
+                })
+              : t("adm.email.test_hint_real")}
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <input
@@ -599,7 +636,7 @@ export default function AdminEmailPage() {
               className="inline-flex items-center gap-2 rounded-xl border border-border-subtle bg-bg px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-overlay disabled:opacity-50"
             >
               <Send className="h-4 w-4" />
-              {sending ? "Отправка…" : "Отправить тест"}
+              {sending ? t("adm.email.sending") : t("adm.email.send_test")}
             </button>
           </div>
           {testMsg && (

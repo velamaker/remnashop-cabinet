@@ -6,6 +6,8 @@ import {
   type ExtraTrafficConfig,
 } from "@/api/admin";
 import { ApiError } from "@/types/api";
+import { useI18n } from "@/i18n/I18nContext";
+import { pluralFor } from "@/lib/pluralRu";
 import { formatAdminMoney } from "@/lib/adminMoney";
 
 /**
@@ -33,12 +35,14 @@ const INPUT =
 const BUTTON =
   "inline-flex shrink-0 items-center gap-2 rounded-xl border border-border-subtle px-3 py-2 text-sm font-medium text-fg hover:bg-bg disabled:opacity-50";
 
-const STRATEGY_RU: Record<string, string> = {
-  NO_RESET: "без обновления",
-  DAY: "каждый день",
-  WEEK: "каждую неделю",
-  MONTH: "1-го числа",
-  MONTH_ROLLING: "раз в месяц от даты создания",
+// Код стратегии панели → КЛЮЧ подписи. Сам текст живёт в словаре: админка русская
+// и английская, а коды (DAY, MONTH_ROLLING) приходят из RemnaWave и не переводятся.
+const STRATEGY_KEY: Record<string, string> = {
+  NO_RESET: "adm.extratraffic.strategy_no_reset",
+  DAY: "adm.extratraffic.strategy_day",
+  WEEK: "adm.extratraffic.strategy_week",
+  MONTH: "adm.extratraffic.strategy_month",
+  MONTH_ROLLING: "adm.extratraffic.strategy_month_rolling",
 };
 
 function Toggle({
@@ -109,6 +113,7 @@ function NumberField({
 }
 
 export function AdminExtraTrafficPage() {
+  const { lang, t } = useI18n();
   const [data, setData] = useState<ExtraTrafficAdminResponse | null>(null);
   const [form, setForm] = useState<ExtraTrafficConfig | null>(null);
   const [saving, setSaving] = useState(false);
@@ -122,8 +127,10 @@ export function AdminExtraTrafficPage() {
         setData(res);
         setForm(res.config);
       })
-      .catch((e) => setError(e instanceof ApiError ? e.detail : "Не удалось загрузить настройки"));
-  }, []);
+      .catch((e) =>
+        setError(e instanceof ApiError ? e.detail : t("adm.extratraffic.load_failed")),
+      );
+  }, [t]);
 
   const save = async () => {
     if (!form) return;
@@ -138,18 +145,18 @@ export function AdminExtraTrafficPage() {
       );
       setNote(
         res.effective_enabled
-          ? "Сохранено. Докупка трафика открыта."
-          : "Сохранено. Докупка закрыта: включите тумблер, задайте цену и объём.",
+          ? t("adm.extratraffic.saved_open")
+          : t("adm.extratraffic.saved_closed"),
       );
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Не удалось сохранить");
+      setError(e instanceof ApiError ? e.detail : t("adm.extratraffic.save_failed"));
     } finally {
       setSaving(false);
     }
   };
 
   if (error && !form) return <p className="text-sm text-danger">{error}</p>;
-  if (!form || !data) return <p className="text-sm text-fg-muted">Загрузка…</p>;
+  if (!form || !data) return <p className="text-sm text-fg-muted">{t("adm.extratraffic.loading")}</p>;
 
   const summary = data.summary ?? {};
   const set = (patch: Partial<ExtraTrafficConfig>) => setForm({ ...form, ...patch });
@@ -158,72 +165,70 @@ export function AdminExtraTrafficPage() {
     <div className="flex flex-col gap-5">
       <div className="flex items-center gap-3">
         <Gauge className="h-5 w-5 text-accent" />
-        <h1 className="text-xl font-semibold text-fg">Докупка трафика</h1>
+        <h1 className="text-xl font-semibold text-fg">{t("adm.extratraffic.title")}</h1>
       </div>
 
       <section className={SECTION}>
         <Toggle
-          label="Продавать докупку трафика"
-          hint="Человек добавляет объём к ТЕКУЩЕМУ периоду трафика за фиксированную цену. Прибавка действует до ближайшего обновления трафика по правилам тарифа, а не до конца подписки."
+          label={t("adm.extratraffic.enable")}
+          hint={t("adm.extratraffic.enable_hint")}
           checked={form.enabled}
           onChange={(enabled) => set({ enabled })}
         />
         {form.enabled && form.price_rub == null && (
           <p className="mt-2 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-fg">
-            Цена не задана — продажи всё равно закрыты. Укажите цену ниже.
+            {t("adm.extratraffic.no_price_warn")}
           </p>
         )}
         {form.enabled && data.short_window && (
           <p className="mt-2 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-fg">
-            У части подписок трафик обновляется каждый день или каждую неделю — там прибавка
-            проживёт меньше суток или недели. Цена за неё та же, что за месячную: подумайте,
-            стоит ли продавать её на таких тарифах.
+            {t("adm.extratraffic.short_window_warn")}
           </p>
         )}
 
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <NumberField
             id="etraffic-gb"
-            label="Сколько ГБ даёт одна покупка"
-            hint="Объём фиксированный. Докупок за период сколько угодно — они складываются."
+            label={t("adm.extratraffic.gb_label")}
+            hint={t("adm.extratraffic.gb_hint")}
             value={form.gb_per_purchase}
             onChange={(v) => set({ gb_per_purchase: v ?? 1 })}
           />
           <NumberField
             id="etraffic-price"
-            label="Цена одной покупки, ₽"
-            hint="Пусто — продажи закрыты. От остатка времени цена НЕ зависит: покупается объём, а не срок."
+            label={t("adm.extratraffic.price_label")}
+            hint={t("adm.extratraffic.price_hint")}
             value={form.price_rub}
             onChange={(price_rub) => set({ price_rub })}
             allowEmpty
           />
           <NumberField
             id="etraffic-min"
-            label="Минимальная сумма счёта, ₽"
-            hint="Защита от копеечных счетов и минимумов платёжных шлюзов."
+            label={t("adm.extratraffic.min_amount_label")}
+            hint={t("adm.extratraffic.min_amount_hint")}
             value={form.min_amount_rub}
             onChange={(v) => set({ min_amount_rub: v ?? 1 })}
           />
           <NumberField
             id="etraffic-percent"
-            label="Показывать на Главной с расхода, %"
-            hint="Ниже этого порога кабинет не предлагает докупку и не делает запрос. При «трафик закончился» карточка показывается всегда."
+            label={t("adm.extratraffic.percent_label")}
+            hint={t("adm.extratraffic.percent_hint")}
             value={form.show_from_percent}
             onChange={(v) => set({ show_from_percent: v ?? 0 })}
             allowEmpty
           />
           <NumberField
             id="etraffic-hours"
-            label="Не продавать, если до обновления меньше, ч."
-            hint="Защита от «заплатил за час»: перед самым обновлением трафик и так придёт бесплатно."
+            label={t("adm.extratraffic.hours_label")}
+            hint={t("adm.extratraffic.hours_hint")}
             value={form.min_hours_left}
             onChange={(v) => set({ min_hours_left: v ?? 0 })}
             allowEmpty
           />
           <NumberField
             id="etraffic-cap"
-            label="Потолок докупок на один период, ГБ"
-            hint="Ограничение техническое, а не коммерческое: защита от опечатки в цене и от зацикленной кнопки."
+            label={t("adm.extratraffic.cap_label")}
+            hint={t("adm.extratraffic.cap_hint")}
             value={form.max_gb_per_window}
             onChange={(v) => set({ max_gb_per_window: v ?? 1 })}
           />
@@ -231,24 +236,24 @@ export function AdminExtraTrafficPage() {
 
         <div className="mt-4 border-t border-border-subtle pt-2">
           <Toggle
-            label="Сообщать пользователю о покупке и об окончании прибавки"
+            label={t("adm.extratraffic.notify_users")}
             checked={form.notify_users}
             onChange={(notify_users) => set({ notify_users })}
           />
           <Toggle
-            label="Писать «трафик закончился — можно докупить»"
-            hint="Отдельное сообщение рядом с обычным уведомлением бота, с датой обновления трафика и ссылкой в кабинет. Уходит только тем, кто действительно может купить, и один раз на период."
+            label={t("adm.extratraffic.notify_limited")}
+            hint={t("adm.extratraffic.notify_limited_hint")}
             checked={form.notify_limited}
             onChange={(notify_limited) => set({ notify_limited })}
           />
           <Toggle
-            label="Сообщать админам о каждой докупке"
+            label={t("adm.extratraffic.notify_admins")}
             checked={form.notify_admins}
             onChange={(notify_admins) => set({ notify_admins })}
           />
           <Toggle
-            label="При отзыве прибавки возвращать деньги на баланс"
-            hint="Выключено по умолчанию. Это значение подставляется в окно отзыва в карточке пользователя — там решение принимается каждый раз отдельно."
+            label={t("adm.extratraffic.refund")}
+            hint={t("adm.extratraffic.refund_hint")}
             checked={form.refund_on_revoke}
             onChange={(refund_on_revoke) => set({ refund_on_revoke })}
           />
@@ -256,7 +261,7 @@ export function AdminExtraTrafficPage() {
 
         <div className="mt-4 flex items-center gap-3">
           <button onClick={save} disabled={saving} className={BUTTON}>
-            {saving ? "…" : "Сохранить"}
+            {saving ? "…" : t("adm.extratraffic.save")}
           </button>
           {note && <span className="text-xs text-fg-muted">{note}</span>}
           {error && <span className="text-xs text-danger">{error}</span>}
@@ -265,21 +270,19 @@ export function AdminExtraTrafficPage() {
 
       {data.hint.length > 0 && (
         <section className={SECTION}>
-          <h3 className="text-sm font-semibold text-fg">Сколько сейчас стоит шаг по трафику</h3>
-          <p className="mt-0.5 text-xs text-fg-muted">
-            Разница между соседними тарифами за 30 дней. В неё входят ещё и устройства, а объём
-            тарифа остаётся навсегда — поэтому докупку обычно ставят заметно дешевле шага.
-          </p>
+          <h3 className="text-sm font-semibold text-fg">{t("adm.extratraffic.step_title")}</h3>
+          <p className="mt-0.5 text-xs text-fg-muted">{t("adm.extratraffic.step_desc")}</p>
           <ul className="mt-3 flex flex-col gap-1.5">
             {data.hint.map((h) => (
               <li key={`${h.from_gb}-${h.to_gb}`} className="text-sm text-fg">
-                {h.from_gb} → {h.to_gb} ГБ —{" "}
+                {t("adm.extratraffic.step_range", { from: h.from_gb, to: h.to_gb })} —{" "}
                 <span className="tabular font-medium">{formatAdminMoney("RUB", h.diff_30d_rub)}</span>
                 {h.device_diff !== 0 && (
                   <span className="text-fg-muted">
                     {" "}
-                    (и {h.device_diff > 0 ? "+" : ""}
-                    {h.device_diff} устр.)
+                    {t("adm.extratraffic.step_devices", {
+                      n: `${h.device_diff > 0 ? "+" : ""}${h.device_diff}`,
+                    })}
                   </span>
                 )}
               </li>
@@ -290,17 +293,24 @@ export function AdminExtraTrafficPage() {
 
       {data.strategies.length > 0 && (
         <section className={SECTION}>
-          <h3 className="text-sm font-semibold text-fg">Когда у людей обновляется трафик</h3>
-          <p className="mt-0.5 text-xs text-fg-muted">
-            До этого момента и живёт прибавка. Считается по правилам панели и по дате создания
-            пользователя в ней — то же число видят кабинет, сообщение «трафик закончился» и
-            карточка подписки в боте.
-          </p>
+          <h3 className="text-sm font-semibold text-fg">{t("adm.extratraffic.strategies_title")}</h3>
+          <p className="mt-0.5 text-xs text-fg-muted">{t("adm.extratraffic.strategies_desc")}</p>
           <ul className="mt-3 flex flex-col gap-1.5">
             {data.strategies.map((s) => (
               <li key={s.strategy} className="text-sm text-fg">
-                {STRATEGY_RU[s.strategy] ?? s.strategy} —{" "}
-                <span className="tabular font-medium">{s.subscriptions}</span> подписок
+                {STRATEGY_KEY[s.strategy] ? t(STRATEGY_KEY[s.strategy]!) : s.strategy} —{" "}
+                <span className="tabular font-medium">
+                  {t(
+                    pluralFor(
+                      lang,
+                      s.subscriptions,
+                      "adm.extratraffic.subs_one",
+                      "adm.extratraffic.subs_few",
+                      "adm.extratraffic.subs_many",
+                    ),
+                    { n: s.subscriptions },
+                  )}
+                </span>
               </li>
             ))}
           </ul>
@@ -308,43 +318,37 @@ export function AdminExtraTrafficPage() {
       )}
 
       <section className={SECTION}>
-        <h3 className="text-sm font-semibold text-fg">За 30 дней</h3>
+        <h3 className="text-sm font-semibold text-fg">{t("adm.extratraffic.stats_title")}</h3>
         <div className="mt-3 grid gap-3 sm:grid-cols-5">
           <div>
-            <p className="text-xs text-fg-muted">Докупок</p>
+            <p className="text-xs text-fg-muted">{t("adm.extratraffic.stat_purchases")}</p>
             <p className="tabular text-lg font-semibold text-fg">{summary.applied_30d ?? 0}</p>
           </div>
           <div>
-            <p className="text-xs text-fg-muted">Продано, ГБ</p>
+            <p className="text-xs text-fg-muted">{t("adm.extratraffic.stat_gb")}</p>
             <p className="tabular text-lg font-semibold text-fg">{summary.gb_30d ?? 0}</p>
           </div>
           <div>
-            <p className="text-xs text-fg-muted">Сумма</p>
+            <p className="text-xs text-fg-muted">{t("adm.extratraffic.stat_amount")}</p>
             <p className="tabular text-lg font-semibold text-fg">
               {formatAdminMoney("RUB", summary.amount_30d ?? 0)}
             </p>
           </div>
           <div>
-            <p className="text-xs text-fg-muted">Действует сейчас</p>
+            <p className="text-xs text-fg-muted">{t("adm.extratraffic.stat_active")}</p>
             <p className="tabular text-lg font-semibold text-fg">
               {summary.active_grants ?? 0}
               <span className="ml-1 text-xs font-normal text-fg-muted">
-                ({summary.active_gb ?? 0} ГБ)
+                {t("adm.extratraffic.active_gb", { n: summary.active_gb ?? 0 })}
               </span>
             </p>
           </div>
           <div>
-            <p className="text-xs text-fg-muted">Ждут применения</p>
+            <p className="text-xs text-fg-muted">{t("adm.extratraffic.stat_pending")}</p>
             <p className="tabular text-lg font-semibold text-fg">{summary.credited_open ?? 0}</p>
           </div>
         </div>
-        <p className="mt-4 text-xs text-fg-muted">
-          Прибавка добавляется к лимиту текущего периода и снимается, когда панель обновляет
-          трафик. При продлении подписки она гаснет сама: продление и так обнуляет расход и
-          выдаёт полный объём тарифа. При смене тарифа сгорает — человека предупреждают об этом
-          на экране оплаты. Пауза и резерв закрывают прибавку, не трогая лимит в панели.
-          Отозвать докупку вручную — в карточке пользователя.
-        </p>
+        <p className="mt-4 text-xs text-fg-muted">{t("adm.extratraffic.footer")}</p>
       </section>
     </div>
   );

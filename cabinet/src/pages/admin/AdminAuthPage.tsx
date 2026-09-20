@@ -2,6 +2,27 @@ import { useEffect, useState } from "react";
 import { Save, KeyRound, Copy, Check, AlertTriangle } from "lucide-react";
 import { authSettingsAdminApi, type AuthSettings } from "@/api/authSettings";
 import { ApiError } from "@/types/api";
+import { useT } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
+
+// Одна фраза — один ключ: выделение <b>…</b> и чип с командой <code>…</code>
+// живут ВНУТРИ перевода. Так переводчик сам решает, что выделить и в каком
+// порядке идут слова, а предложение не собирается из кусков.
+function withMarkup(s: string) {
+  return s.split(/(<b>.*?<\/b>|<code>.*?<\/code>)/g).map((part, i) =>
+    part.startsWith("<b>") ? (
+      <span key={i} className="text-fg">
+        {part.slice(3, -4)}
+      </span>
+    ) : part.startsWith("<code>") ? (
+      <code key={i} className="rounded bg-bg-subtle px-1 text-fg">
+        {part.slice(6, -7)}
+      </code>
+    ) : (
+      part
+    ),
+  );
+}
 
 // Включение входа/привязки через Telegram (OIDC) прямо из админки: Client ID и
 // Secret из @BotFather → Web Login сохраняются в assets/auth.json и применяются
@@ -20,6 +41,7 @@ import { ApiError } from "@/types/api";
 // (её дефект, адаптером не чинится), поэтому подпись у поля печатается ВСЕГДА,
 // а не только пока поле заперто.
 export default function AdminAuthPage() {
+  const t = useT();
   const [s, setS] = useState<AuthSettings | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [clientId, setClientId] = useState("");
@@ -41,7 +63,11 @@ export default function AdminAuthPage() {
     authSettingsAdminApi
       .get()
       .then(apply)
-      .catch((e) => setMsg({ type: "error", text: e instanceof ApiError ? e.detail : "Ошибка" }))
+      // translate, а не t: иначе хук попадёт в зависимости эффекта и смена
+      // языка перезапросила бы настройки.
+      .catch((e) =>
+        setMsg({ type: "error", text: e instanceof ApiError ? e.detail : translate("adm.auth.err_generic") }),
+      )
       .finally(() => setLoading(false));
   }, []);
 
@@ -104,9 +130,12 @@ export default function AdminAuthPage() {
         body.telegram_oidc_client_secret = clientSecret; // "" = не менять
       const next = await authSettingsAdminApi.update(body);
       apply(next);
-      setMsg({ type: "success", text: "Сохранено" });
+      setMsg({ type: "success", text: t("adm.auth.saved") });
     } catch (e) {
-      setMsg({ type: "error", text: e instanceof ApiError ? e.detail : "Ошибка сохранения" });
+      setMsg({
+        type: "error",
+        text: e instanceof ApiError ? e.detail : t("adm.auth.err_save"),
+      });
     } finally {
       setSaving(false);
     }
@@ -135,7 +164,7 @@ export default function AdminAuthPage() {
       <div className="sticky top-0 z-10 -mx-5 flex items-center justify-between border-b border-border-subtle bg-bg/80 px-5 py-3 backdrop-blur-md md:-mx-8 md:px-8">
         <h1 className="flex items-center gap-2 text-xl font-bold text-fg md:text-2xl">
           <KeyRound className="h-5 w-5 text-accent" />
-          Вход через Telegram
+          {t("adm.auth.title")}
         </h1>
         {anyEditable && (
           <button
@@ -144,32 +173,20 @@ export default function AdminAuthPage() {
             className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-accent-fg transition-opacity hover:opacity-90 disabled:opacity-60"
           >
             <Save className="h-4 w-4" />
-            {saving ? "Сохранение…" : "Сохранить"}
+            {saving ? t("adm.auth.saving") : t("adm.auth.save")}
           </button>
         )}
       </div>
 
-      {cantEnable ? (
-        <p className="text-sm text-fg-muted">
-          На этом бэкенде вход через Telegram работает{" "}
-          <span className="text-fg">классическим Login Widget</span> — он включён и настраивать
-          его здесь нечего. Вход по <span className="text-fg">OpenID Connect</span> недоступен,
-          причина — под полями.
-        </p>
-      ) : (
-        <p className="text-sm text-fg-muted">
-          Вход и <span className="text-fg">привязка</span> аккаунта через Telegram работают по
-          OpenID Connect. Включите OIDC и вставьте <span className="text-fg">Client ID</span>
-          {secretUsable ? (
-            <>
-              {" "}
-              и <span className="text-fg">Secret</span>
-            </>
-          ) : null}{" "}
-          из <span className="text-fg">@BotFather → Bot Settings → Web Login</span>. Применяется
-          сразу, без переустановки.
-        </p>
-      )}
+      <p className="text-sm text-fg-muted">
+        {withMarkup(
+          cantEnable
+            ? t("adm.auth.intro_locked")
+            : secretUsable
+              ? t("adm.auth.intro_secret")
+              : t("adm.auth.intro"),
+        )}
+      </p>
 
       <section className="space-y-4 rounded-2xl border border-border-subtle bg-bg-subtle p-5">
         <div className="flex items-center justify-between">
@@ -180,7 +197,7 @@ export default function AdminAuthPage() {
           <span
             className={`text-xs font-medium ${s?.telegram_oidc_active ? "text-success" : "text-fg-subtle"}`}
           >
-            {s?.telegram_oidc_active ? "● Активно" : "○ Выключено"}
+            {s?.telegram_oidc_active ? t("adm.auth.status_active") : t("adm.auth.status_off")}
           </span>
         </div>
 
@@ -197,7 +214,7 @@ export default function AdminAuthPage() {
                 disabled={ro("telegram_oidc_enabled")}
                 onChange={(e) => setEnabled(e.target.checked)}
               />
-              Включить вход и привязку через Telegram (OIDC)
+              {t("adm.auth.enable")}
             </label>
             {note("telegram_oidc_enabled")}
           </div>
@@ -211,7 +228,7 @@ export default function AdminAuthPage() {
               value={clientId}
               disabled={ro("telegram_oidc_client_id")}
               onChange={(e) => setClientId(e.target.value)}
-              placeholder="напр. 7123456789"
+              placeholder={t("adm.auth.ph_client_id")}
               className={`input w-full ${
                 ro("telegram_oidc_client_id") ? "cursor-not-allowed opacity-60" : ""
               }`}
@@ -230,7 +247,7 @@ export default function AdminAuthPage() {
               disabled={ro("telegram_oidc_client_secret")}
               onChange={(e) => setClientSecret(e.target.value)}
               placeholder={
-                s?.has_secret ? "•••••• (сохранён) — пусто, чтобы не менять" : "secret из BotFather"
+                s?.has_secret ? t("adm.auth.ph_secret_saved") : t("adm.auth.ph_secret")
               }
               className={`input w-full ${
                 ro("telegram_oidc_client_secret") ? "cursor-not-allowed opacity-60" : ""
@@ -245,7 +262,7 @@ export default function AdminAuthPage() {
         {s?.redirect_uri && (
           <div>
             <label className="mb-1.5 block text-sm font-medium text-fg">
-              Redirect URI (добавить в BotFather → Web Login)
+              {t("adm.auth.redirect_label")}
             </label>
             <div className="flex gap-2">
               <input type="text" value={s.redirect_uri} readOnly className="input flex-1 font-mono text-xs" />
@@ -254,13 +271,10 @@ export default function AdminAuthPage() {
                 className="inline-flex items-center gap-1.5 rounded-xl border border-border-subtle bg-bg px-3 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-overlay"
               >
                 {copied ? <Check className="h-4 w-4 text-success" /> : <Copy className="h-4 w-4" />}
-                {copied ? "Скопировано" : "Копировать"}
+                {copied ? t("adm.auth.copied") : t("adm.auth.copy")}
               </button>
             </div>
-            <p className="mt-1 text-xs text-fg-subtle">
-              Разовый шаг: в @BotFather → Bot Settings → Web Login → Add Redirect URL вставьте этот
-              адрес. Без него Telegram не вернёт пользователя после входа.
-            </p>
+            <p className="mt-1 text-xs text-fg-subtle">{t("adm.auth.redirect_hint")}</p>
           </div>
         )}
 
@@ -271,20 +285,9 @@ export default function AdminAuthPage() {
         )}
       </section>
 
-      {cantEnable ? (
-        <p className="text-xs text-fg-subtle">
-          Классический Login Widget требует разовой привязки домена кабинета в @BotFather
-          (<code className="rounded bg-bg-subtle px-1 text-fg">/setdomain</code>) — это делается в
-          самом Telegram, тумблером не настраивается. Без неё кнопка Telegram на странице входа
-          скажет «Bot domain invalid».
-        </p>
-      ) : (
-        <p className="text-xs text-fg-subtle">
-          Если OIDC выключен, кабинет пытается показать классический Login Widget — но он требует
-          отдельной привязки домена в @BotFather (<code className="rounded bg-bg-subtle px-1 text-fg">/setdomain</code>),
-          что тумблером не настраивается. Рекомендуем OIDC.
-        </p>
-      )}
+      <p className="text-xs text-fg-subtle">
+        {withMarkup(cantEnable ? t("adm.auth.widget_note_locked") : t("adm.auth.widget_note"))}
+      </p>
     </div>
   );
 }

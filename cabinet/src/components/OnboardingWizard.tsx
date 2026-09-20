@@ -100,7 +100,7 @@ export function OnboardingWizard({ subUrl }: { subUrl: string }) {
           <p className="mb-2 text-sm font-medium text-fg">{t("onb.step2")}</p>
           <div className="rounded-xl border border-border-subtle bg-bg p-3">
             <p className="font-semibold text-fg">{app.name}</p>
-            <p className="mt-0.5 text-xs text-fg-muted">{app.desc}</p>
+            <p className="mt-0.5 text-xs text-fg-muted">{t(app.desc)}</p>
             {installUrl && (
               <a
                 href={installUrl}

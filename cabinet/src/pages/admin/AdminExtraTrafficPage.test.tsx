@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ExtraTrafficAdminResponse } from "@/api/admin";
+import { I18nProvider } from "@/i18n/I18nContext";
+import { STORAGE_KEY } from "@/i18n/config";
+import { setActiveLang, translate } from "@/i18n/translate";
 
 /**
  * Страница «Докупка трафика». Запираем ровно то, что владелец должен увидеть ДО
@@ -20,6 +23,20 @@ vi.mock("@/api/admin", () => ({
 }));
 
 const { AdminExtraTrafficPage } = await import("./AdminExtraTrafficPage");
+
+// Страница больше не хранит русский текст в коде: подписи приходят из словаря по
+// ключам adm.extratraffic.*. Тест сверяется с тем же словарём (и держит админку на
+// русском) — иначе он проверял бы не интерфейс, а копию строки.
+const ru = (key: string, vars?: Record<string, string | number>) => translate(key, vars, "ru");
+const rx = (key: string, vars?: Record<string, string | number>) =>
+  new RegExp(ru(key, vars).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+
+const renderPage = () =>
+  render(
+    <I18nProvider>
+      <AdminExtraTrafficPage />
+    </I18nProvider>,
+  );
 
 const answer = (over: Partial<ExtraTrafficAdminResponse> = {}): ExtraTrafficAdminResponse => ({
   config: {
@@ -44,6 +61,8 @@ const answer = (over: Partial<ExtraTrafficAdminResponse> = {}): ExtraTrafficAdmi
 });
 
 beforeEach(() => {
+  localStorage.setItem(STORAGE_KEY, "ru");
+  setActiveLang("ru");
   get.mockReset();
   update.mockReset();
   get.mockResolvedValue(answer());
@@ -52,15 +71,15 @@ afterEach(cleanup);
 
 describe("AdminExtraTrafficPage", () => {
   it("по умолчанию продажи выключены — тумблер снят", async () => {
-    render(<AdminExtraTrafficPage />);
-    const toggle = await screen.findByLabelText(/Продавать докупку трафика/);
+    renderPage();
+    const toggle = await screen.findByLabelText(rx("adm.extratraffic.enable"));
     expect((toggle as HTMLInputElement).checked).toBe(false);
   });
 
   it("включили тумблер без цены — страница честно говорит, что продаж всё равно нет", async () => {
     get.mockResolvedValue(answer({ config: { ...answer().config, enabled: true, price_rub: null } }));
-    render(<AdminExtraTrafficPage />);
-    expect(await screen.findByText(/Цена не задана/)).toBeTruthy();
+    renderPage();
+    expect(await screen.findByText(rx("adm.extratraffic.no_price_warn"))).toBeTruthy();
   });
 
   it("короткие окна обновления — предупреждение на виду", async () => {
@@ -71,35 +90,42 @@ describe("AdminExtraTrafficPage", () => {
         strategies: [{ strategy: "DAY", subscriptions: 3 }],
       }),
     );
-    render(<AdminExtraTrafficPage />);
-    expect(await screen.findByText(/каждый день или каждую неделю/)).toBeTruthy();
+    renderPage();
+    expect(await screen.findByText(rx("adm.extratraffic.short_window_warn"))).toBeTruthy();
   });
 
   it("длинные окна — лишнего предупреждения нет", async () => {
     get.mockResolvedValue(answer({ config: { ...answer().config, enabled: true } }));
-    render(<AdminExtraTrafficPage />);
-    await screen.findByLabelText(/Продавать докупку трафика/);
-    expect(screen.queryByText(/каждый день или каждую неделю/)).toBeNull();
+    renderPage();
+    await screen.findByLabelText(rx("adm.extratraffic.enable"));
+    expect(screen.queryByText(rx("adm.extratraffic.short_window_warn"))).toBeNull();
   });
 
   it("возврат при отзыве по умолчанию выключен", async () => {
-    render(<AdminExtraTrafficPage />);
-    const toggle = await screen.findByLabelText(/возвращать деньги на баланс/);
+    renderPage();
+    const toggle = await screen.findByLabelText(rx("adm.extratraffic.refund"));
     expect((toggle as HTMLInputElement).checked).toBe(false);
   });
 
   it("сохранение отправляет ровно то, что в форме", async () => {
     update.mockResolvedValue({ config: { ...answer().config, enabled: true }, effective_enabled: true });
-    render(<AdminExtraTrafficPage />);
-    fireEvent.click(await screen.findByLabelText(/Продавать докупку трафика/));
-    fireEvent.click(screen.getByText("Сохранить"));
+    renderPage();
+    fireEvent.click(await screen.findByLabelText(rx("adm.extratraffic.enable")));
+    fireEvent.click(screen.getByText(ru("adm.extratraffic.save")));
     await waitFor(() => expect(update).toHaveBeenCalled());
     expect(update.mock.calls[0]![0]).toMatchObject({ enabled: true, gb_per_purchase: 50, price_rub: 50 });
-    expect(await screen.findByText(/Докупка трафика открыта/)).toBeTruthy();
+    expect(await screen.findByText(rx("adm.extratraffic.saved_open"))).toBeTruthy();
   });
 
   it("подсказка о шаге тарифов показывает и разницу по устройствам", async () => {
-    render(<AdminExtraTrafficPage />);
-    expect(await screen.findByText(/200 → 300 ГБ/)).toBeTruthy();
+    renderPage();
+    expect(
+      await screen.findByText(rx("adm.extratraffic.step_range", { from: 200, to: 300 }), {
+        exact: false,
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(rx("adm.extratraffic.step_devices", { n: "+1" }), { exact: false }),
+    ).toBeTruthy();
   });
 });

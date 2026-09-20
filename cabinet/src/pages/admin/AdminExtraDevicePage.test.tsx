@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { I18nProvider } from "@/i18n/I18nContext";
+import { STORAGE_KEY } from "@/i18n/config";
+import { setActiveLang, translate } from "@/i18n/translate";
 
 // Страница настроек денежной функции: что именно уходит на бэкенд и что видит
 // владелец, пока цена не задана. Продажи по умолчанию ВЫКЛЮЧЕНЫ — выкатка образа
@@ -14,6 +17,20 @@ vi.mock("@/api/admin", () => ({
 }));
 
 const { AdminExtraDevicePage } = await import("./AdminExtraDevicePage");
+
+// Подписи страница больше не хранит в коде: они приходят из словаря по ключам
+// adm.extradevice.*. Тест сверяется с тем же словарём (и держит админку на
+// русском), иначе он проверял бы не интерфейс, а копию строки.
+const ru = (key: string, vars?: Record<string, string | number>) => translate(key, vars, "ru");
+const rx = (key: string, vars?: Record<string, string | number>) =>
+  new RegExp(ru(key, vars).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+
+const renderPage = () =>
+  render(
+    <I18nProvider>
+      <AdminExtraDevicePage />
+    </I18nProvider>,
+  );
 
 const config = (over: Record<string, unknown> = {}) => ({
   enabled: false,
@@ -36,6 +53,8 @@ const answer = (over: Record<string, unknown> = {}) => ({
 });
 
 beforeEach(() => {
+  localStorage.setItem(STORAGE_KEY, "ru");
+  setActiveLang("ru");
   getMock.mockReset();
   updateMock.mockReset();
   getMock.mockResolvedValue(answer());
@@ -44,44 +63,54 @@ afterEach(cleanup);
 
 describe("AdminExtraDevicePage", () => {
   it("цена владельца видна, продажи по умолчанию выключены", async () => {
-    render(<AdminExtraDevicePage />);
-    const price = (await screen.findByLabelText(/Цена места под устройство/)) as HTMLInputElement;
+    renderPage();
+    const price = (await screen.findByLabelText(
+      rx("adm.extradevice.price_label"),
+    )) as HTMLInputElement;
     expect(price.value).toBe("100");
-    const toggle = screen.getByLabelText(/Продавать докупку/) as HTMLInputElement;
+    const toggle = screen.getByLabelText(rx("adm.extradevice.sell_label")) as HTMLInputElement;
     expect(toggle.checked).toBe(false);
   });
 
   it("включили без цены — предупреждение, что продажи всё равно закрыты", async () => {
     getMock.mockResolvedValue(answer({ config: config({ enabled: true, price_rub_30d: null }) }));
-    render(<AdminExtraDevicePage />);
+    renderPage();
     await waitFor(() =>
-      expect(document.body.textContent).toContain("Цена не задана"),
+      expect(document.body.textContent).toContain(ru("adm.extradevice.no_price_warn")),
     );
   });
 
   it("сохранение шлёт числа, а пустая цена уходит как null", async () => {
     updateMock.mockResolvedValue({ config: config({ price_rub_30d: null }), effective_enabled: false });
-    render(<AdminExtraDevicePage />);
-    const price = (await screen.findByLabelText(/Цена места под устройство/)) as HTMLInputElement;
+    renderPage();
+    const price = (await screen.findByLabelText(
+      rx("adm.extradevice.price_label"),
+    )) as HTMLInputElement;
     fireEvent.change(price, { target: { value: "" } });
-    fireEvent.change(screen.getByLabelText(/Максимум ОДНОВРЕМЕННО докупленных мест/), { target: { value: "3" } });
-    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    fireEvent.change(screen.getByLabelText(rx("adm.extradevice.max_extra_label")), {
+      target: { value: "3" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: ru("adm.extradevice.save") }));
     await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
     const body = updateMock.mock.calls[0]![0] as Record<string, unknown>;
     expect(body.price_rub_30d).toBeNull();
     expect(body.max_extra).toBe(3);
-    await waitFor(() => expect(document.body.textContent).toContain("Докупка закрыта"));
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(ru("adm.extradevice.saved_closed")),
+    );
   });
 
   it("отключение устройств включено (решение владельца «отключить и предложить снова»)", async () => {
-    render(<AdminExtraDevicePage />);
-    const toggle = (await screen.findByLabelText(/Отключать устройства/)) as HTMLInputElement;
+    renderPage();
+    const toggle = (await screen.findByLabelText(
+      rx("adm.extradevice.remove_label"),
+    )) as HTMLInputElement;
     expect(toggle.checked).toBe(true);
   });
 
   it("подсказка о шаге тарифов показывает и трафик — цену ставит человек, не формула", async () => {
-    render(<AdminExtraDevicePage />);
+    renderPage();
     await waitFor(() => expect(document.body.textContent).toContain("150 ₽"));
-    expect(document.body.textContent).toContain("+50 ГБ");
+    expect(document.body.textContent).toContain(ru("adm.extradevice.hint_traffic", { gb: "+50" }));
   });
 });

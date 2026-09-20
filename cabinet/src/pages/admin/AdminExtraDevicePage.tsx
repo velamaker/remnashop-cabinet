@@ -7,6 +7,7 @@ import {
 } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { formatAdminMoney } from "@/lib/adminMoney";
+import { useT } from "@/i18n/I18nContext";
 
 /**
  * «Докупка устройств» — настройки продажи +1 места к текущей подписке.
@@ -97,6 +98,7 @@ function NumberField({
 }
 
 export function AdminExtraDevicePage() {
+  const t = useT();
   const [data, setData] = useState<ExtraDeviceAdminResponse | null>(null);
   const [form, setForm] = useState<ExtraDeviceConfig | null>(null);
   const [saving, setSaving] = useState(false);
@@ -110,7 +112,11 @@ export function AdminExtraDevicePage() {
         setData(res);
         setForm(res.config);
       })
-      .catch((e) => setError(e instanceof ApiError ? e.detail : "Не удалось загрузить настройки"));
+      .catch((e) =>
+        setError(e instanceof ApiError ? e.detail : t("adm.extradevice.load_error")),
+      );
+    // перевод берём на момент загрузки; перезапрашивать настройки при смене языка не нужно
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const save = async () => {
@@ -124,18 +130,18 @@ export function AdminExtraDevicePage() {
       setData((prev) => (prev ? { ...prev, config: res.config, effective_enabled: res.effective_enabled } : prev));
       setNote(
         res.effective_enabled
-          ? "Сохранено. Докупка открыта."
-          : "Сохранено. Докупка закрыта: включите тумблер и задайте цену.",
+          ? t("adm.extradevice.saved_open")
+          : t("adm.extradevice.saved_closed"),
       );
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Не удалось сохранить");
+      setError(e instanceof ApiError ? e.detail : t("adm.extradevice.save_error"));
     } finally {
       setSaving(false);
     }
   };
 
   if (error && !form) return <p className="text-sm text-danger">{error}</p>;
-  if (!form || !data) return <p className="text-sm text-fg-muted">Загрузка…</p>;
+  if (!form || !data) return <p className="text-sm text-fg-muted">{t("adm.extradevice.loading")}</p>;
 
   const summary = data.summary ?? {};
   const set = (patch: Partial<ExtraDeviceConfig>) => setForm({ ...form, ...patch });
@@ -144,49 +150,49 @@ export function AdminExtraDevicePage() {
     <div className="flex flex-col gap-5">
       <div className="flex items-center gap-3">
         <MonitorSmartphone className="h-5 w-5 text-accent" />
-        <h1 className="text-xl font-semibold text-fg">Докупка устройств</h1>
+        <h1 className="text-xl font-semibold text-fg">{t("adm.extradevice.title")}</h1>
       </div>
 
       <section className={SECTION}>
         <Toggle
-          label="Продавать докупку устройств"
-          hint="Человек покупает место под устройство на 30 дней — или до конца срока подписки, если он ближе. Платёж за одну покупку не бывает больше цены за 30 дней."
+          label={t("adm.extradevice.sell_label")}
+          hint={t("adm.extradevice.sell_hint")}
           checked={form.enabled}
           onChange={(enabled) => set({ enabled })}
         />
         {form.enabled && form.price_rub_30d == null && (
           <p className="mt-2 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-fg">
-            Цена не задана — продажи всё равно закрыты. Укажите цену ниже.
+            {t("adm.extradevice.no_price_warn")}
           </p>
         )}
 
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <NumberField
             id="extra-price"
-            label="Цена места под устройство за 30 дней, ₽"
-            hint="Пусто — продажи закрыты. Остаток срока считается пропорционально."
+            label={t("adm.extradevice.price_label")}
+            hint={t("adm.extradevice.price_hint")}
             value={form.price_rub_30d}
             onChange={(price_rub_30d) => set({ price_rub_30d })}
             allowEmpty
           />
           <NumberField
             id="extra-min"
-            label="Минимальная сумма счёта, ₽"
-            hint="Защита от копеечных счетов и минимумов платёжных шлюзов."
+            label={t("adm.extradevice.min_amount_label")}
+            hint={t("adm.extradevice.min_amount_hint")}
             value={form.min_amount_rub}
             onChange={(v) => set({ min_amount_rub: v ?? 1 })}
           />
           <NumberField
             id="extra-days"
-            label="Не продавать, если до конца срока меньше, дн."
-            hint="На коротком остатке выгоднее продлить саму подписку."
+            label={t("adm.extradevice.min_days_label")}
+            hint={t("adm.extradevice.min_days_hint")}
             value={form.min_days_left}
             onChange={(v) => set({ min_days_left: v ?? 1 })}
           />
           <NumberField
             id="extra-max"
-            label="Максимум ОДНОВРЕМЕННО докупленных мест"
-            hint="Дальше человеку предлагается тариф побольше — в нём есть ещё и трафик. Кончившееся место освобождает счётчик: докупить снова можно."
+            label={t("adm.extradevice.max_extra_label")}
+            hint={t("adm.extradevice.max_extra_hint")}
             value={form.max_extra}
             onChange={(v) => set({ max_extra: v ?? 1 })}
           />
@@ -194,18 +200,18 @@ export function AdminExtraDevicePage() {
 
         <div className="mt-4 border-t border-border-subtle pt-2">
           <Toggle
-            label="Отключать устройства, подключённые после покупки места"
-            hint="Включено по умолчанию. За 3 дня до конца человек получает предупреждение, а в конце срока отключаются устройства, зарегистрированные ПОСЛЕ покупки места, начиная с самого нового, и ровно столько, сколько сверх лимита. Выключите — и место, оплаченное на неделю, продолжит работать: панель пускает уже подключённый аппарат без сверки с лимитом."
+            label={t("adm.extradevice.remove_label")}
+            hint={t("adm.extradevice.remove_hint")}
             checked={form.remove_excess_devices}
             onChange={(remove_excess_devices) => set({ remove_excess_devices })}
           />
           <Toggle
-            label="Сообщать пользователю"
+            label={t("adm.extradevice.notify_users")}
             checked={form.notify_users}
             onChange={(notify_users) => set({ notify_users })}
           />
           <Toggle
-            label="Сообщать админам о каждой докупке"
+            label={t("adm.extradevice.notify_admins")}
             checked={form.notify_admins}
             onChange={(notify_admins) => set({ notify_admins })}
           />
@@ -213,7 +219,7 @@ export function AdminExtraDevicePage() {
 
         <div className="mt-4 flex items-center gap-3">
           <button onClick={save} disabled={saving} className={BUTTON}>
-            {saving ? "…" : "Сохранить"}
+            {saving ? "…" : t("adm.extradevice.save")}
           </button>
           {note && <span className="text-xs text-fg-muted">{note}</span>}
           {error && <span className="text-xs text-danger">{error}</span>}
@@ -222,18 +228,20 @@ export function AdminExtraDevicePage() {
 
       {data.hint.length > 0 && (
         <section className={SECTION}>
-          <h3 className="text-sm font-semibold text-fg">Сколько сейчас стоит шаг по устройствам</h3>
-          <p className="mt-0.5 text-xs text-fg-muted">
-            Разница между соседними тарифами за 30 дней. В неё входит ещё и трафик, поэтому
-            устройство без трафика обычно ставят дешевле шага.
-          </p>
+          <h3 className="text-sm font-semibold text-fg">{t("adm.extradevice.hint_title")}</h3>
+          <p className="mt-0.5 text-xs text-fg-muted">{t("adm.extradevice.hint_note")}</p>
           <ul className="mt-3 flex flex-col gap-1.5">
             {data.hint.map((h) => (
               <li key={`${h.from_devices}-${h.to_devices}`} className="text-sm text-fg">
-                {h.from_devices} → {h.to_devices} устр. —{" "}
+                {t("adm.extradevice.hint_row", { from: h.from_devices, to: h.to_devices })}{" "}
                 <span className="tabular font-medium">{formatAdminMoney("RUB", h.diff_30d_rub)}</span>
                 {h.traffic_diff_gb !== 0 && (
-                  <span className="text-fg-muted"> (и {h.traffic_diff_gb > 0 ? "+" : ""}{h.traffic_diff_gb} ГБ)</span>
+                  <span className="text-fg-muted">
+                    {" "}
+                    {t("adm.extradevice.hint_traffic", {
+                      gb: h.traffic_diff_gb > 0 ? `+${h.traffic_diff_gb}` : h.traffic_diff_gb,
+                    })}
+                  </span>
                 )}
               </li>
             ))}
@@ -242,35 +250,28 @@ export function AdminExtraDevicePage() {
       )}
 
       <section className={SECTION}>
-        <h3 className="text-sm font-semibold text-fg">За 30 дней</h3>
+        <h3 className="text-sm font-semibold text-fg">{t("adm.extradevice.stats_title")}</h3>
         <div className="mt-3 grid gap-3 sm:grid-cols-4">
           <div>
-            <p className="text-xs text-fg-muted">Докупок</p>
+            <p className="text-xs text-fg-muted">{t("adm.extradevice.stat_purchases")}</p>
             <p className="tabular text-lg font-semibold text-fg">{summary.applied_30d ?? 0}</p>
           </div>
           <div>
-            <p className="text-xs text-fg-muted">Сумма</p>
+            <p className="text-xs text-fg-muted">{t("adm.extradevice.stat_amount")}</p>
             <p className="tabular text-lg font-semibold text-fg">
               {formatAdminMoney("RUB", summary.amount_30d ?? 0)}
             </p>
           </div>
           <div>
-            <p className="text-xs text-fg-muted">Действующих мест</p>
+            <p className="text-xs text-fg-muted">{t("adm.extradevice.stat_active_slots")}</p>
             <p className="tabular text-lg font-semibold text-fg">{summary.active_slots ?? 0}</p>
           </div>
           <div>
-            <p className="text-xs text-fg-muted">Ждут применения</p>
+            <p className="text-xs text-fg-muted">{t("adm.extradevice.stat_pending")}</p>
             <p className="tabular text-lg font-semibold text-fg">{summary.credited_open ?? 0}</p>
           </div>
         </div>
-        <p className="mt-4 text-xs text-fg-muted">
-          Место продаётся на 30 дней (или до конца срока подписки, если он ближе) и подписку
-          не переживает. За 3 дня до конца человек получает напоминание с двумя действиями в
-          порядке «перейти на тариф побольше → продлить место»; не сделал ничего — отключается
-          последнее добавленное устройство. При продлении подписки лимит возвращается сам.
-          При смене тарифа место сгорает, а его неиспользованная стоимость идёт днями (если
-          включён перенос остатка). Отменить докупку — в карточке пользователя.
-        </p>
+        <p className="mt-4 text-xs text-fg-muted">{t("adm.extradevice.footer")}</p>
       </section>
     </div>
   );

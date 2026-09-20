@@ -8,18 +8,23 @@ import {
 } from "@/api/admin";
 import { ApiError } from "@/types/api";
 import { useAuth } from "@/contexts/AuthContext";
+import { useI18n } from "@/i18n/I18nContext";
+import { translate } from "@/i18n/translate";
+import { pluralFor } from "@/lib/pluralRu";
 
-const SIGNAL_META: Record<AbuseCluster["signal"], { label: string; icon: typeof Wifi }> = {
-  ip: { label: "Общий IP", icon: Wifi },
-  hwid: { label: "Общий девайс (HWID)", icon: Smartphone },
-  email: { label: "Похожий email", icon: Mail },
-  referral: { label: "Само-реферал", icon: Users },
+// В МЕТА-картах лежат КЛЮЧИ, а не готовые подписи: карта считается один раз при
+// импорте модуля, и готовый текст остался бы на языке, который был при загрузке.
+const SIGNAL_META: Record<AbuseCluster["signal"], { labelKey: string; icon: typeof Wifi }> = {
+  ip: { labelKey: "adm.abuse.signal_ip", icon: Wifi },
+  hwid: { labelKey: "adm.abuse.signal_hwid", icon: Smartphone },
+  email: { labelKey: "adm.abuse.signal_email", icon: Mail },
+  referral: { labelKey: "adm.abuse.signal_referral", icon: Users },
 };
 
-const SEVERITY_META: Record<AbuseCluster["severity"], { label: string; cls: string }> = {
-  high: { label: "Высокий", cls: "bg-danger/10 text-danger" },
-  medium: { label: "Средний", cls: "bg-warning/10 text-warning" },
-  low: { label: "Низкий", cls: "bg-fg-subtle/20 text-fg-muted" },
+const SEVERITY_META: Record<AbuseCluster["severity"], { labelKey: string; cls: string }> = {
+  high: { labelKey: "adm.abuse.sev_high", cls: "bg-danger/10 text-danger" },
+  medium: { labelKey: "adm.abuse.sev_medium", cls: "bg-warning/10 text-warning" },
+  low: { labelKey: "adm.abuse.sev_low", cls: "bg-fg-subtle/20 text-fg-muted" },
 };
 
 function accountLabel(a: AbuseAccount): string {
@@ -31,6 +36,7 @@ function accountLabel(a: AbuseAccount): string {
 
 export default function AdminAbusePage() {
   const { isReadonlyAdmin } = useAuth();
+  const { t, lang } = useI18n();
   const [clusters, setClusters] = useState<AbuseCluster[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -51,7 +57,9 @@ export default function AdminAbusePage() {
         setNote(r.note ?? null);
         setWarning(r.warning ?? null);
       })
-      .catch((e) => setError(e instanceof ApiError ? e.detail : "Ошибка"))
+      // translate, а не t: иначе t попал бы в зависимости load → useEffect, и смена
+      // языка перезапрашивала бы список.
+      .catch((e) => setError(e instanceof ApiError ? e.detail : translate("adm.abuse.err_generic")))
       .finally(() => setLoading(false));
   }, [onlyTrial]);
 
@@ -72,7 +80,7 @@ export default function AdminAbusePage() {
       const r = await usersAdminApi.block(a.id, !a.is_blocked);
       patchAccount(a.id, { is_blocked: r.is_blocked });
     } catch (e) {
-      alert(e instanceof ApiError ? e.detail : "Ошибка");
+      alert(e instanceof ApiError ? e.detail : t("adm.abuse.err_generic"));
     } finally {
       setBusy(null);
     }
@@ -87,7 +95,7 @@ export default function AdminAbusePage() {
         trial_used: !r.is_trial_available,
       });
     } catch (e) {
-      alert(e instanceof ApiError ? e.detail : "Ошибка");
+      alert(e instanceof ApiError ? e.detail : t("adm.abuse.err_generic"));
     } finally {
       setBusy(null);
     }
@@ -98,23 +106,21 @@ export default function AdminAbusePage() {
       <div className="flex items-center justify-between gap-3">
         <h1 className="flex items-center gap-2 text-2xl font-bold text-fg">
           <ShieldAlert className="h-6 w-6 text-warning" />
-          Детект абьюза
+          {t("adm.abuse.title")}
         </h1>
         <button
           onClick={load}
           className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--border)] px-3 py-2 text-sm font-medium text-fg-muted hover:text-fg"
         >
           <RefreshCw className="h-4 w-4" />
-          Обновить
+          {t("adm.abuse.refresh")}
         </button>
       </div>
 
       {/* Подсказка своя у каждого бэкенда: сигналы зависят от того, что он вообще
           хранит. Поля `note` нет — текст прежний, наш. */}
       <div className="rounded-2xl border border-border-subtle bg-accent/5 px-5 py-4 text-sm text-fg-muted">
-        💡{" "}
-        {note ??
-          "Группы аккаунтов с совпадающими признаками (общий девайс/HWID, общий IP, «одинаковый» email с учётом gmail-точек/алиасов, само-рефералы с общего IP). Похоже на мультиаккаунт ради нескольких бесплатных пробников. HWID снимается с панели раз в 6 часов. Автодействий нет — решение за вами."}
+        💡 {note ?? t("adm.abuse.hint")}
       </div>
 
       {/* Что не сработало сейчас: без этого пустой список читался бы как «чисто». */}
@@ -132,7 +138,7 @@ export default function AdminAbusePage() {
           onChange={(e) => setOnlyTrial(e.target.checked)}
           className="h-4 w-4 accent-[var(--accent)]"
         />
-        Показывать только группы, где ≥2 аккаунтов уже взяли триал
+        {t("adm.abuse.only_trial")}
       </label>
 
       {error && (
@@ -148,7 +154,7 @@ export default function AdminAbusePage() {
         </div>
       ) : clusters.length === 0 ? (
         <div className="py-20 text-center text-fg-muted">
-          Подозрительных групп не найдено 🎉
+          {t("adm.abuse.empty")}
         </div>
       ) : (
         <div className="space-y-4">
@@ -161,11 +167,23 @@ export default function AdminAbusePage() {
                 <div className="mb-3 flex flex-wrap items-center gap-2">
                   <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-fg">
                     <Icon className="h-4 w-4 text-fg-muted" />
-                    {meta.label}
+                    {t(meta.labelKey)}
                   </span>
                   <code className="rounded bg-fg-subtle/10 px-1.5 py-0.5 text-xs text-fg-muted">{c.key}</code>
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${sev.cls}`}>{sev.label}</span>
-                  <span className="ml-auto text-xs text-fg-subtle">{c.accounts.length} акк.</span>
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${sev.cls}`}>{t(sev.labelKey)}</span>
+                  <span className="ml-auto text-xs text-fg-subtle">
+                    {/* «2 акк.» и «2 accounts»: форму счётного слова выбирает pluralFor ПО ЯЗЫКУ. */}
+                    {t(
+                      pluralFor(
+                        lang,
+                        c.accounts.length,
+                        "adm.abuse.acc_one",
+                        "adm.abuse.acc_few",
+                        "adm.abuse.acc_many",
+                      ),
+                      { n: c.accounts.length },
+                    )}
+                  </span>
                 </div>
 
                 <div className="space-y-1.5">
@@ -177,33 +195,33 @@ export default function AdminAbusePage() {
                       <span className="font-medium text-fg">{accountLabel(a)}</span>
                       <span className="text-xs text-fg-subtle">#{a.id}</span>
                       {a.trial_used && (
-                        <span className="rounded bg-warning/10 px-1.5 text-xs text-warning">триал использован</span>
+                        <span className="rounded bg-warning/10 px-1.5 text-xs text-warning">{t("adm.abuse.badge_trial_used")}</span>
                       )}
                       {a.young_tg && (
-                        <span className="rounded bg-fg-subtle/15 px-1.5 text-xs text-fg-muted">свежий TG</span>
+                        <span className="rounded bg-fg-subtle/15 px-1.5 text-xs text-fg-muted">{t("adm.abuse.badge_young_tg")}</span>
                       )}
                       {a.is_blocked && (
-                        <span className="rounded bg-danger/10 px-1.5 text-xs text-danger">заблокирован</span>
+                        <span className="rounded bg-danger/10 px-1.5 text-xs text-danger">{t("adm.abuse.badge_blocked")}</span>
                       )}
                       {!isReadonlyAdmin && (
                         <div className="ml-auto flex items-center gap-2">
                           <button
                             onClick={() => denyTrial(a)}
                             disabled={busy === a.id}
-                            title={a.is_trial_available ? "Снять право на триал" : "Вернуть право на триал"}
+                            title={a.is_trial_available ? t("adm.abuse.deny_trial_title") : t("adm.abuse.allow_trial_title")}
                             className="inline-flex items-center gap-1 text-xs font-medium text-fg-muted hover:text-warning disabled:opacity-50"
                           >
                             <TicketX className="h-3.5 w-3.5" />
-                            {a.is_trial_available ? "Снять триал" : "Вернуть триал"}
+                            {a.is_trial_available ? t("adm.abuse.deny_trial") : t("adm.abuse.allow_trial")}
                           </button>
                           <button
                             onClick={() => block(a)}
                             disabled={busy === a.id}
-                            title={a.is_blocked ? "Разблокировать" : "Заблокировать"}
+                            title={a.is_blocked ? t("adm.abuse.unblock_title") : t("adm.abuse.block_title")}
                             className="inline-flex items-center gap-1 text-xs font-medium text-fg-muted hover:text-danger disabled:opacity-50"
                           >
                             <Ban className="h-3.5 w-3.5" />
-                            {a.is_blocked ? "Разбл." : "Блок"}
+                            {a.is_blocked ? t("adm.abuse.unblock") : t("adm.abuse.block")}
                           </button>
                         </div>
                       )}
