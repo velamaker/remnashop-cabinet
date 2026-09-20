@@ -1,11 +1,13 @@
 import { Link } from "react-router-dom";
 import { navGroups } from "@/components/layout/AdminLayout";
 import { useAuth } from "@/contexts/AuthContext";
+import { useT } from "@/i18n/I18nContext";
 
 // Плиточный лаунчер разделов — главная страница админки. Все разделы собраны по
 // группам колонками; отсюда открывается остальная навигация.
 export function AdminNavLauncher() {
   const { canSection, canPage } = useAuth();
+  const t = useT();
   const groups = navGroups
     // Тот же двойной фильтр, что и в боковом меню: права + умение бэкенда.
     .map((g) => ({ ...g, items: g.items.filter((it) => canSection(it.section) && canPage(it.to)) }))
@@ -16,7 +18,7 @@ export function AdminNavLauncher() {
       {groups.map((group) => (
         <div key={group.title} className="rounded-2xl border border-border-subtle bg-bg-subtle p-4">
           <p className="mb-2.5 px-1 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">
-            {group.title}
+            {t(group.title)}
           </p>
           <div className="flex flex-col gap-0.5">
             {group.items.map(({ to, icon: Icon, label }) => (
@@ -28,7 +30,7 @@ export function AdminNavLauncher() {
                 <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-bg-raised text-fg-muted transition-colors group-hover:bg-accent-subtle group-hover:text-accent">
                   <Icon className="h-4 w-4" strokeWidth={1.75} />
                 </span>
-                <span className="truncate">{label}</span>
+                <span className="truncate">{t(label)}</span>
               </Link>
             ))}
           </div>

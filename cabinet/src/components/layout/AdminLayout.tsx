@@ -52,6 +52,8 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
+import { useT } from "@/i18n/I18nContext";
 import { Admin2FAUnlock } from "@/components/admin/Admin2FA";
 import { AdminNotifBell } from "@/components/admin/AdminNotifBell";
 import { updatesAdminApi } from "@/api/admin";
@@ -65,80 +67,80 @@ export type NavItem = { to: string; icon: LucideIcon; label: string; end?: boole
 // плиточным лаунчером на главной админки (Обзор).
 export const navGroups: { title: string; items: NavItem[] }[] = [
   {
-    title: "Аналитика",
+    title: "adm.navgrp.analytics",
     items: [
-      { to: "/admin/stats", icon: LayoutDashboard, label: "Статистика", section: "dashboard" },
-      { to: "/admin/transactions", icon: CreditCard, label: "Транзакции", section: "transactions" },
+      { to: "/admin/stats", icon: LayoutDashboard, label: "adm.nav.stats", section: "dashboard" },
+      { to: "/admin/transactions", icon: CreditCard, label: "adm.nav.transactions", section: "transactions" },
     ],
   },
   {
-    title: "Пользователи",
+    title: "adm.navgrp.users",
     items: [
-      { to: "/admin/users", icon: Users, label: "Пользователи", section: "users" },
-      { to: "/admin/referral", icon: Gift, label: "Рефералы", section: "settings" },
-      { to: "/admin/import", icon: DownloadCloud, label: "Импорт", section: "import" },
-      { to: "/admin/abuse", icon: Fingerprint, label: "Детект абьюза", section: "abuse" },
-      { to: "/admin/support", icon: LifeBuoy, label: "Поддержка", section: "support" },
+      { to: "/admin/users", icon: Users, label: "adm.nav.users", section: "users" },
+      { to: "/admin/referral", icon: Gift, label: "adm.nav.referral", section: "settings" },
+      { to: "/admin/import", icon: DownloadCloud, label: "adm.nav.import", section: "import" },
+      { to: "/admin/abuse", icon: Fingerprint, label: "adm.nav.abuse", section: "abuse" },
+      { to: "/admin/support", icon: LifeBuoy, label: "adm.nav.support", section: "support" },
     ],
   },
   {
-    title: "Продажи",
+    title: "adm.navgrp.sales",
     items: [
-      { to: "/admin/plans", icon: Package, label: "Тарифы", section: "plans" },
-      { to: "/admin/promocodes", icon: Tag, label: "Промокоды", section: "promocodes" },
-      { to: "/admin/gateways", icon: Wallet, label: "Шлюзы", section: "gateways" },
-      { to: "/admin/topup", icon: Coins, label: "Пополнение", section: "settings" },
-      { to: "/admin/extra-device", icon: MonitorSmartphone, label: "Докупка устройств", section: "settings" },
-      { to: "/admin/extra-traffic", icon: Gauge, label: "Докупка трафика", section: "settings" },
-      { to: "/admin/payment-reminder", icon: BellRing, label: "Напоминание об оплате", section: "settings" },
-      { to: "/admin/reserve", icon: Umbrella, label: "Резервный доступ", section: "settings" },
-      { to: "/admin/freeze", icon: Snowflake, label: "Заморозка", section: "settings" },
+      { to: "/admin/plans", icon: Package, label: "adm.nav.plans", section: "plans" },
+      { to: "/admin/promocodes", icon: Tag, label: "adm.nav.promocodes", section: "promocodes" },
+      { to: "/admin/gateways", icon: Wallet, label: "adm.nav.gateways", section: "gateways" },
+      { to: "/admin/topup", icon: Coins, label: "adm.nav.topup", section: "settings" },
+      { to: "/admin/extra-device", icon: MonitorSmartphone, label: "adm.nav.extra_device", section: "settings" },
+      { to: "/admin/extra-traffic", icon: Gauge, label: "adm.nav.extra_traffic", section: "settings" },
+      { to: "/admin/payment-reminder", icon: BellRing, label: "adm.nav.payment_reminder", section: "settings" },
+      { to: "/admin/reserve", icon: Umbrella, label: "adm.nav.reserve", section: "settings" },
+      { to: "/admin/freeze", icon: Snowflake, label: "adm.nav.freeze", section: "settings" },
     ],
   },
   {
-    title: "Маркетинг",
+    title: "adm.navgrp.marketing",
     items: [
-      { to: "/admin/ad-links", icon: Link2, label: "Рекл. ссылки", section: "ad_links" },
-      { to: "/admin/broadcasts", icon: Radio, label: "Рассылки", section: "broadcasts" },
-      { to: "/admin/promo-banner", icon: Megaphone, label: "Промо-баннер", section: "settings" },
-      { to: "/admin/trial-discount", icon: Percent, label: "Скидка триальщикам", section: "settings" },
-      { to: "/admin/winback", icon: Undo2, label: "Win-back", section: "settings" },
-      { to: "/admin/renewal-discount", icon: BadgePercent, label: "Скидка до окончания", section: "settings" },
-      { to: "/admin/digest", icon: BarChart3, label: "Дайджест", section: "settings" },
-      { to: "/admin/traffic-alert", icon: Gauge, label: "Трафик 80%", section: "settings" },
-      { to: "/admin/new-device", icon: Smartphone, label: "Новое устройство", section: "settings" },
+      { to: "/admin/ad-links", icon: Link2, label: "adm.nav.ad_links", section: "ad_links" },
+      { to: "/admin/broadcasts", icon: Radio, label: "adm.nav.broadcasts", section: "broadcasts" },
+      { to: "/admin/promo-banner", icon: Megaphone, label: "adm.nav.promo_banner", section: "settings" },
+      { to: "/admin/trial-discount", icon: Percent, label: "adm.nav.trial_discount", section: "settings" },
+      { to: "/admin/winback", icon: Undo2, label: "adm.nav.winback", section: "settings" },
+      { to: "/admin/renewal-discount", icon: BadgePercent, label: "adm.nav.renewal_discount", section: "settings" },
+      { to: "/admin/digest", icon: BarChart3, label: "adm.nav.digest", section: "settings" },
+      { to: "/admin/traffic-alert", icon: Gauge, label: "adm.nav.traffic_alert", section: "settings" },
+      { to: "/admin/new-device", icon: Smartphone, label: "adm.nav.new_device", section: "settings" },
     ],
   },
   {
-    title: "Кабинет",
+    title: "adm.navgrp.cabinet",
     items: [
-      { to: "/admin/appearance", icon: Palette, label: "Оформление", section: "content" },
-      { to: "/admin/cabinet", icon: DoorOpen, label: "Доступ и язык", section: "content" },
-      { to: "/admin/info", icon: Info, label: "Информация", section: "content" },
-      { to: "/admin/menu", icon: SquareMenu, label: "Меню", section: "content" },
-      { to: "/admin/apps", icon: Smartphone, label: "Приложения", section: "content" },
+      { to: "/admin/appearance", icon: Palette, label: "adm.nav.appearance", section: "content" },
+      { to: "/admin/cabinet", icon: DoorOpen, label: "adm.nav.cabinet", section: "content" },
+      { to: "/admin/info", icon: Info, label: "adm.nav.info", section: "content" },
+      { to: "/admin/menu", icon: SquareMenu, label: "adm.nav.menu", section: "content" },
+      { to: "/admin/apps", icon: Smartphone, label: "adm.nav.apps", section: "content" },
       {
         to: "/admin/subscription-app",
         icon: RouteIcon,
-        label: "Подписка в прилож.",
+        label: "adm.nav.subscription_app",
         section: "settings",
       },
-      { to: "/admin/server-status", icon: Activity, label: "Статус сервиса", section: "settings" },
-      { to: "/admin/email", icon: Mail, label: "Письмо", section: "settings" },
+      { to: "/admin/server-status", icon: Activity, label: "adm.nav.server_status", section: "settings" },
+      { to: "/admin/email", icon: Mail, label: "adm.nav.email", section: "settings" },
     ],
   },
   {
-    title: "Система",
+    title: "adm.navgrp.system",
     items: [
-      { to: "/admin/remnawave", icon: Waves, label: "RemnaWave", section: "remnawave" },
-      { to: "/admin/auth", icon: KeyRound, label: "Вход через Telegram", section: "settings" },
-      { to: "/admin/settings", icon: Settings, label: "Настройки", section: "settings" },
-      { to: "/admin/notifications", icon: Bell, label: "Уведомления", section: "settings" },
-      { to: "/admin/summary", icon: Sunrise, label: "Утренняя сводка", section: "settings" },
-      { to: "/admin/audit", icon: ShieldAlert, label: "Аудит", section: "audit" },
-      { to: "/admin/backup", icon: Database, label: "Бэкап настроек", section: "settings" },
-      { to: "/admin/admin-ip", icon: ShieldCheck, label: "Безопасность", section: "settings" },
-      { to: "/admin/updates", icon: Sparkles, label: "Обновления", section: "updates" },
+      { to: "/admin/remnawave", icon: Waves, label: "adm.nav.remnawave", section: "remnawave" },
+      { to: "/admin/auth", icon: KeyRound, label: "adm.nav.auth", section: "settings" },
+      { to: "/admin/settings", icon: Settings, label: "adm.nav.settings", section: "settings" },
+      { to: "/admin/notifications", icon: Bell, label: "adm.nav.notifications", section: "settings" },
+      { to: "/admin/summary", icon: Sunrise, label: "adm.nav.summary", section: "settings" },
+      { to: "/admin/audit", icon: ShieldAlert, label: "adm.nav.audit", section: "audit" },
+      { to: "/admin/backup", icon: Database, label: "adm.nav.backup", section: "settings" },
+      { to: "/admin/admin-ip", icon: ShieldCheck, label: "adm.nav.admin_ip", section: "settings" },
+      { to: "/admin/updates", icon: Sparkles, label: "adm.nav.updates", section: "updates" },
     ],
   },
 ];
@@ -156,6 +158,7 @@ function GroupedNav({
   canPage: (path: string) => boolean;
   collapsed?: boolean;
 }) {
+  const t = useT();
   const groups = navGroups
     // Два разных фильтра: canSection — про ПРАВА администратора, canPage — про
     // УМЕНИЕ бэкенда. Раздел «Настройки» у нас один на два десятка страниц, и без
@@ -174,7 +177,7 @@ function GroupedNav({
             <span className="mx-auto my-1.5 h-px w-6 bg-[var(--border)]" />
           ) : (
             <span className="px-2.5 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">
-              {group.title}
+              {t(group.title)}
             </span>
           )}
           {group.items.map(({ to, icon: Icon, label, end }) => (
@@ -183,7 +186,7 @@ function GroupedNav({
               to={to}
               end={end}
               onClick={onNavigate}
-              title={collapsed ? label : undefined}
+              title={collapsed ? t(label) : undefined}
               className={({ isActive }) =>
                 clsx(
                   "flex items-center rounded-lg text-sm transition-colors duration-150",
@@ -196,7 +199,7 @@ function GroupedNav({
               }
             >
               <Icon className="h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
-              {!collapsed && label}
+              {!collapsed && t(label)}
             </NavLink>
           ))}
         </div>
@@ -368,6 +371,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
               v{version}
             </NavLink>
           )}
+          <LanguageSwitcher />
           <ThemeSwitcher />
         </div>
       </div>
@@ -434,6 +438,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
               v{version}
             </NavLink>
           )}
+          <LanguageSwitcher />
           <ThemeSwitcher />
         </div>
         <div key={location.pathname} className="mx-auto max-w-6xl animate-fade-in">

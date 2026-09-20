@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { Appearance } from "@/api/appearance";
+import { I18nProvider } from "@/i18n/I18nContext";
 
 // Разделы админки, которым нужен новый бот. Кабинет бывает новее бота («только
 // кабинет» в update.sh, кабинет на отдельном сервере): раньше пункт «Скидка до
@@ -44,13 +45,17 @@ const newBot = () => look({ bot_capabilities: ["renewal_discount"] });
 
 function open(path: string) {
   return render(
+    // I18nProvider — с тех пор как разделы админки называются ключами перевода
+    // (adm.nav.*): без него меню падает, как упало бы в приложении без провайдера.
     <MemoryRouter initialEntries={[path]}>
+      <I18nProvider>
       <AuthProvider>
         <Routes>
           <Route path="/admin" element={<AdminRoute><AdminNavLauncher /></AdminRoute>} />
           <Route path="/admin/*" element={<AdminRoute><p>СТРАНИЦА РАЗДЕЛА</p></AdminRoute>} />
         </Routes>
       </AuthProvider>
+      </I18nProvider>
     </MemoryRouter>,
   );
 }

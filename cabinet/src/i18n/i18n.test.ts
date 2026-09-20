@@ -40,11 +40,24 @@ describe("i18n config", () => {
 });
 
 describe("i18n полнота словарей", () => {
-  it("во всех языках столько же ключей, сколько в ru (без дыр)", () => {
-    const ruKeys = Object.keys(DICT.ru);
+  // Кабинет ПОЛЬЗОВАТЕЛЯ переведён целиком: дыра здесь — это чужой язык на экране
+  // человека, который платит. Админка (ключи adm.*) переводится волнами, и пока
+  // перевода нет, translate() отдаёт русский (цепочка язык → ru → ключ) — владелец
+  // и его администраторы читают по-русски, ничего не ломается.
+  const userKeys = Object.keys(DICT.ru).filter((k) => !k.startsWith("adm."));
+
+  it("во всех языках столько же ПОЛЬЗОВАТЕЛЬСКИХ ключей, сколько в ru (без дыр)", () => {
     for (const lang of Object.keys(DICT) as (keyof typeof DICT)[]) {
-      const missing = ruKeys.filter((k) => !(k in DICT[lang]));
+      const missing = userKeys.filter((k) => !(k in DICT[lang]));
       expect(missing, `язык ${lang} без ключей: ${missing.slice(0, 5).join(", ")}`).toHaveLength(0);
+    }
+  });
+
+  it("ключей админки нет там, где их нет в русском (опечатки в ключах)", () => {
+    const ruAdmin = new Set(Object.keys(DICT.ru).filter((k) => k.startsWith("adm.")));
+    for (const lang of Object.keys(DICT) as (keyof typeof DICT)[]) {
+      const orphans = Object.keys(DICT[lang]).filter((k) => k.startsWith("adm.") && !ruAdmin.has(k));
+      expect(orphans, `язык ${lang}: ключи без русского оригинала: ${orphans.slice(0, 5).join(", ")}`).toHaveLength(0);
     }
   });
 });
