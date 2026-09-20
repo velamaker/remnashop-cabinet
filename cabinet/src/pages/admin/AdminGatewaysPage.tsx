@@ -265,8 +265,8 @@ export default function AdminGatewaysPage() {
                 <div className="flex items-start justify-between mb-3">
                   <div>
                     <p className="font-semibold text-fg">
-                      {i === 0 && <span className="mr-1.5 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent align-middle">{t("adm.gateways.first")}</span>}
                       {name}
+                      {i === 0 && <span className="ml-1.5 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent align-middle">{t("adm.gateways.first")}</span>}
                     </p>
                     <p className="text-xs text-fg-muted">{g.currency} {sym}</p>
                   </div>
