@@ -14,7 +14,7 @@
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from src.core.config import AppConfig
 
@@ -98,3 +98,26 @@ def save_email_settings(values: dict[str, Any]) -> dict[str, Any]:
     with EMAIL_SETTINGS_PATH.open("w", encoding="utf-8") as fh:
         json.dump(data, fh, ensure_ascii=False, indent=2)
     return data
+
+def settings_allow_sending(settings: dict[str, Any]) -> bool:
+    """Можно ли этими настройками реально отправить письмо.
+
+    ОДНО ПРАВИЛО НА ВСЕХ. Раньше половина кода спрашивала переменную окружения
+    EMAIL_ENABLED напрямую, и почта, включённая В АДМИНКЕ, для них не
+    существовала: письма с кодом уходили, а рассылка по почте падала «Ошибкой»
+    сразу, напоминания об окончании молчали, и скидка на продление тоже.
+    Теперь правило живёт здесь, а `SmtpEmailSender.is_enabled` только зовёт его.
+    """
+    if not settings.get("enabled") or not settings.get("from_email"):
+        return False
+    # Brevo требует только API-ключ и адрес отправителя.
+    if str(settings.get("provider") or "").lower() == "brevo" and settings.get("brevo_api_key"):
+        return True
+    # Иначе нужен полноценный SMTP-конфиг.
+    return bool(settings.get("host") and settings.get("username") and settings.get("password"))
+
+
+def email_enabled_now(config: Optional[AppConfig] = None) -> bool:
+    """Включена ли почта ПРЯМО СЕЙЧАС — для мест, где отправителя под рукой нет."""
+    cfg = config or AppConfig.get()
+    return settings_allow_sending(load_email_settings(cfg))

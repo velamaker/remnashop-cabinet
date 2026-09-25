@@ -162,7 +162,10 @@ async def maybe_alert_new_login(session: AsyncSession, user_id: int, ip: str, us
             from src.infrastructure.services.email_sender import SmtpEmailSender
 
             sender = SmtpEmailSender(AppConfig.get())
-            if sender.is_enabled():
+            # is_enabled — СВОЙСТВО. Вызов `is_enabled()` бросал
+            # «'bool' object is not callable», ошибка гасилась в except ниже, и
+            # письмо о новом входе не уходило НИКОГДА.
+            if sender.is_enabled:
                 await sender.send(to=email, subject=title, body=body_text)
         except Exception as e:  # noqa: BLE001
             logger.debug(f"login_alert: email user_id={user_id} не доставлено: {e}")

@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.common import BroadcastDispatcher
+from src.application.common.email_sender import EmailSender
 from src.application.common.dao import BroadcastDao, SubscriptionDao, UserDao
 from src.application.common.uow import UnitOfWork
 from src.application.dto import BroadcastDto, MessagePayloadDto
@@ -142,6 +143,7 @@ async def create_broadcast(
     dispatcher: FromDishka[BroadcastDispatcher],
     user_dao: FromDishka[UserDao],
     subscription_dao: FromDishka[SubscriptionDao],
+    email_sender: FromDishka[EmailSender],
     session: FromDishka[AsyncSession],
 ) -> dict[str, Any]:
     content = body.text.strip()
@@ -158,6 +160,19 @@ async def create_broadcast(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Для рассылки по тарифу нужно выбрать тариф",
+        )
+
+    # Почта не настроена — отказываем ЗДЕСЬ, до первого запуска. Раньше рассылка
+    # создавалась, задача сразу помечала её ERROR, и в истории висела красная
+    # карточка «Ошибка» без единого слова о причине: админ видел поломку там, где
+    # на самом деле просто не включена отправка писем.
+    if any(c in _EMAIL_CHANNELS for c in channels) and not email_sender.is_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Почта не настроена — письма отправлять нечем. "
+                "Включите отправку в «Настройках → Почта». Ничего не отправлено."
+            ),
         )
 
     # «Истекают скоро»: обе проверки — ДО первого запуска. Отказать после того, как

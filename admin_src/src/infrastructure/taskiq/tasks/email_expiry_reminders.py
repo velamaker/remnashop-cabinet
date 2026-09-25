@@ -10,7 +10,6 @@
 Авто-обнаруживается taskiq по globу tasks/*.py (см. docker-compose.yml).
 """
 
-import os
 from datetime import datetime, timedelta, timezone
 
 from dishka.integrations.taskiq import FromDishka, inject
@@ -34,10 +33,6 @@ REMINDERS: tuple[tuple[int, str], ...] = (
     (72, "через 3 дня"),
     (4, "сегодня, в течение нескольких часов"),
 )
-
-
-def _email_enabled() -> bool:
-    return (os.environ.get("EMAIL_ENABLED") or "").strip().lower() == "true"
 
 
 def _subject(hours: int) -> str:
@@ -85,8 +80,10 @@ async def send_email_expiry_reminders(
     session: FromDishka[AsyncSession],
     email_sender: FromDishka[EmailSender],
 ) -> None:
-    if not _email_enabled():
-        logger.debug("Email отключён — пропускаю напоминания об окончании")
+    # Спрашиваем отправитель, а не переменную окружения: почту включают ещё и в
+    # админке, и у такой установки напоминания молчали бы при работающей почте.
+    if not email_sender.is_enabled:
+        logger.debug("Email не настроен — пропускаю напоминания об окончании")
         return
     await send_reminders(session, email_sender, datetime.now(timezone.utc))
 

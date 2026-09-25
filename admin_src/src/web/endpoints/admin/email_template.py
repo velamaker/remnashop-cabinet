@@ -53,7 +53,7 @@ async def send_test_email(
     if not sender.is_enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email не настроен (EMAIL_ENABLED / Brevo или SMTP).",
+            detail="Email не настроен — откройте «Настройки → Почта» и включите отправку.",
         )
     # subject=EMAIL_VERIFICATION_SUBJECT → sender отрендерит как письмо с кодом;
     # тело содержит тестовый код 123456 и срок 15 минут (их вытащит парсер).

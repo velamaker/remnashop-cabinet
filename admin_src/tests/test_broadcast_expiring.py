@@ -165,11 +165,15 @@ class CountSession:
     def __init__(self, expiring: int = 5) -> None:
         self.expiring = expiring
         self.days: list[int] = []
+        self.inserts = 0  # сколько строк рассылок реально завели
 
     async def execute(self, statement: Any, params: Any = None) -> Any:
         sql = str(statement)
         value = 0
-        if segment.EXPIRING_WHERE in sql:
+        if "INSERT INTO email_broadcasts" in sql:
+            self.inserts += 1
+            value = self.inserts
+        elif segment.EXPIRING_WHERE in sql:
             self.days.append(dict(params or {})["days"])
             value = self.expiring
         return SimpleNamespace(scalar_one=lambda: value)
@@ -189,7 +193,7 @@ class Counts:
         return zero
 
 
-async def create(body: dict, rec: Recorder, session: CountSession) -> dict:
+async def create(body: dict, rec: Recorder, session: CountSession, email_on: bool = True) -> dict:
     raw = broadcasts.create_broadcast.__dishka_orig_func__
     return await raw(
         body=broadcasts.CreateBroadcastBody(**body),
@@ -199,6 +203,9 @@ async def create(body: dict, rec: Recorder, session: CountSession) -> dict:
         dispatcher=rec,
         user_dao=Counts(),
         subscription_dao=Counts(),
+        # Почта нужна ручке, чтобы отказать ДО запуска, если письма слать нечем
+        # (иначе рассылка ложилась в историю красной «Ошибкой» без причины).
+        email_sender=SimpleNamespace(is_enabled=email_on),
         session=session,
     )
 
@@ -285,3 +292,48 @@ def test_history_labels_expiring_broadcast():
 
     plain = broadcasts._broadcast_to_dict(item({"content": "x"}))
     assert plain["audience"] == "PLAN" and "expiring_days" not in plain
+
+
+# ─── Почта не настроена ───────────────────────────────────────────────────────
+#
+# ЧТО ЗАПИРАЕМ. Раньше рассылку по почте создавали всегда, а фоновая задача через
+# секунду помечала её ERROR. В истории оставалась красная карточка «Ошибка» без
+# единого слова о причине — выглядело как поломка, хотя почта просто не включена.
+# Отказ обязан приходить СРАЗУ и с причиной, и ничего не должно уезжать.
+
+
+async def test_email_broadcast_refused_when_mail_is_off():
+    rec, session = Recorder(), CountSession()
+    with pytest.raises(HTTPException) as exc:
+        await create({"text": "привет", "channels": ["EMAIL_ALL"]}, rec, session, email_on=False)
+    assert exc.value.status_code == 409
+    assert "Почта не настроена" in exc.value.detail
+    assert "Ничего не отправлено" in exc.value.detail
+    assert session.inserts == 0, "строка рассылки не должна появляться"
+
+
+async def test_email_off_does_not_block_telegram_only_broadcast():
+    # Отказ касается только почтовых каналов: телеграм-рассылка живёт своей жизнью.
+    rec, session = Recorder(), CountSession()
+    res = await create({"text": "привет", "channels": ["TG_ALL"]}, rec, session, email_on=False)
+    assert res["telegram"] and not res["email"]
+
+
+async def test_email_broadcast_goes_when_mail_is_on():
+    # Очередь задач тут не поднята — подменяем постановку задачи, проверяем решение.
+    sent: list[tuple] = []
+
+    class _Task:
+        async def kiq(self, *args):
+            sent.append(args)
+
+    original = broadcasts.send_email_broadcast
+    broadcasts.send_email_broadcast = _Task()
+    try:
+        rec, session = Recorder(), CountSession()
+        res = await create({"text": "привет", "channels": ["EMAIL_ALL"]}, rec, session, email_on=True)
+    finally:
+        broadcasts.send_email_broadcast = original
+
+    assert res["email"], "рассылка обязана создаться при настроенной почте"
+    assert sent and sent[0][3] == "EMAIL_ALL"

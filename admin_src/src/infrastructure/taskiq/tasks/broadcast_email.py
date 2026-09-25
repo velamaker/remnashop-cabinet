@@ -11,7 +11,6 @@
 """
 
 import asyncio
-import os
 
 from dishka.integrations.taskiq import FromDishka, inject
 from loguru import logger
@@ -43,10 +42,6 @@ EMAIL_SEGMENT_FROM: dict[str, str] = {
 }
 
 
-def _email_enabled() -> bool:
-    return (os.environ.get("EMAIL_ENABLED") or "").strip().lower() == "true"
-
-
 @broker.task
 @inject(patch_module=True)
 async def send_email_broadcast(
@@ -65,8 +60,12 @@ async def send_email_broadcast(
         )
         await session.commit()
 
-    if not _email_enabled():
-        logger.warning(f"Email отключён — email-рассылка #{broadcast_id} помечена ERROR")
+    # Почту включают И в .env, И в админке (assets/email.json поверх .env). Раньше
+    # здесь спрашивали только переменную окружения, поэтому у тех, кто настроил
+    # почту в админке, рассылка падала «Ошибкой» мгновенно, хотя письма с кодом
+    # уходили. Спрашиваем сам отправитель — он знает эффективные настройки.
+    if not email_sender.is_enabled:
+        logger.warning(f"Email не настроен — email-рассылка #{broadcast_id} помечена ERROR")
         await _update(status="ERROR")
         return
 

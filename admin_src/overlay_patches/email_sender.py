@@ -31,7 +31,11 @@ from src.application.common.email_sender import EmailSender
 from src.core.config import AppConfig
 from src.core.constants import EMAIL_VERIFICATION_SUBJECT
 from src.core.exceptions import EmailDeliveryError
-from src.infrastructure.services.email_settings import PRESETS, load_email_settings
+from src.infrastructure.services.email_settings import (
+    PRESETS,
+    load_email_settings,
+    settings_allow_sending,
+)
 from src.infrastructure.services.email_template_config import fill, load_email_template
 
 from src.infrastructure.services.email_sender import SmtpEmailSender as BaseSmtpEmailSender
@@ -287,14 +291,10 @@ class OverlaySmtpEmailSender(BaseSmtpEmailSender):
 
     @property
     def is_enabled(self) -> bool:
-        s = self._settings()
-        if not s["enabled"] or not s["from_email"]:
-            return False
-        # Brevo требует только API-ключ и адрес отправителя.
-        if self._use_brevo(s):
-            return True
-        # Иначе нужен полноценный SMTP-конфиг.
-        return bool(s["host"] and s["username"] and s["password"])
+        # Правило одно на весь проект (email_settings.settings_allow_sending):
+        # иначе фоновые задачи решают про почту по-своему и молча расходятся с
+        # тем, что админ видит в настройках.
+        return settings_allow_sending(self._settings())
 
     def _localize(self, settings: dict, *, subject: str, body: str) -> tuple[str, str, str]:
         """Возвращает (subject, text, html) — русифицируем письмо с кодом."""

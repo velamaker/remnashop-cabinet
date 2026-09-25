@@ -123,7 +123,17 @@ def autopay_env_on() -> bool:
 
 
 def email_env_on() -> bool:
-    return (os.environ.get("EMAIL_ENABLED") or "").strip().lower() == "true"
+    """Включена ли почта эффективно: админка (assets/email.json) поверх .env.
+
+    Имя историческое — раньше здесь читали только переменную окружения, и у
+    установок, где почту настроили в админке, письмо со скидкой не уходило.
+    """
+    try:
+        from src.infrastructure.services.email_settings import email_enabled_now
+
+        return email_enabled_now()
+    except Exception:  # noqa: BLE001 — настройки не прочитались: решаем по .env
+        return (os.environ.get("EMAIL_ENABLED") or "").strip().lower() == "true"
 
 
 @dataclass(frozen=True)
