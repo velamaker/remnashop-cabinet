@@ -11,6 +11,7 @@ import {
 import { useBranding } from "@/contexts/BrandingContext";
 import { ApiError } from "@/types/api";
 import { formatAdminMoney } from "@/lib/adminMoney";
+import { formatDateTime } from "@/lib/format";
 import { useT } from "@/i18n/I18nContext";
 
 /**
@@ -353,10 +354,19 @@ function DeviceFullSection() {
           onChange={(v) => setForm({ ...form, cooldown_days: v ?? 7 })}
         />
       </div>
+      {/* Число «заняты у N» считает проход крона, и только пока функция включена
+          (сохранённая настройка, а не тумблер до «Сохранить»). Выключена или ещё не
+          считали — это не «ноль человек», а «не знаем»: говорим нейтрально. */}
       <p className="mt-4 text-xs text-fg-muted">
-        {t("adm.devfull.full_now", { n: data.full_now })}
-        {run?.at && !run.baseline && " " + t("adm.devfull.last_run", { sent: run.sent ?? 0, failed: run.failed ?? 0 })}
-        {run?.baseline && " " + t("adm.devfull.baseline")}
+        {data.config.enabled && run?.at ? (
+          <>
+            {t("adm.devfull.full_now", { n: data.full_now, at: formatDateTime(run.at) })}
+            {!run.baseline && " " + t("adm.devfull.last_run", { sent: run.sent ?? 0, failed: run.failed ?? 0 })}
+            {run.baseline && " " + t("adm.devfull.baseline")}
+          </>
+        ) : (
+          t("adm.devfull.not_counted")
+        )}
       </p>
       <div className="mt-4 flex items-center gap-3">
         <button type="button" className={BUTTON} onClick={save} disabled={saving}>

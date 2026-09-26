@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { I18nProvider } from "@/i18n/I18nContext";
 import { STORAGE_KEY } from "@/i18n/config";
 import { setActiveLang, translate } from "@/i18n/translate";
+import { formatDateTime } from "@/lib/format";
 
 // Страница настроек денежной функции: что именно уходит на бэкенд и что видит
 // владелец, пока цена не задана. Продажи по умолчанию ВЫКЛЮЧЕНЫ — выкатка образа
@@ -155,11 +156,68 @@ describe("AdminExtraDevicePage: «все места заняты»", () => {
     renderPage();
     const toggle = await screen.findByRole("checkbox", { name: rx("adm.devfull.enabled_label") });
     expect((toggle as HTMLInputElement).checked).toBe(false);
-    expect(document.body.textContent).toContain(ru("adm.devfull.full_now", { n: 21 }));
     fireEvent.click(toggle);
     fireEvent.click(screen.getByRole("button", { name: ru("adm.devfull.save") }));
     await waitFor(() => expect(fullUpdateMock).toHaveBeenCalledWith({ enabled: true, cooldown_days: 7 }));
     expect(await screen.findByRole("status")).toHaveTextContent(ru("adm.devfull.saved"));
+  });
+
+  // «Сейчас заняты у 0 чел.» при выключенной функции читалось как «ни у кого не
+  // заняты»; на деле число считает проход крона, а он идёт, только когда включено.
+  describe("сколько людей упёрлись в лимит — только когда посчитано", () => {
+    const AT = "2026-09-26T12:00:00+00:00";
+    const counted = () => ru("adm.devfull.full_now", { n: 21, at: formatDateTime(AT) });
+
+    it("выключено — нейтральное «посчитаем», а не «заняты у N чел.»", async () => {
+      getMock.mockResolvedValue(answer());
+      fullGetMock.mockResolvedValue(full({ full_now: 0, last_run: null }));
+      renderPage();
+      await screen.findByText(ru("adm.devfull.not_counted"));
+      expect(document.body.textContent).not.toMatch(/заняты у 0 чел/);
+    });
+
+    it("выключено после прошлых проходов — старое число не показываем", async () => {
+      getMock.mockResolvedValue(answer());
+      fullGetMock.mockResolvedValue(full());
+      renderPage();
+      await screen.findByText(ru("adm.devfull.not_counted"));
+      expect(document.body.textContent).not.toContain(counted());
+      expect(document.body.textContent).not.toContain(ru("adm.devfull.last_run", { sent: 2, failed: 0 }));
+    });
+
+    it("включено, но прохода ещё не было — тоже «посчитаем»", async () => {
+      getMock.mockResolvedValue(answer());
+      fullGetMock.mockResolvedValue(full({ config: { enabled: true, cooldown_days: 7 }, full_now: 0, last_run: null }));
+      renderPage();
+      await screen.findByText(ru("adm.devfull.not_counted"));
+    });
+
+    it("тумблер включили, но не сохранили — числа ещё нет", async () => {
+      getMock.mockResolvedValue(answer());
+      fullGetMock.mockResolvedValue(full());
+      renderPage();
+      fireEvent.click(await screen.findByRole("checkbox", { name: rx("adm.devfull.enabled_label") }));
+      expect(screen.getByText(ru("adm.devfull.not_counted"))).toBeTruthy();
+    });
+
+    it("включено и посчитано — число со временем прохода и итог прохода", async () => {
+      getMock.mockResolvedValue(answer());
+      fullGetMock.mockResolvedValue(full({ config: { enabled: true, cooldown_days: 7 } }));
+      renderPage();
+      await waitFor(() => expect(document.body.textContent).toContain(counted()));
+      expect(document.body.textContent).toContain(ru("adm.devfull.last_run", { sent: 2, failed: 0 }));
+      expect(screen.queryByText(ru("adm.devfull.not_counted"))).toBeNull();
+    });
+
+    it("сохранили включение — число появляется из ответа сохранения", async () => {
+      getMock.mockResolvedValue(answer());
+      fullGetMock.mockResolvedValue(full());
+      fullUpdateMock.mockResolvedValue(full({ config: { enabled: true, cooldown_days: 7 } }));
+      renderPage();
+      fireEvent.click(await screen.findByRole("checkbox", { name: rx("adm.devfull.enabled_label") }));
+      fireEvent.click(screen.getByRole("button", { name: ru("adm.devfull.save") }));
+      await waitFor(() => expect(document.body.textContent).toContain(counted()));
+    });
   });
 
   it("старый бот без токена — секции нет и за ручкой не ходим", async () => {
