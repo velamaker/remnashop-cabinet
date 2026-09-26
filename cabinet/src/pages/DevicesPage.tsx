@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Trash2, Layers } from "lucide-react";
 import { subscriptionApi } from "@/api/subscription";
 import { useT } from "@/i18n/I18nContext";
@@ -192,9 +192,14 @@ export default function DevicesPage() {
   // ?buy=1 — кнопка «Докупить место» из сообщения бота «все места заняты»: после
   // загрузки прокручиваем к предложению места, а не оставляем человека искать его
   // под списком устройств. Адрес читаем напрямую: странице не нужен свой роутер.
+  // ОДИН РАЗ — после первой загрузки. Список меняется и дальше (удалили устройство,
+  // докупили место — перечитали), и прокрутка на каждое обновление утягивала бы
+  // страницу от строки, с которой человек сейчас работает.
   const wantsBuy = useMemo(() => new URLSearchParams(window.location.search).get("buy") === "1", []);
+  const scrolledToBuy = useRef(false);
   useEffect(() => {
-    if (!wantsBuy || isLoading || !data) return;
+    if (!wantsBuy || scrolledToBuy.current || isLoading || !data) return;
+    scrolledToBuy.current = true;
     document.getElementById("buy-slot")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
   }, [wantsBuy, isLoading, data]);
 
