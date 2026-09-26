@@ -38,6 +38,10 @@ export HARNESS_CALLS="$CALLS" HARNESS_TMP="$TMP" HARNESS_CAPS_PY="$CAPS_PY"
 # docker: FAKE_DB=1 — база запущена; FAKE_ADAPTER=1 — есть контейнер адаптера;
 # FAKE_BOT: none — контейнера бота нет; old — образ без списка возможностей (1.3.8);
 # new — образ с нынешним списком; partial — без одного токена и одного «только бот».
+# FAKE_OVERLAY — ответ проверки правок после пересборки (docker exec в remnashop):
+# ok — все встали; yookassa — не встала правка ЮKassa; pending — модуль правки никто
+# не импортировал; broken — питон в контейнере упал, метки нет; down — контейнер
+# так и не перешёл в running.
 cat > "$BIN/docker" <<'EOF'
 #!/usr/bin/env bash
 printf 'docker %s\n' "$*" >> "$HARNESS_CALLS"
@@ -48,7 +52,32 @@ case "$1 ${2:-}" in
   "ps --format") [ "${FAKE_DB:-1}" = 1 ] && echo remnashop-db; exit 0 ;;
   "ps -a") [ "${FAKE_ADAPTER:-0}" = 1 ] && echo remnashop-cabinet-adapter; exit 0 ;;
   "exec remnashop-db") echo "-- fake dump"; exit 0 ;;
-  "inspect -f") [ "${FAKE_BOT:-old}" = none ] && exit 1; echo "sha256:fakebotimage"; exit 0 ;;
+  "inspect -f")
+    case "${3:-}" in
+      *State.Status*)
+        [ "${FAKE_OVERLAY:-ok}" = down ] && { echo restarting; exit 0; }
+        echo running; exit 0 ;;
+    esac
+    [ "${FAKE_BOT:-old}" = none ] && exit 1; echo "sha256:fakebotimage"; exit 0 ;;
+  "exec -i")
+    # Программу проверки сохраняем: сценарий сверит, что это та же проверка, что в
+    # check-update.sh. Строки лога приложения — как у настоящей: им не место в итоге.
+    cat > "$HARNESS_TMP/overlay-check.py"
+    echo "2026-01-01 00:00:00 | INFO | overlay_patches:_run - Overlay: правка применена"
+    case "${FAKE_OVERLAY:-ok}" in
+      ok) echo "@@overlay-check@@ 35" ;;
+      yookassa)
+        echo "НЕ ПРИМЕНИЛАСЬ: ЮKassa: статус оплаты из её API: PatchTargetChanged: исходник изменился"
+        echo "@@overlay-check@@ 34" ;;
+      pending)
+        echo "НЕ СРАБОТАЛА: никто не импортировал src.web.endpoints.payments"
+        echo "@@overlay-check@@ 34" ;;
+      broken)
+        echo "Traceback (most recent call last):"
+        echo "ModuleNotFoundError: No module named overlay_patches"
+        exit 1 ;;
+    esac
+    exit 0 ;;
 esac
 if [ "$1" = run ]; then
   case "$*" in
@@ -105,6 +134,16 @@ esac
 exit 0
 EOF
 chmod +x "$BIN/crontab"
+
+# sleep — без настоящих пауз: update.sh ждёт, пока бот перейдёт в running, и сценарий
+# «контейнер не поднялся» иначе простоял бы полминуты. В журнал — чтобы было видно,
+# что ожидание ограничено.
+cat > "$BIN/sleep" <<'EOF'
+#!/usr/bin/env bash
+printf 'sleep %s\n' "$*" >> "$HARNESS_CALLS"
+exit 0
+EOF
+chmod +x "$BIN/sleep"
 
 
 export PATH="$BIN:$PATH"
@@ -200,12 +239,18 @@ out_lacks() { ! grep -qF -- "$1" "$OUT" || fail "в выводе лишнее: $
 count_out() { grep -cF -- "$1" "$OUT"; }
 # Журнал без пробы работающего бота (docker inspect/run только читают его образ).
 calls_wo_probe() {
-  # Из журнала убираем ПРОБЫ окружения: пробу образа бота (что он умеет) и пробу сети
-  # до registry.npmjs.org. Обе ничего не меняют и нужны только для диагностики, но
-  # появляются в разных сценариях по-разному — в золотом журнале им не место.
-  grep -vE '^docker (inspect -f \{\{\.Image\}\} remnashop|run --rm --network none --entrypoint sh |run --rm --network bridge node:22-alpine )' "$CALLS"
+  # Из журнала убираем ПРОБЫ окружения: пробу образа бота (что он умеет), пробу сети
+  # до registry.npmjs.org и проверку правок базы бота после пересборки (состояние
+  # контейнера + docker exec). Все они ничего не меняют и нужны только для
+  # диагностики — в золотом журнале им не место.
+  #
+  # Проверку правок убираем именно здесь, а не дописываем в золотой журнал: он снят
+  # со старой копии скрипта и обязан сходиться с ней (GOLDEN_ONLY=1), а у старой
+  # проверки нет. Что она есть, стоит после `up` и до `logs -f` и не бывает при «только
+  # кабинет», — стерегут сценарии O и cabinet_only_calls.
+  grep -vE '^docker (inspect -f \{\{\.Image\}\} remnashop|run --rm --network none --entrypoint sh |run --rm --network bridge node:22-alpine |inspect -f \{\{\.State\.Status\}\} remnashop$|exec -i -e LOG_TO_FILE=false remnashop python -$)' "$CALLS"
 }
-no_probe() { ! grep -qE '^docker (inspect|run --rm --network none)' "$CALLS" || fail "лишняя проба образа бота"; }
+no_probe() { ! grep -qE '^docker (inspect -f \{\{\.Image\}\}|run --rm --network none)' "$CALLS" || fail "лишняя проба образа бота"; }
 
 # «Только кабинет»: ни дампа, ни одного up/restart/stop/down мимо кабинета (и адаптера).
 cabinet_only_calls() {
@@ -223,6 +268,8 @@ cabinet_only_calls() {
     fail "остановка/перезапуск чего-то: $(grep -E '^docker (compose .* )?(down|stop|restart|rm|kill|pull)( |$)' "$CALLS" | head -1)"
   fi
   grep -qE "^docker compose .* logs -f --tail=30 ${want}\$" "$CALLS" || fail "логи не только кабинета"
+  # Бот не пересобирался — и проверять его правки нечего (и незачем будить контейнер).
+  no_call "docker exec -i"; no_call "{{.State.Status}}"; out_lacks "правки базы бота"
 }
 
 COMPOSE_BOT="docker compose -f docker-compose.yml -f cabinet/docker-compose.cabinet.yml"
@@ -539,6 +586,96 @@ case_ "T5: модуля благодарности нет (старый архи
 D="$(make_inst t6 bot git)"
 run_tty "$D" '' --with-bot
 rc_is 0; golden_full; out_lacks "Спасибо, что выбрали"
+
+# ── O: встали ли правки базы бота после пересборки ────────────────────────────
+# Правка, которая не встала, бота не роняет — он молча работает как исходная база, а
+# без правки ЮKassa не принимает её уведомления. Здесь заперто: полное обновление
+# спрашивает об этом работающий контейнер ПОСЛЕ `up` и ДО итога, спасибо и логов;
+# неудача называется поимённо, но обновление не падает (код 0); «не удалось
+# проверить» не выдаётся за «всё хорошо». «Только кабинет» контейнер бота не трогает —
+# это стережёт cabinet_only_calls во всех сценариях кабинета.
+
+# Строки встречаются в файле (выводе или журнале) в указанном порядке.
+in_order() {
+  local f="$1" prev=0 cur t
+  shift
+  for t in "$@"; do
+    cur="$(grep -nF -- "$t" "$f" | head -1 | cut -d: -f1)"
+    [ -n "$cur" ] || { fail "нет строки: $t"; return; }
+    [ "$cur" -gt "$prev" ] || { fail "не по порядку: «$t» (строка $cur) не после строки $prev"; return; }
+    prev="$cur"
+  done
+}
+OVERLAY_OK="Правки базы бота встали"
+OVERLAY_WARN="ВНИМАНИЕ: не все правки базы бота встали"
+OVERLAY_UNKNOWN="Не удалось проверить правки базы бота"
+CHECK_CALL="docker exec -i -e LOG_TO_FILE=false remnashop python -"
+
+case_ "O: правки встали — одна строка «встали», итог обычный; up → проверка → спасибо → логи"
+D="$(make_inst o1 bot git)"; add_thanks "$D"
+run_tty "$D" '' --with-bot
+rc_is 0; golden_full
+out_has "$OVERLAY_OK (35 шт.)"; out_lacks "$OVERLAY_WARN"; out_lacks "$OVERLAY_UNKNOWN"
+out_has "Обновление применено."; out_lacks "INFO | overlay_patches"
+in_order "$CALLS" "$COMPOSE_BOT up -d --build" "docker inspect -f {{.State.Status}} remnashop" \
+  "$CHECK_CALL" "$COMPOSE_BOT logs -f"
+in_order "$OUT" "$OVERLAY_OK" "Обновление применено." "Спасибо, что выбрали velamaker" "@@LOGS@@"
+# Та же программа, что в check-update.sh: собрать приложение и спросить failures/pending.
+for s in "m.application()" "op.failures()" "op.pending()"; do
+  grep -qF -- "$s" "$TMP/overlay-check.py" 2>/dev/null || fail "в проверке update.sh нет $s"
+  grep -qF -- "$s" "$ROOT/check-update.sh" || fail "в check-update.sh нет $s — проверки разошлись"
+done
+
+case_ "O': не встала правка ЮKassa — громко и поимённо, что делать; код 0, спасибо и логи на месте"
+D="$(make_inst o2 bot git)"; add_thanks "$D"
+# База из .env — не та, с которой проверен выпуск (v0.0.1 в docker-compose.yml стенда).
+printf 'BASE_TAG=v0.0.2\n' >> "$D/.env"
+FAKE_OVERLAY=yookassa run_tty "$D" '' --with-bot
+rc_is 0; golden_full
+out_has "$OVERLAY_WARN"; out_has "НЕ ПРИМЕНИЛАСЬ: ЮKassa: статус оплаты из её API"
+out_has "Приём уведомлений ЮKassa ВЫКЛЮЧЕН"; out_has "./check-update.sh"
+out_has "с которой проверен этот выпуск:  ./update.sh --base v0.0.1"
+out_lacks "$OVERLAY_OK"; out_lacks "Обновление применено."
+in_order "$OUT" "$OVERLAY_WARN" "Обновление применено, но не все правки" "Спасибо, что выбрали velamaker" "@@LOGS@@"
+
+case_ "O'': модуль правки не импортирован, без терминала — названо; база та же, что в выпуске"
+D="$(make_inst o3 bot git)"
+FAKE_OVERLAY=pending run_notty "$D"
+rc_is 0; golden_full; has_call "$CHECK_CALL"
+out_has "НЕ СРАБОТАЛА: никто не импортировал src.web.endpoints.payments"
+out_lacks "ЮKassa ВЫКЛЮЧЕН"; out_has "откатывать её не на что"; out_lacks "./update.sh --base"
+
+case_ "O''': после --base правка не встала — совет вернуть базу, на которой бот работал"
+D="$(make_inst o4 bot git)"
+# check-update.sh — подделка: совместимость «подтвердилась», дальше обычная пересборка.
+printf '#!/usr/bin/env bash\nexit 0\n' > "$D/check-update.sh"; chmod +x "$D/check-update.sh"
+FAKE_OVERLAY=yookassa run_notty "$D" --base v0.0.9
+rc_is 0; grep -qx 'BASE_TAG=v0.0.9' "$D/.env" || fail "BASE_TAG не записан"
+out_has "на которой бот работал до обновления:  ./update.sh --base v0.0.1"
+
+case_ "O4: бот так и не перешёл в running — «не удалось проверить», ожидание ограничено"
+D="$(make_inst o5 bot git)"; add_thanks "$D"
+FAKE_OVERLAY=down run_tty "$D" '' --with-bot
+rc_is 0; no_call "docker exec -i"
+out_has "$OVERLAY_UNKNOWN: контейнер remnashop не работает (состояние: restarting)"
+out_has "docker logs --tail=50 remnashop"; out_lacks "$OVERLAY_OK"; out_lacks "$OVERLAY_WARN"
+out_has "проверить не удалось"; out_lacks "Обновление применено."
+[ "$(grep -cxF 'docker inspect -f {{.State.Status}} remnashop' "$CALLS")" = 10 ] || fail "попыток не 10"
+[ "$(grep -c '^sleep ' "$CALLS")" = 9 ] || fail "пауз не 9"
+thanks_before_logs
+
+case_ "O5: питон в контейнере упал — «не удалось проверить» с хвостом ошибки, а не «встали»"
+D="$(make_inst o6 bot git)"
+FAKE_OVERLAY=broken run_notty "$D"
+rc_is 0; golden_full
+out_has "$OVERLAY_UNKNOWN: проверка в контейнере remnashop не дошла до конца"
+out_has "ModuleNotFoundError: No module named overlay_patches"
+out_lacks "$OVERLAY_OK"; out_lacks "Обновление применено."
+
+case_ "O6: только кабинет — бот не пересобирался, проверки нет даже при сломанной правке"
+D="$(make_inst o7 bot git)"
+FAKE_OVERLAY=yookassa run_notty "$D" --cabinet-only
+rc_is 0; cabinet_only_calls cabinet; out_lacks "НЕ ПРИМЕНИЛАСЬ"
 
 echo
 if [ "$FAILS" = 0 ]; then
