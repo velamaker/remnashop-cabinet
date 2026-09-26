@@ -1157,6 +1157,10 @@ export const promoBannerAdminApi = {
 
 export interface WinbackConfig {
   enabled: boolean;
+  /** term — «90 дней по цене двух месяцев» по ценам тарифа человека; percent — скидка N %. */
+  mode?: "term" | "percent";
+  term_days?: number;
+  pay_days?: number;
   percent: number;
   days_after: number;
   lifetime_hours: number;
@@ -1305,6 +1309,35 @@ export const extraDeviceAdminApi = {
   get: () => adminApi.get<ExtraDeviceAdminResponse>("/extra-device"),
   update: (data: ExtraDeviceConfig) =>
     adminApi.put<{ config: ExtraDeviceConfig; effective_enabled: boolean }>("/extra-device", data),
+};
+
+// ---------- «Все места для устройств заняты» ----------
+
+export interface DeviceFullConfig {
+  enabled: boolean;
+  cooldown_days: number;
+}
+
+export interface DeviceFullLastRun {
+  at?: string;
+  baseline?: boolean;
+  full_now?: number;
+  sent?: number;
+  failed?: number;
+  queued?: number;
+  skipped?: Record<string, number>;
+}
+
+export interface DeviceFullAdminResponse {
+  config: DeviceFullConfig;
+  baselined: boolean;
+  full_now: number;
+  last_run: DeviceFullLastRun | null;
+}
+
+export const deviceFullAdminApi = {
+  get: () => adminApi.get<DeviceFullAdminResponse>("/device-full"),
+  update: (data: DeviceFullConfig) => adminApi.put<DeviceFullAdminResponse>("/device-full", data),
 };
 
 // ---------- Докупка трафика ----------

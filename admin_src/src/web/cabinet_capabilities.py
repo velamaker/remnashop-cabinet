@@ -39,6 +39,7 @@ CABINET_CAPABILITIES: tuple[str, ...] = (
     "payment_reminder",
     "info_i18n",
     "churn_signals",
+    "device_full",
 )
 
 # Заметные изменения ТОЛЬКО в боте — кабинета не касаются, но при «только кабинет»

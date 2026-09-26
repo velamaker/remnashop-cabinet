@@ -9,11 +9,23 @@ import { setActiveLang, translate } from "@/i18n/translate";
 // сама по себе брать деньги не должна.
 const getMock = vi.fn();
 const updateMock = vi.fn();
+const fullGetMock = vi.fn();
+const fullUpdateMock = vi.fn();
 vi.mock("@/api/admin", () => ({
   extraDeviceAdminApi: {
     get: () => getMock(),
     update: (body: unknown) => updateMock(body),
   },
+  deviceFullAdminApi: {
+    get: () => fullGetMock(),
+    update: (body: unknown) => fullUpdateMock(body),
+  },
+}));
+
+// Секция «все места заняты» рисуется только новому боту — по токену device_full.
+const branding = { caps: ["extra_device", "device_full"] };
+vi.mock("@/contexts/BrandingContext", () => ({
+  useBranding: () => ({ can: (key: string) => branding.caps.includes(key) }),
 }));
 
 const { AdminExtraDevicePage } = await import("./AdminExtraDevicePage");
@@ -58,6 +70,12 @@ beforeEach(() => {
   getMock.mockReset();
   updateMock.mockReset();
   getMock.mockResolvedValue(answer());
+  fullGetMock.mockResolvedValue({
+    config: { enabled: false, cooldown_days: 7 },
+    baselined: false,
+    full_now: 0,
+    last_run: null,
+  });
 });
 afterEach(cleanup);
 
@@ -112,5 +130,44 @@ describe("AdminExtraDevicePage", () => {
     renderPage();
     await waitFor(() => expect(document.body.textContent).toContain("150 ₽"));
     expect(document.body.textContent).toContain(ru("adm.extradevice.hint_traffic", { gb: "+50" }));
+  });
+});
+
+describe("AdminExtraDevicePage: «все места заняты»", () => {
+  const full = (over: Record<string, unknown> = {}) => ({
+    config: { enabled: false, cooldown_days: 7 },
+    baselined: true,
+    full_now: 21,
+    last_run: { at: "2026-09-26T12:00:00+00:00", baseline: false, sent: 2, failed: 0 },
+    ...over,
+  });
+
+  beforeEach(() => {
+    fullGetMock.mockReset();
+    fullUpdateMock.mockReset();
+    branding.caps = ["extra_device", "device_full"];
+  });
+
+  it("по умолчанию выключено; включение уходит на бэкенд ровно тем, что показано", async () => {
+    getMock.mockResolvedValue(answer());
+    fullGetMock.mockResolvedValue(full());
+    fullUpdateMock.mockResolvedValue(full({ config: { enabled: true, cooldown_days: 7 } }));
+    renderPage();
+    const toggle = await screen.findByRole("checkbox", { name: rx("adm.devfull.enabled_label") });
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+    expect(document.body.textContent).toContain(ru("adm.devfull.full_now", { n: 21 }));
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole("button", { name: ru("adm.devfull.save") }));
+    await waitFor(() => expect(fullUpdateMock).toHaveBeenCalledWith({ enabled: true, cooldown_days: 7 }));
+    expect(await screen.findByRole("status")).toHaveTextContent(ru("adm.devfull.saved"));
+  });
+
+  it("старый бот без токена — секции нет и за ручкой не ходим", async () => {
+    branding.caps = ["extra_device"];
+    getMock.mockResolvedValue(answer());
+    renderPage();
+    await screen.findByText(ru("adm.extradevice.title"));
+    expect(fullGetMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(ru("adm.devfull.title"))).toBeNull();
   });
 });

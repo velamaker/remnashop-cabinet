@@ -1,10 +1,14 @@
 import { useEffect, useState } from "react";
 import { MonitorSmartphone } from "lucide-react";
 import {
+  deviceFullAdminApi,
   extraDeviceAdminApi,
+  type DeviceFullAdminResponse,
+  type DeviceFullConfig,
   type ExtraDeviceAdminResponse,
   type ExtraDeviceConfig,
 } from "@/api/admin";
+import { useBranding } from "@/contexts/BrandingContext";
 import { ApiError } from "@/types/api";
 import { formatAdminMoney } from "@/lib/adminMoney";
 import { useT } from "@/i18n/I18nContext";
@@ -99,6 +103,10 @@ function NumberField({
 
 export function AdminExtraDevicePage() {
   const t = useT();
+  // Секция «все места заняты» нужна новому боту (ручки /admin/device-full): со старым
+  // её не рисуем вовсе, чтобы не ходить за несуществующей ручкой.
+  const { can } = useBranding();
+  const canDeviceFull = can("device_full");
   const [data, setData] = useState<ExtraDeviceAdminResponse | null>(null);
   const [form, setForm] = useState<ExtraDeviceConfig | null>(null);
   const [saving, setSaving] = useState(false);
@@ -273,7 +281,94 @@ export function AdminExtraDevicePage() {
         </div>
         <p className="mt-4 text-xs text-fg-muted">{t("adm.extradevice.footer")}</p>
       </section>
+
+      {canDeviceFull && <DeviceFullSection />}
     </div>
+  );
+}
+
+/**
+ * «Все места для устройств заняты» — сообщение в Telegram, когда у человека занято
+ * последнее место (services/overlay_device_full.py). Живёт здесь, потому что это одна
+ * тема с докупкой: кнопка «Докупить место» в сообщении есть, только когда продажа мест
+ * включена выше. Первый проход после включения только запоминает, кто уже заполнен, —
+ * им не пишем.
+ */
+function DeviceFullSection() {
+  const t = useT();
+  const [data, setData] = useState<DeviceFullAdminResponse | null>(null);
+  const [form, setForm] = useState<DeviceFullConfig | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    deviceFullAdminApi
+      .get()
+      .then((d) => {
+        setData(d);
+        setForm(d.config);
+      })
+      .catch(() => setMessage({ ok: false, text: t("adm.devfull.load_error") }));
+    // t нужен лишь для текста ошибки
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (!form || !data) {
+    return message ? <p className="text-sm text-danger">{message.text}</p> : null;
+  }
+
+  const save = async () => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const d = await deviceFullAdminApi.update(form);
+      setData(d);
+      setForm(d.config);
+      setMessage({ ok: true, text: t("adm.devfull.saved") });
+    } catch (e) {
+      setMessage({ ok: false, text: e instanceof ApiError ? e.detail : t("adm.devfull.save_error") });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const run = data.last_run;
+  return (
+    <section className={SECTION} aria-labelledby="devfull-title">
+      <h2 id="devfull-title" className="mb-3 text-sm font-semibold text-fg">
+        {t("adm.devfull.title")}
+      </h2>
+      <Toggle
+        label={t("adm.devfull.enabled_label")}
+        hint={t("adm.devfull.enabled_hint")}
+        checked={form.enabled}
+        onChange={(enabled) => setForm({ ...form, enabled })}
+      />
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <NumberField
+          id="devfull-cooldown"
+          label={t("adm.devfull.cooldown_label")}
+          hint={t("adm.devfull.cooldown_hint")}
+          value={form.cooldown_days}
+          onChange={(v) => setForm({ ...form, cooldown_days: v ?? 7 })}
+        />
+      </div>
+      <p className="mt-4 text-xs text-fg-muted">
+        {t("adm.devfull.full_now", { n: data.full_now })}
+        {run?.at && !run.baseline && " " + t("adm.devfull.last_run", { sent: run.sent ?? 0, failed: run.failed ?? 0 })}
+        {run?.baseline && " " + t("adm.devfull.baseline")}
+      </p>
+      <div className="mt-4 flex items-center gap-3">
+        <button type="button" className={BUTTON} onClick={save} disabled={saving}>
+          {t("adm.devfull.save")}
+        </button>
+        {message && (
+          <span role="status" className={message.ok ? "text-xs text-success" : "text-xs text-danger"}>
+            {message.text}
+          </span>
+        )}
+      </div>
+    </section>
   );
 }
 

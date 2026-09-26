@@ -63,6 +63,7 @@ export const BOT_CAPABILITIES = {
   payment_reminder: { since: "1.4.1", label: "Напоминание о незавершённой оплате" },
   info_i18n: { since: "1.5.0", label: "Переводы страницы «Информация» на языки кабинета" },
   churn_signals: { since: "1.5.4", label: "Сигналы до ухода: «Всё работает?» и «давно не подключался»" },
+  device_full: { since: "1.6.0", label: "Сообщение «все места для устройств заняты» с кнопками докупить и освободить" },
 } as const;
 
 export type BotCap = keyof typeof BOT_CAPABILITIES;
@@ -89,6 +90,8 @@ export const FEATURE_NEEDS_BOT: Partial<Record<FeatureKey, BotCap>> = {
   // Докупка обещает ДЕНЬГИ и место под устройство: кнопка «Докупить за X ₽» у старого
   // бота упёрлась бы в 404 уже после подтверждения суммы.
   extra_device: "extra_device",
+  // Секция «все места заняты» ходит за /admin/device-full — у старого бота 404.
+  device_full: "device_full",
   // То же и с трафиком, и тут ещё и срок: кнопка называет дату обновления трафика,
   // которую старый бот считать не умеет.
   extra_traffic: "extra_traffic",

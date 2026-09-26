@@ -56,6 +56,10 @@ export const PATH_NEEDS_BOT: Record<string, BotCap> = {
   // «Сигналы до ухода»: страницу прячет canPage (PAGE_NEEDS_BOT).
   "GET /api/admin/churn-signals": "churn_signals",
   "PUT /api/admin/churn-signals": "churn_signals",
+  // «Все места заняты»: секция на странице «Докупка устройств» рисуется только при
+  // токене бота (botHas), со старым ботом ручек никто не зовёт.
+  "GET /api/admin/device-full": "device_full",
+  "PUT /api/admin/device-full": "device_full",
   "POST /api/admin/subscriptions/user/{}/extra-traffic/{}/revoke": "extra_traffic",
 };
 

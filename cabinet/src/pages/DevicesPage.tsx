@@ -189,6 +189,15 @@ export default function DevicesPage() {
     load();
   }, [load]);
 
+  // ?buy=1 — кнопка «Докупить место» из сообщения бота «все места заняты»: после
+  // загрузки прокручиваем к предложению места, а не оставляем человека искать его
+  // под списком устройств. Адрес читаем напрямую: странице не нужен свой роутер.
+  const wantsBuy = useMemo(() => new URLSearchParams(window.location.search).get("buy") === "1", []);
+  useEffect(() => {
+    if (!wantsBuy || isLoading || !data) return;
+    document.getElementById("buy-slot")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  }, [wantsBuy, isLoading, data]);
+
   // Слоты, похожие на один аппарат: только у них показываем приложение —
   // в остальных строках это лишний шум.
   const duplicateHwids = useMemo(() => {
@@ -271,22 +280,24 @@ export default function DevicesPage() {
 
         {!isLoading && data && data.devices.length > 0 && (
           <div className="flex flex-col gap-2">
-            <DeviceUpsellCard
-              variant="devices"
-              subscription={sub}
-              devices={data}
-              onChanged={load}
-              onOfferShown={setCardShowsExtra}
-            />
-            {/* Панель докупленных мест тумблеру апселла не подчиняется: продление уже
-                оплаченного места — не реклама. Кнопку «Докупить» она показывает только
-                когда карточка выше её не показала. */}
-            <ExtraDevicesPanel
-              subscription={sub}
-              devices={data}
-              cardShowsOffer={cardShowsExtra}
-              onChanged={load}
-            />
+            <div id="buy-slot" className="flex flex-col gap-2 scroll-mt-4">
+              <DeviceUpsellCard
+                variant="devices"
+                subscription={sub}
+                devices={data}
+                onChanged={load}
+                onOfferShown={setCardShowsExtra}
+              />
+              {/* Панель докупленных мест тумблеру апселла не подчиняется: продление уже
+                  оплаченного места — не реклама. Кнопку «Докупить» она показывает только
+                  когда карточка выше её не показала. */}
+              <ExtraDevicesPanel
+                subscription={sub}
+                devices={data}
+                cardShowsOffer={cardShowsExtra}
+                onChanged={load}
+              />
+            </div>
             <SameDeviceHint devices={data.devices} />
             {data.devices.map((device) => (
               <DeviceRow
