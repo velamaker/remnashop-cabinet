@@ -19,6 +19,7 @@ import { referralApi } from "@/api/referral";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { TelegramLinkPrompt } from "@/components/TelegramLinkPrompt";
+import { EmailVerifyBanner } from "@/components/EmailVerifyBanner";
 import { RenewalBanner } from "@/components/RenewalBanner";
 import { useRenewalDiscount } from "@/hooks/useRenewalDiscount";
 import { TrialDiscountBanner } from "@/components/TrialDiscountBanner";
@@ -206,6 +207,10 @@ export default function HomePage() {
           )}
         </div>
       </div>
+
+      {/* Неподтверждённая почта — первой: без неё почтовому пользователю не дают
+          купить и продлить, и подтвердить её можно прямо здесь, кодом из письма. */}
+      <EmailVerifyBanner />
 
       {/* Напоминание продлить подписку (скоро кончится / истекла) */}
       <PromoBanner />
