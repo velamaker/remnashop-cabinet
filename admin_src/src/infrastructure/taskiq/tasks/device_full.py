@@ -131,6 +131,11 @@ async def run_once(
     counts = count_devices(devices, known, tid_to_uuid)
 
     state = df.load_state()
+    # Снимок устарел (крон долго падал или его выключали, а отметку baseline никто не
+    # снял) — сравнивать с ним нельзя: этот проход только пересобирает снимок.
+    stale = bool(state.get("baselined")) and df.snapshot_stale(state, now)
+    if stale:
+        state = {**state, "baselined": False}
     to_send, new_full, report = plan_run(rows, counts, state, cfg, now)
 
     sent_log: dict[str, str] = {
@@ -155,6 +160,7 @@ async def run_once(
 
     baseline = not state.get("baselined")
     report["baseline"] = baseline
+    report["stale"] = stale
     report["failed"] = failed
     report["skipped"] = dict(report["skipped"])
     df.save_state(
@@ -271,7 +277,8 @@ async def run_device_full(
         return
 
     if report["baseline"]:
-        logger.info(f"device_full: baseline — заполнены сейчас {report['full_now']}, им не пишем")
+        why = "снимок устарел" if report.get("stale") else "первый проход после включения"
+        logger.info(f"device_full: baseline ({why}) — заполнены сейчас {report['full_now']}, им не пишем")
     elif report["sent"] or report["failed"] or report["queued"]:
         logger.info(
             f"device_full: написали {report['sent']}, не дошло {report['failed']}, "

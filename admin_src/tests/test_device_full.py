@@ -165,9 +165,14 @@ class FakeSession:
         return None
 
 
+def fresh_run(at=NOW - timedelta(minutes=20)):
+    """Отметка прошлого прохода: снимок свежий, сравнивать с ним можно."""
+    return {"at": at.isoformat()}
+
+
 def test_проход_пишет_сохраняет_и_переживает_сбой_отправки(tmp_path, monkeypatch):
     monkeypatch.setattr(df, "STATE_PATH", tmp_path / "state.json")
-    df.save_state({"baselined": True, "full": {}, "sent": {}})
+    df.save_state({"baselined": True, "full": {}, "sent": {}, "last_run": fresh_run()})
     sent = []
 
     async def send_tg(r, used):
@@ -193,3 +198,79 @@ def test_битое_состояние_начинается_с_baseline(tmp_path
     path.write_text("{не json", "utf-8")
     monkeypatch.setattr(df, "STATE_PATH", path)
     assert df.load_state()["baselined"] is False
+
+
+# ── пауза: выключили и включили, крон долго падал ─────────────────────────────
+
+
+class Pass:
+    """Проходы крона по одному состоянию на диске: кто сколько устройств занял сейчас."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.sent: list[int] = []
+
+    async def _send(self, r, _used):
+        self.sent.append(r.user_id)
+        return task.SENT
+
+    def run(self, counts: dict[int, int], at: datetime) -> dict:
+        devices = [dev(f"uuid-{uid}", f"hw-{uid}-{i}") for uid, n in counts.items() for i in range(n)]
+        return asyncio.run(task.run_once(FakeSession(self.rows), devices=devices, tid_to_uuid={},
+                                         send_tg=self._send, now=at, cfg=df.DEFAULT_CONFIG))
+
+
+@pytest.fixture
+def files(tmp_path, monkeypatch):
+    monkeypatch.setattr(df, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(df, "CONFIG_PATH", tmp_path / "device_full.json")
+
+
+def test_выключили_кто_то_заполнил_включили_первый_проход_молчит(files):
+    """Выключение на полчаса: по часам снимок ещё «свежий», но того, что случилось за
+    паузу, в нём нет. Включение обязано сбросить baseline — иначе всем, кто заполнил
+    места, пока рассылка стояла, ушло бы «только что заняли последнее место»."""
+    from src.web.endpoints.admin import device_full as endpoint
+
+    def put(enabled: bool) -> dict:
+        body = endpoint.DeviceFullConfigRequest(enabled=enabled)
+        return asyncio.run(endpoint.put_device_full(body, None))
+
+    p = Pass([row(1), row(2)])
+    put(True)
+    assert p.run({1: 1}, NOW)["baseline"] is True
+    assert p.run({1: 1}, NOW + timedelta(minutes=20))["baseline"] is False
+    put(False)
+    # Пока выключено, второй занял последнее место. Крон в это время не ходит.
+    put(True)
+    report = p.run({1: 1, 2: 1}, NOW + timedelta(minutes=40))
+    assert report["baseline"] is True and p.sent == [], "рассылка по истории после включения"
+    assert put(True)["baselined"] is True, "«включить» уже включённое — не сброс"
+    # Дальше — как обычно: новый переход после включения пишем.
+    p.rows.append(row(3))
+    p.run({1: 1, 2: 1, 3: 1}, NOW + timedelta(minutes=60))
+    assert p.sent == [3]
+
+
+def test_устаревший_снимок_проход_baseline(files):
+    """Крон падал три часа (панель лежала), отметку baseline никто не снимал: снимок с
+    тех пор не обновлялся, и всех, кто заполнил места за это время, он «не видел»."""
+    p = Pass([row(1), row(2)])
+    df.save_state({"baselined": True, "full": {}, "sent": {}, "last_run": fresh_run(NOW)})
+    report = p.run({1: 1, 2: 1}, NOW + timedelta(hours=3))
+    assert report["baseline"] is True and report["stale"] is True and p.sent == []
+    assert set(df.load_state()["full"]) == {"1", "2"}
+
+    # Контроль: свежий снимок — не baseline, настоящий переход пишем.
+    p.rows.append(row(3))
+    report = p.run({1: 1, 2: 1, 3: 1}, NOW + timedelta(hours=3, minutes=20))
+    assert report["baseline"] is False and p.sent == [3]
+
+
+def test_сброс_baseline_помнит_кому_писали(files):
+    df.save_state({"baselined": True, "full": {"1": NOW.isoformat()},
+                   "sent": {"1": NOW.isoformat()}, "last_run": fresh_run()})
+    df.save_config({"enabled": True})
+    state = df.load_state()
+    assert state["baselined"] is False
+    assert state["sent"] == {"1": NOW.isoformat()}, "пауза между сообщениями одному человеку не обнуляется"
