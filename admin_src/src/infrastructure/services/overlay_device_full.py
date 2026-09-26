@@ -216,12 +216,19 @@ def decide(
 
 # ── сообщение ─────────────────────────────────────────────────────────────────
 
+# Два текста: с докупкой и без. Какой — решает offers_buy(), тот же флаг, что ставит
+# кнопку «Докупить»: обещать докупку, когда продажа мест выключена, нельзя.
 TEXTS = {
     "ru": {
-        "body": (
+        "body_buy": (
             "📱 <b>Все места для устройств заняты</b> — {used} из {limit}.\n\n"
             "Следующее устройство подключиться не сможет. Можно докупить место или "
             "освободить: удалить устройство, которым вы больше не пользуетесь."
+        ),
+        "body_free": (
+            "📱 <b>Все места для устройств заняты</b> — {used} из {limit}.\n\n"
+            "Следующее устройство подключиться не сможет. Освободите место: удалите "
+            "устройство, которым больше не пользуетесь."
         ),
         "buy": "➕ Докупить место",
         "free": "🗑 Освободить место",
@@ -229,10 +236,15 @@ TEXTS = {
         "done": "Больше не напишу о занятых местах.",
     },
     "en": {
-        "body": (
+        "body_buy": (
             "📱 <b>All device slots are taken</b> — {used} of {limit}.\n\n"
             "The next device won't be able to connect. You can buy an extra slot or free "
             "one up by removing a device you no longer use."
+        ),
+        "body_free": (
+            "📱 <b>All device slots are taken</b> — {used} of {limit}.\n\n"
+            "The next device won't be able to connect. Free up a slot: remove a device "
+            "you no longer use."
         ),
         "buy": "➕ Buy a slot",
         "free": "🗑 Free a slot",
@@ -246,8 +258,11 @@ def texts_for(lang: Optional[str]) -> dict[str, str]:
     return TEXTS["en"] if (lang or "ru").lower().startswith("en") else TEXTS["ru"]
 
 
-def message_text(used: int, limit: int, lang: Optional[str] = None) -> str:
-    return texts_for(lang)["body"].format(used=int(used), limit=int(limit))
+def message_text(used: int, limit: int, lang: Optional[str] = None, *, buy: bool = False) -> str:
+    """Текст сообщения. `buy` — предлагать ли докупку: передавайте offers_buy(), тот же
+    флаг, что ставит кнопку. По умолчанию без докупки — пообещать лишнего хуже."""
+    key = "body_buy" if buy else "body_free"
+    return texts_for(lang)[key].format(used=int(used), limit=int(limit))
 
 
 def devices_url(base_url: Optional[str], *, buy: bool) -> str:
@@ -256,6 +271,12 @@ def devices_url(base_url: Optional[str], *, buy: bool) -> str:
     if not base:
         return ""
     return f"{base}/devices?buy=1" if buy else f"{base}/devices"
+
+
+def offers_buy(base_url: Optional[str], can_buy: bool) -> bool:
+    """Предлагаем ли докупку: продажа мест включена и кнопке есть куда вести. Одно
+    решение и для кнопки, и для текста — чтобы текст не звал докупать без кнопки."""
+    return bool(can_buy) and bool(devices_url(base_url, buy=True))
 
 
 def keyboard(base_url: Optional[str], *, can_buy: bool, lang: Optional[str] = None) -> Any:
@@ -267,7 +288,7 @@ def keyboard(base_url: Optional[str], *, can_buy: bool, lang: Optional[str] = No
 
     words = texts_for(lang)
     builder = InlineKeyboardBuilder()
-    if can_buy and devices_url(base_url, buy=True):
+    if offers_buy(base_url, can_buy):
         builder.row(InlineKeyboardButton(text=words["buy"], url=devices_url(base_url, buy=True)))
     if devices_url(base_url, buy=False):
         builder.row(InlineKeyboardButton(text=words["free"], url=devices_url(base_url, buy=False)))

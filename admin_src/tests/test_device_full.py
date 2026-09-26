@@ -91,6 +91,57 @@ def test_кнопки_и_текст():
     assert "2 of 2" in df.message_text(2, 2, "en")
 
 
+def test_текст_не_зовёт_докупать_без_кнопки():
+    assert "Можно докупить место" in df.message_text(1, 1, "ru", buy=True)
+    free = df.message_text(1, 1, "ru", buy=False)
+    assert "докуп" not in free.lower()
+    assert "Освободите место: удалите устройство, которым больше не пользуетесь." in free
+    assert "buy an extra slot" in df.message_text(1, 1, "en", buy=True)
+    assert "buy" not in df.message_text(1, 1, "en", buy=False).lower()
+    assert df.message_text(1, 1, "ru") == free, "по умолчанию — без обещания докупки"
+
+
+@pytest.mark.parametrize(
+    "cabinet, can_buy, offers",
+    [
+        ("https://cab.example", True, True),
+        ("https://cab.example", False, False),   # продажа мест выключена
+        ("", True, False),                        # кнопке некуда вести
+    ],
+)
+def test_текст_и_кнопка_от_одного_решения(cabinet, can_buy, offers):
+    got = []
+
+    class Notifier:
+        async def notify_user(self, user, payload):
+            got.append(payload)
+            return object()
+
+    class Users:
+        async def get_by_id(self, uid):
+            return SimpleNamespace(id=uid, telegram_id=100)
+
+    send = task.make_send_tg(Notifier(), Users(), cabinet, can_buy)
+    assert asyncio.run(send(row(1), 1)) == task.SENT
+    payload = got[0]
+    urls = [b.url for r in payload.reply_markup.inline_keyboard for b in r if b.url]
+    assert ("докупить" in payload.i18n_kwargs["content"]) is offers
+    assert any("buy=1" in u for u in urls) is offers
+    assert payload.delete_after is None
+
+
+def test_докупка_предлагается_только_когда_места_продаются(tmp_path, monkeypatch):
+    from src.infrastructure.services import overlay_extra_device as ed
+
+    monkeypatch.setattr(ed, "ASSETS_DIR", tmp_path)
+    monkeypatch.setattr(ed, "CONFIG_PATH", tmp_path / "extra_device.json")
+    assert task._can_buy_slot() is False, "по умолчанию докупка выключена"
+    ed.save_config({"enabled": True, "price_rub_30d": None})
+    assert task._can_buy_slot() is False, "тумблер без цены — места не продаются"
+    ed.save_config({"enabled": True, "price_rub_30d": 99})
+    assert task._can_buy_slot() is True
+
+
 # ── снимок ───────────────────────────────────────────────────────────────────
 
 

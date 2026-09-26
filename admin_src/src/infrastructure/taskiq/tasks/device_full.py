@@ -180,9 +180,12 @@ def make_send_tg(notifier: Any, user_dao: Any, cabinet_url: str, can_buy: bool) 
         user = await user_dao.get_by_id(int(row.user_id))
         if user is None or user.telegram_id is None:
             return BLOCKED
+        # Текст и кнопка — от одного решения: «можно докупить» без кнопки «Докупить»
+        # (продажа мест выключена или нет адреса кабинета) звало бы в никуда.
+        buy = df.offers_buy(cabinet_url, can_buy)
         payload = MessagePayloadDto(
             i18n_key="raw-message",
-            i18n_kwargs={"content": df.message_text(used, int(row.device_limit), row.lang)},
+            i18n_kwargs={"content": df.message_text(used, int(row.device_limit), row.lang, buy=buy)},
             reply_markup=df.keyboard(cabinet_url, can_buy=can_buy, lang=row.lang),
             disable_default_markup=True,
             # delete_after=None ОБЯЗАТЕЛЬНО: дефолт DTO — 5 секунд, и сообщение исчезло бы
@@ -196,10 +199,13 @@ def make_send_tg(notifier: Any, user_dao: Any, cabinet_url: str, can_buy: bool) 
 
 
 def _can_buy_slot() -> bool:
+    """Продаются ли сейчас места. Не просто тумблер: включённая докупка без цены — это
+    «не продаём» (effective_enabled), и кнопка «Докупить» вела бы в пустой раздел."""
     try:
+        from src.infrastructure.services.overlay_extra_device import effective_enabled
         from src.infrastructure.services.overlay_extra_device import load_config as extra_cfg
 
-        return bool(extra_cfg().get("enabled"))
+        return effective_enabled(extra_cfg())
     except Exception:  # noqa: BLE001 — без докупки остаётся «освободить место»
         return False
 
