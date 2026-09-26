@@ -8,9 +8,13 @@
 
 ЧТО ПРОИСХОДИТ, ПО ШАГАМ.
 
- 1. Аккаунт в панели Remnawave удаляется — VPN перестаёт работать. Панель не
-    ответила → дальше НЕ идём и ничего не меняем: «полуудалённый» аккаунт с
-    живым доступом хуже, чем неудалённый.
+ 1. Аккаунт в панели Remnawave удаляется — VPN перестаёт работать. Вместе с ним
+    удаляются пользователи панели его семейных профилей: семья живёт подпиской
+    владельца, и без него её ссылки работали бы бесплатно, а продлить или
+    приостановить их было бы уже некому. Панель не ответила → дальше НЕ идём и
+    ничего не меняем: «полуудалённый» аккаунт с живым доступом хуже, чем
+    неудалённый. Затем удаляются теневые аккаунты профилей (у них нет ни денег,
+    ни личных данных — это просто подписки семьи).
  2. Подписки помечаются DELETED. Иначе у несуществующего человека остаётся
     активная подписка — её видят отчёты, ею занимаются кроны.
  3. Вычищаются личные данные: история входов, push-подписки, известные
@@ -37,6 +41,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.infrastructure.services import overlay_family as family
 from src.infrastructure.services.overlay_sessions import invalidate_all
 
 
@@ -198,9 +203,25 @@ async def purge_user(
     email = who[1] if who else None
 
     # 1) Панель. Делаем ДО всего остального: сорвалась связь — ничего не меняли.
+    #    Семейные профили — в том же заходе: их пользователей панели ищем заранее
+    #    (профиль, застрявший в «создаю», — по имени), и недоступная панель прерывает
+    #    удаление ещё до первого изменения.
+    try:
+        family_uuids, family_shadows = await family.purge_targets(
+            session, getattr(remnawave, "sdk", None), user_id
+        )
+    except family.PanelError as exc:
+        raise PanelUnavailable(str(exc)) from exc
+    own_uuids = await panel_uuids(session, user_id)
     removed_in_panel = await revoke_panel_access(
-        remnawave, await panel_uuids(session, user_id)
+        remnawave, own_uuids + [u for u in family_uuids if u not in own_uuids]
     )
+
+    # 1б) Теневые аккаунты профилей: каскад по FK уносит их подписки и строки семьи.
+    if family_shadows:
+        await session.execute(
+            text("DELETE FROM users WHERE id = ANY(:ids)"), {"ids": list(family_shadows)}
+        )
 
     keep_row = await has_money_trace(session, user_id)
 
@@ -227,4 +248,5 @@ async def purge_user(
     return {
         "mode": "anonymized" if keep_row else "purged",
         "panel_accounts_removed": removed_in_panel,
+        "family_profiles_removed": len(family_shadows),
     }
