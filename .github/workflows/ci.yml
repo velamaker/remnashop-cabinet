@@ -41,6 +41,40 @@ jobs:
   backend:
     name: Бэкенд — тесты overlay
     runs-on: ubuntu-latest
+
+    # Одноразовый Postgres для opt-in тестов (RS_PG_DSN). Без него около сотни тестов
+    # пропускались МОЛЧА — а среди них денежные пути (идемпотентность платежа, перенос
+    # остатка при смене тарифа, докупка устройств и трафика, подарки, возвраты) и
+    # уникальные индексы, то есть ровно то, что на подделанной сессии не проверить.
+    # Зелёный CI с сотней пропусков выглядел как «всё проверено», а проверено не было.
+    #
+    # Имена — как у базы бота (DATABASE_USER/NAME по умолчанию remnashop), пароль —
+    # DATABASE_PASSWORD из ci.env: так миграции бота ниже идут без лишних настроек.
+    # База живёт только в этой job, пароль — заглушка, а не секрет. Runner ждёт
+    # healthcheck (pg_isready) до первого шага — гонки «тесты раньше базы» нет.
+    #
+    # Сеть. Тесты идут не на самом раннере, а в `docker run`, и `localhost` там —
+    # контейнер тестов, а не база. Поэтому контейнеры шагов ниже запускаются в той
+    # же docker-сети, которую runner создал для сервисов этой job
+    # (`job.services.postgres.network`): в ней база доступна по имени сервиса,
+    # `postgres`, — runner вешает на её контейнер такой сетевой алиас. Порт на хост
+    # не публикуем, --network host не нужен. Локально — тот же приём:
+    # `docker network create …` и `--network-alias postgres` у контейнера базы.
+    # Контекст `job` доступен только в шагах (не в env уровня job) — поэтому сеть
+    # подставлена прямо в команды.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: remnashop
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: remnashop
+        options: >-
+          --health-cmd "pg_isready -U remnashop -d remnashop"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
     steps:
       - uses: actions/checkout@v5
 
@@ -59,7 +93,7 @@ jobs:
       # настоящий (проверено: падал именно на этой строке, generic-api-key).
       # Ключ из нулей валидатор принимает, а сканер не трогает. Не заменяйте на
       # `openssl rand` — сломаете проверку секретов.
-      - name: Тесты
+      - name: Окружение тестов
         run: |
           cat > ci.env <<'ENV'
           APP_DOMAIN=example.test
@@ -75,7 +109,26 @@ jobs:
           APP_API_KEY=ci-api-key
           APP_JWT_SECRET=ci-jwt-secret
           ENV
+
+      # Схема — настоящими миграциями бота (база + overlay), как при старте
+      # контейнера. Часть тестов нарочно сверяется с РЕАЛЬНОЙ схемой, а не со своей
+      # копией: test_payment_idempotency ищет enum transaction_status и уникальный
+      # индекс payment_id — на пустой базе семь его тестов падают, а не пропускаются.
+      # Заодно это проверка, что цепочка миграций проходит на чистом Postgres, то есть
+      # что свежая установка вообще поднимется.
+      - name: Схема базы (миграции бота)
+        run: |
+          docker run --rm --env-file ci.env --network "${{ job.services.postgres.network }}" \
+            -e DATABASE_HOST=postgres remnashop-ci \
+            alembic -c src/infrastructure/database/alembic.ini upgrade head
+
+      # Одна строка DSN годится обоим видам тестов: admin_src/tests/_pg_dsn.py сам
+      # приводит её к виду для asyncpg или для SQLAlchemy.
+      - name: Тесты
+        run: |
           docker run --rm --env-file ci.env \
+            --network "${{ job.services.postgres.network }}" \
+            -e RS_PG_DSN=postgresql://remnashop:ci@postgres:5432/remnashop \
             -v "$PWD/admin_src/tests:/tmp/tests:ro" \
             -v "$PWD/admin_src:/tmp/admin_src:ro" remnashop-ci \
             sh -c 'pip install -q --target /tmp/pylibs pytest pytest-asyncio &&
