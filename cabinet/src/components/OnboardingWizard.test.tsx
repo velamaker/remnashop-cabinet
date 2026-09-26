@@ -11,7 +11,8 @@ import { translate } from "@/i18n/translate";
  * ЗАЧЕМ ЗАПЕРТО. Из 200 пробных аккаунтов 169 не подключились ни разу: мастер
  * отпускал человека словом «Готово» раньше, чем VPN реально заработал. Шаг сам
  * спрашивает подписку (каждые 5 с, до 2 минут) и либо подтверждает соединение,
- * либо ведёт в самодиагностику. Здесь — четыре исхода и главное обещание: опрос
+ * либо ведёт в самодиагностику, а без данных панели — нейтрально завершается.
+ * Здесь — все исходы и главное обещание: опрос
  * не переживает размонтирование (иначе кабинет ходил бы в панель бесконечно).
  */
 
@@ -120,6 +121,63 @@ describe("мастер подключения: ждём первое подкл�
     await tick(0);
     expect(current).toHaveBeenCalledTimes(calls + 1);
     expect(screen.getByText(ru("onb.check.ok"))).toBeTruthy();
+  });
+
+  // ПАНЕЛЬ МОЛЧИТ — НЕ ПОВОД ВЫНОСИТЬ ВЕРДИКТ (то же правило, что в самодиагностике).
+  // Все признаки подключения пустые: адаптер «Бедолаги» их не отдаёт вовсе, наш бэкенд —
+  // когда Remnawave не ответила. «Пока не видим подключения» тут было бы неправдой.
+  it("в ответе нет ни одного признака подключения — нейтральное «Готово», без вердикта", async () => {
+    current.mockResolvedValue(
+      sub({ online_at: null, used_traffic_bytes: null, lifetime_used_traffic_bytes: null }),
+    );
+    const onDone = vi.fn();
+    renderCheck(onDone);
+    await tick(0);
+    expect(screen.getByText(ru("onb.check.unknown"))).toBeTruthy();
+    expect(screen.queryByText(ru("onb.check.waiting"))).toBeNull();
+    expect(screen.queryByText(ru("onb.check.ok"))).toBeNull();
+    expect(screen.queryByText(ru("onb.check.already"))).toBeNull();
+
+    // Ждать нечего: опрос не продолжается, и через 2 минуты вердикта тоже нет.
+    await tick(CONNECTION_WAIT_MS * 2);
+    expect(current).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(ru("onb.check.notYet"))).toBeNull();
+
+    fireEvent.click(screen.getByText(ru("onb.done")));
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it("поля отсутствуют в ответе вовсе (чужой бэкенд) — тоже без вердикта", async () => {
+    current.mockResolvedValue({ status: "ACTIVE", url: "https://sub.example/abc" });
+    renderCheck();
+    await tick(0);
+    expect(screen.getByText(ru("onb.check.unknown"))).toBeTruthy();
+    await tick(CONNECTION_WAIT_MS);
+    expect(screen.queryByText(ru("onb.check.notYet"))).toBeNull();
+  });
+
+  it("панель замолчала посреди ожидания — вердикта нет и после двух минут", async () => {
+    current
+      .mockResolvedValueOnce(NEVER)
+      .mockResolvedValue(sub({ online_at: null, used_traffic_bytes: null, lifetime_used_traffic_bytes: null }));
+    renderCheck();
+    await tick(0);
+    expect(screen.getByText(ru("onb.check.waiting"))).toBeTruthy();
+    await tick(CONNECTION_POLL_MS);
+    expect(screen.getByText(ru("onb.check.unknown"))).toBeTruthy();
+    await tick(CONNECTION_WAIT_MS);
+    expect(current).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(ru("onb.check.notYet"))).toBeNull();
+  });
+
+  it("нули — это данные, а не молчание: без подключения через 2 минуты «пока не видим»", async () => {
+    // Хоть одно поле пришло (пусть нулём) — панель ответила, вердикт честный.
+    current.mockResolvedValue(sub({ online_at: null, used_traffic_bytes: 0, lifetime_used_traffic_bytes: null }));
+    renderCheck();
+    await tick(0);
+    expect(screen.queryByText(ru("onb.check.unknown"))).toBeNull();
+    await tick(CONNECTION_WAIT_MS);
+    expect(screen.getByText(ru("onb.check.notYet"))).toBeTruthy();
   });
 
   it("сбой запроса не обрывает ожидание — спрашиваем дальше", async () => {

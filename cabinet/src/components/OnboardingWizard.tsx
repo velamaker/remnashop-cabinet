@@ -30,8 +30,8 @@ export const CONNECTION_WAIT_MS = 120_000;
 /**
  * Было ли у подписки хоть одно подключение. Признаки — те же, по которым судит
  * самодиагностика: последний онлайн из панели или любой расход трафика. Все три
- * поля живут только в Remnawave; пустые — не «не подключался», а «не знаем», но
- * для ожидания это одно и то же: продолжаем спрашивать.
+ * поля живут только в Remnawave; нули — «ещё не подключался», продолжаем спрашивать.
+ * Все три пустые — это «не знаем», а не «не подключался» (см. panelSilent).
  */
 export function hasConnected(sub: SubscriptionInfoResponse | null | undefined): boolean {
   if (!sub) return false;
@@ -42,7 +42,22 @@ export function hasConnected(sub: SubscriptionInfoResponse | null | undefined): 
   );
 }
 
-type CheckState = "waiting" | "connected" | "already" | "timeout";
+/**
+ * Подписка есть, а ни одного признака подключения в ответе нет: ни последнего
+ * онлайна, ни расхода — даже нулевого. Так отвечает адаптер «Бедолаги» (этих полей
+ * у него нет вовсе) и наш бэкенд, когда Remnawave не ответила. Правило то же, что в
+ * самодиагностике (DiagnosticWizard): ПАНЕЛЬ МОЛЧИТ — НЕ ПОВОД ВЫНОСИТЬ ВЕРДИКТ.
+ */
+export function panelSilent(sub: SubscriptionInfoResponse | null | undefined): boolean {
+  return (
+    !!sub &&
+    sub.online_at == null &&
+    sub.used_traffic_bytes == null &&
+    sub.lifetime_used_traffic_bytes == null
+  );
+}
+
+type CheckState = "waiting" | "connected" | "already" | "timeout" | "unknown";
 
 /**
  * Последний шаг мастера: кабинет сам ждёт первого подключения.
@@ -53,6 +68,10 @@ type CheckState = "waiting" | "connected" | "already" | "timeout";
  * кончался. Здесь кабинет каждые 5 секунд спрашивает подписку и либо говорит
  * «всё работает», либо через 2 минуты ведёт в самодиагностику, пока человек
  * ещё рядом и готов разбираться.
+ *
+ * Если в ответе нет ни одного признака подключения (panelSilent: адаптер чужого
+ * бота или панель не ответила), вердикта нет: шаг сразу завершается нейтральным
+ * «Готово», как было до этой проверки, без «пока не видим подключения».
  *
  * Опрос — цепочкой setTimeout, а не setInterval: медленный ответ панели не
  * накладывается на следующий запрос. При размонтировании (закрыли мастер, шаг
@@ -94,6 +113,13 @@ export function ConnectionCheck({ onDone }: { onDone: () => void }) {
           setState(initial && n === 0 ? "already" : "connected");
           return;
         }
+        if (panelSilent(sub)) {
+          // Данных о подключении нет вовсе: ждать нечего — заметить подключение
+          // здесь всё равно не выйдет, а «пока не видим» было бы уверенной неправдой.
+          // Шаг завершается нейтральным «Готово», как до появления проверки.
+          setState("unknown");
+          return;
+        }
         if (n >= attempts) {
           setState("timeout");
           return;
@@ -129,6 +155,19 @@ export function ConnectionCheck({ onDone }: { onDone: () => void }) {
             <Stethoscope className="h-3.5 w-3.5" /> {t("onb.check.toDiag")}
           </Link>
         )}
+        <div className="mt-3 flex justify-end">
+          <button type="button" onClick={onDone} className="inline-flex items-center gap-1 text-sm font-semibold text-success">
+            <Check className="h-4 w-4" /> {t("onb.done")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (state === "unknown") {
+    return (
+      <div className="rounded-xl border border-border-subtle bg-bg p-3">
+        <p className="text-xs text-fg-muted">{t("onb.check.unknown")}</p>
         <div className="mt-3 flex justify-end">
           <button type="button" onClick={onDone} className="inline-flex items-center gap-1 text-sm font-semibold text-success">
             <Check className="h-4 w-4" /> {t("onb.done")}
