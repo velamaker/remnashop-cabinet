@@ -556,6 +556,35 @@ async def test_lost_panel_answer_is_finished_by_cron_by_name(db):
     assert db.panel.count("create") == 1
 
 
+async def test_late_web_request_does_not_delete_what_cron_already_adopted(db):
+    """Веб-запрос завис дольше отсрочки, крон довёл профиль по имени, и только потом
+    веб дошёл до записи. Он обязан признать готовый профиль, а не удалить его
+    в панели как «сироту» — иначе у семьи пропала бы работающая ссылка."""
+    plan_id = await db.plan()
+    owner_id = await db.owner(plan_id)
+    db.panel.lose_create_response = True
+    db.panel.fail_lookup = True
+    pending = await db.create(owner_id, "Мама")
+    db.panel.fail_lookup = False
+    await db.age_pending()
+    assert (await db.sweep())["created"] == [pending["profile_id"]]
+    panel_user = next(iter(db.panel.store.values()))
+    async with db.session() as s:
+        _users, subs = db.daos(s)
+        late = await family._adopt(
+            s,
+            db.panel,
+            owner_id=owner_id,
+            profile_id=pending["profile_id"],
+            panel_user=panel_user,
+            subscription_dao=subs,
+            actor="test",
+        )
+    assert late["result"] == "created"
+    assert db.panel.count("delete") == 0 and len(db.panel.store) == 1
+    assert (await db.profiles(owner_id))[0].status == "active"
+
+
 async def test_stuck_create_that_panel_never_made_becomes_failed(db):
     plan_id = await db.plan()
     owner_id = await db.owner(plan_id)

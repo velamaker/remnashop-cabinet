@@ -171,3 +171,33 @@ def test_payment_hook_runs_after_the_purchase_and_cannot_break_it():
     assert source.index("purchase_subscription.system(") < hook
     block = source[source.rindex("try:", 0, hook) : source.index("_after_change", hook)]
     assert "except Exception" in block and "self.session.rollback()" in block
+
+
+class _NoDb:
+    """Сессия, которой всё равно: здесь проверяется тело PATCH, а не запись в базу."""
+
+    async def execute(self, *args, **kwargs):
+        return None
+
+
+class _Panel(Capture):
+    async def reset_user_traffic(self, uuid):
+        return None
+
+
+def _row(status: str):
+    rules = importlib.import_module("test_family_rules")
+    return rules.profile(1, sub_status=status)
+
+
+@pytest.mark.parametrize(
+    "status, sends_active",
+    [("EXPIRED", True), ("ACTIVE", True), ("LIMITED", True), ("DISABLED", False)],
+)
+async def test_renewal_does_not_switch_on_a_profile_disabled_by_hand(status, sends_active):
+    """Как база владельцу: продление включает истёкший профиль, но не отключённый
+    руками в панели — его включает только тот, кто выключил."""
+    sdk = _Panel()
+    await family._apply_sync(_NoDb(), sdk, _row(status), TARGET, reset=True, now=TARGET.expire_at)
+    sent = sdk.bodies[0].model_dump(exclude_unset=True)
+    assert ("status" in sent) is sends_active

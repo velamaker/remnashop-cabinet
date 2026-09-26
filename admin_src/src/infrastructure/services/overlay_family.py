@@ -1212,6 +1212,16 @@ async def _adopt(
 
     owner = await load_owner(session, owner_id, lock=True)
     p = await load_profile(session, profile_id)
+    panel_uuid = str(getattr(panel_user, "uuid", "")).lower()
+    if (
+        p is not None
+        and p.status in ("active", "suspended")
+        and panel_uuid in {str(p.panel_uuid or "").lower(), str(p.sub_remna_id or "").lower()}
+    ):
+        # Этого же пользователя панели уже довёл другой процесс (веб-запрос и крон
+        # сошлись на одной строке): профиль готов, удалять его нельзя.
+        await session.rollback()
+        return {"result": "created", "profile_id": profile_id, "repeat": True}
     if p is None or p.status != "creating" or p.profile_user_id is None:
         # Пока мы ходили в панель, строку закрыли (крон счёл попытку неудачной,
         # владелец удалил профиль или аккаунт). Созданное в панели не должно
@@ -1537,17 +1547,20 @@ async def _apply_sync(
     """
     if p.remna_uuid is None:
         raise PanelGone("у профиля нет пользователя панели")
-    status_active = not resume and (reset or (p.sub_status or "").upper() == "EXPIRED")
+    # ACTIVE шлём, как база владельцу при продлении: истёкшему — да, отключённому
+    # руками в панели — нет (его включает только тот, кто выключил).
+    status = (p.sub_status or "").upper()
+    status_active = not resume and status != "DISABLED" and (reset or status == "EXPIRED")
     await panel_sync(sdk, p.remna_uuid, target, status_active=status_active)
     if reset:
         await panel_reset_traffic(sdk, p.remna_uuid)
-    status = None
+    new_status = None
     if resume:
         await panel_set_enabled(sdk, p.remna_uuid, True)
-        status = "ACTIVE"
+        new_status = "ACTIVE"
     elif status_active:
-        status = "ACTIVE"
-    await _store_target(session, p, target, status=status)
+        new_status = "ACTIVE"
+    await _store_target(session, p, target, status=new_status)
     fields: dict[str, Any] = {"device_limit": target.device_limit}
     if resume:
         fields.update(status="active", suspend_reason=None, suspended_at=None)
