@@ -15,9 +15,17 @@
 ценам тарифа человека (services/overlay_winback.py, term_percent) или прежняя «скидка
 N %», если посчитать нельзя. Сообщение в Telegram — с кнопкой прямо в оплату нужного
 тарифа и срока (кабинет выбирает их по ?plan=&days=).
+
+ВАЛЮТЫ. Скидка одна (`purchase_discount`) и действует на покупку в ЛЮБОЙ валюте, а
+соотношение цен сроков в валютах разное. Процент считается по каждой валюте, где у
+тарифа есть оба срока, и берётся наибольший: иначе в валюте с «неудобными» ценами
+(например, в звёздах) 90 дней со скидкой вышли бы дороже 60, и обещание «по цене двух
+месяцев» было бы ложью. Цены в тексте — в валюте магазина по умолчанию
+(settings.default_currency), если у тарифа она есть, иначе в рублях, иначе в любой.
 """
 
 import html
+from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
 from typing import Any, Optional
 
@@ -48,21 +56,23 @@ _MSG = {
     ),
 }
 
+# {term_words} — «90 дней» / «91 день» / «92 дня» (_days); {pay_words} — «двух месяцев»
+# или «31 дня» / «45 дней» (родительный падеж: «по цене чего»).
 _MSG_TERM = {
     "ru": (
-        "💜 Возвращайтесь: {term} дней по цене {pay_words}",
-        "{plan} на {term} дней — {pay_price} вместо {term_price}. "
+        "💜 Возвращайтесь: {term_words} по цене {pay_words}",
+        "{plan} на {term_words} — {pay_price} вместо {term_price}. "
         "Предложение действует ограниченное время.",
     ),
     "en": (
-        "💜 Come back: {term} days for the price of {pay_words}",
-        "{plan} for {term} days — {pay_price} instead of {term_price}. Limited-time offer.",
+        "💜 Come back: {term_words} for the price of {pay_words}",
+        "{plan} for {term_words} — {pay_price} instead of {term_price}. Limited-time offer.",
     ),
 }
 
 _BUTTON = {
-    "ru": {"term": "Вернуться на {term} дней", "percent": "Выбрать тариф"},
-    "en": {"term": "Come back for {term} days", "percent": "Choose a plan"},
+    "ru": {"term": "Вернуться на {term_words}", "percent": "Выбрать тариф"},
+    "en": {"term": "Come back for {term_words}", "percent": "Choose a plan"},
 }
 
 # «По цене двух месяцев»: слово для срока, по цене которого предлагаем.
@@ -87,13 +97,64 @@ def _money(amount: Any, currency: str) -> str:
     return f"{text_value} {symbol}"
 
 
-def _pick_prices(prices: dict[tuple[int, str], Any], term: int, pay: int) -> Optional[tuple[str, Any, Any]]:
-    """Валюта, в которой у тарифа есть оба срока: рубли, если есть, иначе любая."""
-    currencies = sorted({c for (_d, c) in prices}, key=lambda c: (c != "RUB", c))
-    for cur in currencies:
-        if (term, cur) in prices and (pay, cur) in prices:
-            return cur, prices[(term, cur)], prices[(pay, cur)]
-    return None
+def _days(n: int, lang: str) -> str:
+    """«1 день», «2 дня», «5 дней», «11 дней», «21 день» / «1 day», «2 days»."""
+    n = int(n)
+    if lang == "en":
+        return f"{n} day" if n == 1 else f"{n} days"
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} день"
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return f"{n} дня"
+    return f"{n} дней"
+
+
+def _days_genitive(n: int, lang: str) -> str:
+    """«По цене чего»: «31 дня», «45 дней» (у 2–4 в родительном тоже «дней»)."""
+    n = int(n)
+    if lang == "en":
+        return _days(n, lang)
+    return f"{n} дня" if n % 10 == 1 and n % 100 != 11 else f"{n} дней"
+
+
+def _decimal(value: Any) -> Optional[Decimal]:
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+def _pick_prices(
+    prices: dict[tuple[int, str], Any], term: int, pay: int, currency: Optional[str] = None
+) -> Optional[tuple[int, str, Any, Any]]:
+    """Скидка и валюта для текста: (процент, валюта, цена term, цена pay) или None.
+
+    Процент — НАИБОЛЬШИЙ из нужных по каждой валюте, где у тарифа есть оба срока:
+    скидка одна на покупку в любой валюте, и «по цене двух месяцев» должно быть правдой
+    в каждой. Валюта, где длинный срок и так не дороже, скидки не требует (0). Цены в
+    какой-то валюте не посчитать (мусор или разница больше потолка term_percent) —
+    обещание не проверить, и предложения нет: уйдёт прежняя «скидка N %».
+
+    Текст — в `currency` (валюта магазина по умолчанию), иначе в рублях, иначе в любой
+    из тех, где длинный срок дороже: «449 ₽ вместо 440 ₽» было бы бессмыслицей.
+    """
+    both = sorted({c for (_d, c) in prices if (term, c) in prices and (pay, c) in prices})
+    needed: dict[str, int] = {}
+    for cur in both:
+        term_price, pay_price = prices[(term, cur)], prices[(pay, cur)]
+        pct = term_percent(term_price, pay_price)
+        if pct is None:
+            t, p = _decimal(term_price), _decimal(pay_price)
+            if t is None or p is None or t <= 0 or p <= 0 or p < t:
+                return None
+            pct = 0  # длинный срок в этой валюте и так не дороже
+        needed[cur] = pct
+    shown = [c for c in both if needed[c] > 0]
+    if not shown:
+        return None
+    shown.sort(key=lambda c: (c != currency, c != "RUB", c))
+    cur = shown[0]
+    return max(needed.values()), cur, prices[(term, cur)], prices[(pay, cur)]
 
 
 def offer_for(
@@ -103,28 +164,32 @@ def offer_for(
     plan_name: Optional[str],
     prices: dict[tuple[int, str], Any],
     cfg: dict[str, Any],
+    currency: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Что предлагаем человеку: вид, процент скидки, текст и путь кнопки. Чистая функция."""
+    """Что предлагаем человеку: вид, процент скидки, текст и путь кнопки. Чистая функция.
+
+    `currency` — валюта магазина по умолчанию: в ней цены в тексте, если у тарифа она есть.
+    """
     lg = _lang(lang)
     term, pay = int(cfg["term_days"]), int(cfg["pay_days"])
     if cfg.get("mode") == "term" and plan_code:
-        picked = _pick_prices(prices, term, pay)
-        pct = term_percent(picked[1], picked[2]) if picked else None
-        if picked and pct is not None:
-            cur, term_price, pay_price = picked
+        picked = _pick_prices(prices, term, pay, currency)
+        if picked is not None:
+            pct, cur, term_price, pay_price = picked
             title, body = _MSG_TERM[lg]
-            words = _PAY_WORDS[lg].get(pay) or (f"{pay} дней" if lg == "ru" else f"{pay} days")
+            term_words = _days(term, lg)
+            pay_words = _PAY_WORDS[lg].get(pay) or _days_genitive(pay, lg)
             return {
                 "kind": "term",
                 "percent": pct,
-                "title": title.format(term=term, pay_words=words),
+                "title": title.format(term_words=term_words, pay_words=pay_words),
                 "body": body.format(
                     plan=html.escape(plan_name or plan_code),
-                    term=term,
+                    term_words=term_words,
                     pay_price=_money(pay_price, cur),
                     term_price=_money(term_price, cur),
                 ),
-                "button": _BUTTON[lg]["term"].format(term=term),
+                "button": _BUTTON[lg]["term"].format(term_words=term_words),
                 "path": f"/billing?plan={plan_code}&days={term}",
             }
     percent = int(cfg["percent"])
@@ -175,6 +240,15 @@ SELECT u.id                         AS user_id,
    AND s.expire_at > now() - make_interval(days => :d + :catch)
    AND w.user_id IS NULL
 """
+
+
+# Валюта магазина по умолчанию (одна строка настроек базы) — в ней цены в тексте.
+DEFAULT_CURRENCY_SQL = "SELECT default_currency::text FROM settings ORDER BY id LIMIT 1"
+
+
+async def _default_currency(session: AsyncSession) -> Optional[str]:
+    row = (await session.execute(text(DEFAULT_CURRENCY_SQL))).first()
+    return str(row[0]) if row is not None and row[0] else None
 
 
 def group_candidates(rows: list[Any]) -> list[dict[str, Any]]:
@@ -243,6 +317,7 @@ async def run_winback(
     ).all()
     if not rows:
         return
+    currency = await _default_currency(session)
 
     bot: Bot | None = None
     try:
@@ -261,6 +336,7 @@ async def run_winback(
             plan_name=person["plan_name"],
             prices=person["prices"],
             cfg=cfg,
+            currency=currency,
         )
         percent = offer["percent"]
         try:
