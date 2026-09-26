@@ -34,7 +34,7 @@ fail() { printf '  ✗ [%s] %s\n' "$CASE" "$*"; FAILS=$((FAILS + 1)); }
 run() {
   : > "$HARNESS_LOG"
   rm -rf "$TMP/b"; mkdir -p "$TMP/b"
-  env -u BACKUP_PASSPHRASE -u BOT_TOKEN -u BACKUP_OFFSITE_TELEGRAM_CHAT_ID \
+  env -u BACKUP_PASSPHRASE -u BOT_TOKEN -u BOT_OWNER_ID -u BACKUP_OFFSITE_TELEGRAM_CHAT_ID \
     BACKUP_DIR="$TMP/b" ENV_FILE="$TMP/env" "$@" bash "$SCRIPT" > "$TMP/out" 2>&1
   RC=$?
 }
@@ -79,6 +79,13 @@ run
 grep -q 'bot123:FROMENV/sendDocument' "$HARNESS_LOG" || fail "токен из .env не подхвачен"
 grep '^curl' "$HARNESS_LOG" | grep -q 'chat_id=-100555' || fail "канал из .env не подхвачен"
 ls "$TMP"/b/backup-*.sql.gz.enc >/dev/null 2>&1 || fail "пароль из .env не подхвачен — бэкап не зашифрован"
+: > "$TMP/env"
+
+case_ "«owner» — владельцу бота из BOT_OWNER_ID (.env)"
+printf 'BOT_TOKEN=123:T\nBOT_OWNER_ID=4242\nBACKUP_PASSPHRASE=p\nBACKUP_OFFSITE_TELEGRAM_CHAT_ID=owner\n' > "$TMP/env"
+run
+[ "$RC" = 0 ] || fail "код $RC"
+grep '^curl' "$HARNESS_LOG" | grep -q 'chat_id=4242' || fail "не ушло владельцу"
 : > "$TMP/env"
 
 case_ "зашифрованный бэкап открывается тем же паролем"

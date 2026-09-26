@@ -27,7 +27,7 @@ env_default() {
     return 0
 }
 for _k in BACKUP_PASSPHRASE BACKUP_PASSPHRASE_FILE BACKUP_OFFSITE_RCLONE_REMOTE \
-          BACKUP_OFFSITE_RSYNC BACKUP_OFFSITE_TELEGRAM_CHAT_ID BOT_TOKEN BOT_PROXY_URL; do
+          BACKUP_OFFSITE_RSYNC BACKUP_OFFSITE_TELEGRAM_CHAT_ID BOT_TOKEN BOT_OWNER_ID BOT_PROXY_URL; do
     env_default "$_k"
 done
 BACKUP_PASSPHRASE="${BACKUP_PASSPHRASE:-}"
@@ -80,13 +80,19 @@ echo "$(date -Is) OK: $OUT (${SIZE} B)$([ -n "$BACKUP_PASSPHRASE" ] && echo ' [e
 # Offsite-копия (best-effort, не валит бэкап). Задайте ОДНО из:
 #   BACKUP_OFFSITE_RCLONE_REMOTE="remote:bucket/path"   (нужен rclone + его конфиг)
 #   BACKUP_OFFSITE_RSYNC="user@host:/path"              (нужен rsync + ssh-ключ)
-#   BACKUP_OFFSITE_TELEGRAM_CHAT_ID="-100…"             (закрытый канал; бот — админ)
+#   BACKUP_OFFSITE_TELEGRAM_CHAT_ID="owner"             (владельцу бота в личный чат)
+#   BACKUP_OFFSITE_TELEGRAM_CHAT_ID="-100…"             (или закрытый канал; бот — админ)
 # Рекомендуется гнать ШИФРОВАННЫЕ бэкапы (BACKUP_PASSPHRASE), т.к. уходят наружу.
 # Telegram — независимо от двух первых: ничего заводить не нужно, лимит файла у бота
 # 50 МБ, а дамп небольшого магазина весит сотни килобайт. Туда уходит ТОЛЬКО
 # зашифрованный дамп: в открытом виде в нём хэши паролей и платежи, а чат Telegram —
 # чужой сервер. Токен передаём curl через stdin, чтобы он не светился в списке процессов.
 TG_MAX_BYTES="${TG_MAX_BYTES:-49000000}"
+# «owner» — владельцу бота в личный чат (BOT_OWNER_ID): свой id искать не нужно.
+if [ "${BACKUP_OFFSITE_TELEGRAM_CHAT_ID:-}" = owner ]; then
+    BACKUP_OFFSITE_TELEGRAM_CHAT_ID="${BOT_OWNER_ID%%,*}"
+    [ -n "$BACKUP_OFFSITE_TELEGRAM_CHAT_ID" ] || echo "$(date -Is) WARN: offsite telegram «owner» — нет BOT_OWNER_ID" >&2
+fi
 if [ -n "${BACKUP_OFFSITE_TELEGRAM_CHAT_ID:-}" ]; then
     if [ -z "$BACKUP_PASSPHRASE" ]; then
         echo "$(date -Is) WARN: offsite telegram пропущен — дамп не зашифрован (задайте BACKUP_PASSPHRASE)" >&2
