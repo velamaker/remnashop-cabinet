@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { safeInternalPath, withNext } from "@/lib/nav";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -19,6 +20,9 @@ export default function RegisterPage() {
   const { appearance, emailAuthEnabled } = useBranding();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  // Куда вернуть после регистрации или входа — отсюда уходит во ВСЕ способы:
+  // почту, виджет, OIDC и ссылку «Войти». Путь проверяем: только внутренний.
+  const next = safeInternalPath(searchParams.get("next"));
 
   // Тех-работы: новые регистрации ограничены (галка в оформлении).
   const regBlocked =
@@ -52,7 +56,10 @@ export default function RegisterPage() {
         referral_code: referralCode || undefined,
         accepted_legal_documents: legalKeys.length ? legalKeys : undefined,
       });
-      navigate("/");
+      // Возвращаем туда, откуда прислали регистрироваться (?next=…), а не на главную.
+      // Так новичок со ссылки-сертификата доходит до поля промокода с кодом подарка,
+      // а не теряет его на первой же странице. Путь проверяем: только внутренний.
+      navigate(next);
     } catch (err) {
       setError(
         err instanceof ApiError ? err.detail : t("register.error"),
@@ -87,7 +94,7 @@ export default function RegisterPage() {
             в кабинет заходит подавляющее большинство, и приглашённый попадал туда,
             где привычного способа входа нет. При закрытой регистрации не
             показываем: вход создал бы аккаунт в обход запрета. */}
-        {!regBlocked && <TelegramAuthBlock onError={setError} />}
+        {!regBlocked && <TelegramAuthBlock next={next} onError={setError} />}
 
         {/* Текст ошибки — ВНЕ формы почты: оператор может выключить вход по почте
             целиком, и тогда форма пропадает, а вместе с ней пропадал бы и
@@ -139,7 +146,7 @@ export default function RegisterPage() {
 
         <p className="mt-5 text-center text-sm text-fg-subtle">
           {t("register.haveAccount")}{" "}
-          <Link to="/login" className="font-medium text-accent hover:text-accent-hover">
+          <Link to={withNext("/login", next)} className="font-medium text-accent hover:text-accent-hover">
             {t("login.submit")}
           </Link>
         </p>

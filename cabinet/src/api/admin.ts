@@ -1411,6 +1411,62 @@ export const paymentReminderAdminApi = {
     ),
 };
 
+// ---------- Сигналы до ухода ----------
+
+export interface ChurnSignalsConfig {
+  check_enabled: boolean;
+  check_delay_hours: number;
+  idle_enabled: boolean;
+  idle_days: number;
+  idle_cooldown_days: number;
+  idle_min_days_left: number;
+}
+
+export interface ChurnSignalsStats {
+  days?: number;
+  check_sent?: number;
+  check_answered?: number;
+  check_works?: number;
+  check_broken?: number;
+  check_failed?: number;
+  /** Доля ответивших от спрошенных; null — спрашивать было некого. */
+  check_answered_percent?: number | null;
+  /** Доля «не работает» от ОТВЕТИВШИХ; null — ответов ещё нет. */
+  check_broken_percent?: number | null;
+  idle_sent?: number;
+  idle_returned?: number;
+  idle_failed?: number;
+  idle_returned_percent?: number | null;
+}
+
+export interface ChurnSignalsLastRun {
+  at: string;
+  panel_ok: boolean;
+  sent_check?: number;
+  sent_idle?: number;
+  failed?: number;
+  errors?: number;
+  returned?: number;
+  skipped_check?: Record<string, number>;
+  skipped_idle?: Record<string, number>;
+}
+
+export interface ChurnSignalsAdminResponse {
+  config: ChurnSignalsConfig;
+  check_window_hours: number;
+  idle_window_days: number;
+  stats: ChurnSignalsStats;
+  broken: { user_id: number; answered_at: string | null }[];
+  optouts: { check: number; idle: number };
+  last_run: ChurnSignalsLastRun | null;
+}
+
+export const churnSignalsAdminApi = {
+  get: () => adminApi.get<ChurnSignalsAdminResponse>("/churn-signals"),
+  update: (data: ChurnSignalsConfig) =>
+    adminApi.put<{ config: ChurnSignalsConfig }>("/churn-signals", data),
+};
+
 // ---------- Месячный дайджест пользователю ----------
 
 export interface DigestConfig {

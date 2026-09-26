@@ -18,7 +18,6 @@
 from typing import Any
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 from dishka import FromDishka
 from dishka.integrations.aiogram import inject
@@ -29,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.constants import USER_KEY
 from src.infrastructure.services.overlay_payment_reminder import OPTOUT_KIND, OPTOUT_SQL
 from src.infrastructure.services.overlay_payment_reminder_kb import OPTOUT_CALLBACK, texts_for
+from src.telegram.overlay_markup import drop_buttons
 
 router = Router(name="overlay_payment_reminder")
 
@@ -58,11 +58,9 @@ async def on_optout(callback: CallbackQuery, session: FromDishka[AsyncSession], 
         return
 
     await callback.answer(done)
-    message = callback.message
-    if message is None:
-        return
-    try:
-        # Кнопки убираем, текст оставляем: человек должен видеть, на что ответил.
-        await message.edit_reply_markup(reply_markup=None)
-    except (TelegramBadRequest, TypeError) as exc:
-        logger.debug(f"payment_reminder: кнопки не убрал: {exc}")
+    # Кнопки убираем, текст оставляем: человек должен видеть, на что ответил. Под
+    # напоминанием старше пары суток Telegram присылает «недоступное» сообщение без
+    # методов правки: раньше здесь летел AttributeError — отказ уже записан, а
+    # нажатие заканчивалось ошибкой и кнопки оставались. Общий помощник снимает их
+    # через бота по номеру сообщения.
+    await drop_buttons(callback, tag="payment_reminder")

@@ -34,6 +34,7 @@ _ROUTERS = (
     ("src.telegram.routers.overlay_gift", "подарочные подписки"),
     ("src.telegram.routers.overlay_payment_review", "разбор спорных платежей"),
     ("src.telegram.routers.overlay_payment_reminder", "кнопка «не напоминать» об оплате"),
+    ("src.telegram.routers.overlay_churn_signals", "ответы на «Всё работает?» и отказ от сигналов"),
 )
 
 

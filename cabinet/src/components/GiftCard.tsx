@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Gift, Loader2, Copy, Check, RefreshCw, Clock } from "lucide-react";
+import { Gift, Loader2, Copy, Check, RefreshCw, Clock, Share2 } from "lucide-react";
 import { subscriptionApi } from "@/api/subscription";
 import { giftApi, type GiftHistoryItem, type GiftResult } from "@/api/gift";
 import { onReturnFromPayment, openPayment } from "@/lib/payment";
@@ -26,6 +26,46 @@ const BALANCE = "balance";
  * обычным вводом промокода. При оплате через шлюз код выпускается на вебхуке (пока юзер
  * на странице банка), поэтому коды показываем ещё и списком из /gift/my.
  */
+/** «Поделиться ссылкой» на сертификат. На телефоне — системное меню «Поделиться»
+ *  (сразу в нужный мессенджер), на компьютере — ссылка в буфер обмена. Ссылку, а
+ *  не код, потому что получателю по ней не нужно ничего набирать. */
+function ShareLinkButton({ url, plan, days, className }: { url: string; plan: string; days: number; className: string }) {
+  const t = useT();
+  const [done, setDone] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setDone(true);
+      setTimeout(() => setDone(false), 1500);
+    } catch {
+      /* буфер недоступен — ссылка всё равно видна в карточке подарка */
+    }
+  };
+
+  const share = async () => {
+    const text = t("gift.shareText", { plan, days });
+    if (typeof navigator.share !== "function") {
+      await copy();
+      return;
+    }
+    try {
+      await navigator.share({ title: t("gift.title"), text, url });
+    } catch (e) {
+      // AbortError — человек сам закрыл окно «Поделиться», это не сбой. Любой
+      // другой отказ значит, что поделиться нечем: так мини-приложение ведёт себя
+      // в Telegram Web (внутри iframe без разрешения). Тогда хотя бы кладём ссылку
+      // в буфер, иначе кнопка молча не делала ничего.
+      if ((e as { name?: string })?.name !== "AbortError") await copy();
+    }
+  };
+  return (
+    <button type="button" onClick={share} className={`${className} shrink-0`}>
+      {done ? <Check className="h-3.5 w-3.5 text-success" /> : <Share2 className="h-3.5 w-3.5" />}
+      {done ? t("gift.linkCopied") : t("gift.shareLink")}
+    </button>
+  );
+}
+
 export function GiftCard() {
   const t = useT();
   const [offers, setOffers] = useState<SubscriptionOffersResponse | null>(null);
@@ -169,7 +209,11 @@ export function GiftCard() {
               {copied === result.code ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
               {copied === result.code ? t("gift.copied") : t("gift.copy")}
             </button>
+            {result.certificate_url && (
+              <ShareLinkButton url={result.certificate_url} plan={result.plan_name} days={result.duration_days} className={copyBtnCls} />
+            )}
           </div>
+          {result.certificate_url && <p className="mt-2 text-xs text-fg-muted">{t("gift.shareHint")}</p>}
           <button type="button" onClick={() => setResult(null)} className="mt-3 text-xs font-medium text-accent hover:underline">
             {t("gift.again")}
           </button>
@@ -242,6 +286,9 @@ export function GiftCard() {
                       {copied === g.code ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
                       {copied === g.code ? t("gift.copied") : t("gift.copy")}
                     </button>
+                    {g.certificate_url && (
+                      <ShareLinkButton url={g.certificate_url} plan={g.plan_name} days={g.duration_days} className={copyBtnCls} />
+                    )}
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 text-xs text-fg-muted">

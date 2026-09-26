@@ -62,6 +62,7 @@ export const BOT_CAPABILITIES = {
   extra_traffic: { since: "1.4.0", label: "Докупка трафика к подписке: +50 ГБ до ближайшего обновления" },
   payment_reminder: { since: "1.4.1", label: "Напоминание о незавершённой оплате" },
   info_i18n: { since: "1.5.0", label: "Переводы страницы «Информация» на языки кабинета" },
+  churn_signals: { since: "1.5.4", label: "Сигналы до ухода: «Всё работает?» и «давно не подключался»" },
 } as const;
 
 export type BotCap = keyof typeof BOT_CAPABILITIES;
@@ -99,6 +100,7 @@ export const PAGE_NEEDS_BOT: Readonly<Record<string, BotCap>> = {
   "/admin/extra-device": "extra_device",
   "/admin/extra-traffic": "extra_traffic",
   "/admin/payment-reminder": "payment_reminder",
+  "/admin/churn-signals": "churn_signals",
 };
 
 /** Что показать на прямом заходе по адресу спрятанной страницы. */

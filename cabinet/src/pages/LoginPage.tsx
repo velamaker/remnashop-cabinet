@@ -12,7 +12,7 @@ import { ApiError, type TelegramAuthRequest } from "@/types/api";
 import { getTelegramWebApp, whenTelegramReady } from "@/hooks/useTelegramWebApp";
 import { BrandWordmark } from "@/components/BrandWordmark";
 import { BrandLogo } from "@/components/BrandLogo";
-import { safeInternalPath } from "@/lib/nav";
+import { safeInternalPath, withNext } from "@/lib/nav";
 import { useBranding } from "@/contexts/BrandingContext";
 import { TelegramConsentRetry } from "@/components/TelegramConsentRetry";
 
@@ -193,7 +193,7 @@ export default function LoginPage() {
                   <button
                     type="button"
                     onClick={() => {
-                      window.location.href = "/api/auth/telegram/oidc/start";
+                      window.location.href = withNext("/api/auth/telegram/oidc/start", next);
                     }}
                     className="flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-[#2aabee] text-sm font-medium text-white transition-colors hover:bg-[#1f97d4]"
                   >
@@ -273,7 +273,7 @@ export default function LoginPage() {
         {emailAuthEnabled && (
         <p className="mt-4 text-center text-sm text-fg-subtle">
           {t("login.noAccount")}{" "}
-          <Link to="/register" className="font-medium text-fg hover:text-accent transition-colors">
+          <Link to={withNext("/register", next)} className="font-medium text-fg hover:text-accent transition-colors">
             {t("login.register")}
           </Link>
         </p>

@@ -12,6 +12,7 @@ import RegisterPage from "@/pages/RegisterPage";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
 import VerifyEmailPage from "@/pages/VerifyEmailPage";
 import EmailUnsubscribePage from "@/pages/EmailUnsubscribePage";
+import GiftCertificatePage from "@/pages/GiftCertificatePage";
 import StatusPage from "@/pages/StatusPage";
 import PricingPage from "@/pages/PricingPage";
 import DashboardPage from "@/pages/DashboardPage";
@@ -39,6 +40,7 @@ import AdminWinbackPage from "@/pages/admin/AdminWinbackPage";
 import AdminExtraDevicePage from "@/pages/admin/AdminExtraDevicePage";
 import AdminExtraTrafficPage from "@/pages/admin/AdminExtraTrafficPage";
 import AdminPaymentReminderPage from "@/pages/admin/AdminPaymentReminderPage";
+import AdminChurnSignalsPage from "@/pages/admin/AdminChurnSignalsPage";
 import AdminRenewalDiscountPage from "@/pages/admin/AdminRenewalDiscountPage";
 import AdminPromoBannerPage from "@/pages/admin/AdminPromoBannerPage";
 import AdminDigestPage from "@/pages/admin/AdminDigestPage";
@@ -89,6 +91,10 @@ export default function App() {
                 попадал в пустоту. Ведём на «Баланс» — там и лежит история
                 подарков с готовым кодом. */}
             <Route path="/gift/result" element={<Navigate to="/balance" replace />} />
+            {/* Подарочный сертификат по ссылке — без входа: ссылку пересылают, и
+                открыть её может человек, у которого ещё нет аккаунта. Статичный
+                /gift/result выше берёт своё раньше — роутер ставит его первым. */}
+            <Route path="/gift/:code" element={<GiftCertificatePage />} />
             <Route
               path="/login"
               element={
@@ -327,6 +333,14 @@ export default function App() {
               element={
                 <AdminRoute>
                   <AdminPaymentReminderPage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/churn-signals"
+              element={
+                <AdminRoute>
+                  <AdminChurnSignalsPage />
                 </AdminRoute>
               }
             />

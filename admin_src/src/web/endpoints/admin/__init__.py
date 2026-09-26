@@ -16,6 +16,7 @@ from .email_settings import router as email_settings_router
 from .extra_device import router as extra_device_router
 from .extra_traffic import router as extra_traffic_router
 from .payment_reminder import router as payment_reminder_router
+from .churn_signals import router as churn_signals_router
 from .email_template import router as email_template_router
 from .gateways import router as gateways_router
 from .grants import router as grants_router
@@ -71,6 +72,7 @@ router.include_router(topup_router)
 router.include_router(extra_device_router)
 router.include_router(extra_traffic_router)
 router.include_router(payment_reminder_router)
+router.include_router(churn_signals_router)
 router.include_router(trial_discount_router)
 router.include_router(promo_banner_router)
 router.include_router(reserve_router)

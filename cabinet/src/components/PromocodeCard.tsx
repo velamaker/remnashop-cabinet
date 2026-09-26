@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Ticket, Check, Loader2 } from "lucide-react";
 import { promocodeApi } from "@/api/promocode";
 import { Card, CardHeader } from "@/components/ui/Card";
@@ -6,6 +6,18 @@ import { Button } from "@/components/ui/Button";
 import { ApiError } from "@/types/api";
 import { useT } from "@/i18n/I18nContext";
 import { useBranding } from "@/contexts/BrandingContext";
+
+const GIFT_CODE_RE = /^GIFT-[0-9A-F]{32}$/;
+
+function forgetPromoParam() {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("promo");
+    window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+  } catch {
+    /* адрес не поменять — не повод ронять успешную активацию */
+  }
+}
 
 /** Ввод и активация промокода прямо в кабинете (награда применяется на бэке).
  *  onActivated — если передан, вызывается после успеха (мягкая перезагрузка данных
@@ -15,7 +27,27 @@ export function PromocodeCard({ onActivated }: { onActivated?: () => void }) {
   // Промокоды живут в базе бота: гасим карточку в одном месте — она стоит и на
   // /billing, и на странице подписки.
   const { can } = useBranding();
-  const [code, setCode] = useState("");
+  // Код из ссылки сертификата: `/subscription?promo=GIFT-…`. Читаем адрес напрямую,
+  // а не через роутер — карточка стоит на двух страницах и в их тестах, и
+  // зависимость от контекста роутера ей ни к чему. Только ПОДСТАВЛЯЕМ: активация —
+  // кнопкой, как при ручном вводе (подарок может заменить текущий тариф).
+  // Подставляем ТОЛЬКО подарочный код. Иначе ссылка на настоящий домен с плашкой
+  // «код подарка подставлен» стала бы удобным способом подсунуть человеку чужой
+  // промокод (например, меньшую персональную скидку, которая затрёт его большую).
+  const [prefilled] = useState(() => {
+    try {
+      const raw = (new URLSearchParams(window.location.search).get("promo") ?? "").trim().toUpperCase();
+      return GIFT_CODE_RE.test(raw) ? raw : "";
+    } catch {
+      return "";
+    }
+  });
+  const [code, setCode] = useState(prefilled);
+  const cardRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // Пришли по ссылке — показываем карточку, иначе она внизу страницы и её не видно.
+    if (prefilled) cardRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  }, [prefilled]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -50,6 +82,10 @@ export function PromocodeCard({ onActivated }: { onActivated?: () => void }) {
       const r = await promocodeApi.activate(trimmed);
       setSuccess(rewardMessage(r.reward_type, r.reward));
       setCode("");
+      // Код из ссылки израсходован — убираем его из адреса. Иначе после
+      // перезагрузки данных карточка снова подставит тот же код с подсказкой
+      // «нажмите Применить», и человек решит, что подарок не сработал.
+      if (prefilled) forgetPromoParam();
       // Награда могла изменить подписку/скидку/баланс на других страницах.
       // Если хозяин страницы даёт колбэк — мягко обновляем его данные (карточка
       // с сообщением об успехе остаётся); иначе — полный reload после показа успеха.
@@ -63,8 +99,12 @@ export function PromocodeCard({ onActivated }: { onActivated?: () => void }) {
   };
 
   return (
+    <div ref={cardRef}>
     <Card>
       <CardHeader title={t("promo.title")} subtitle={t("promo.sub")} />
+      {prefilled && !success && (
+        <p className="mb-3 rounded-lg bg-accent/10 px-3 py-2 text-sm text-accent">{t("promo.fromGift")}</p>
+      )}
       <div className="flex flex-col gap-2 sm:flex-row">
         <div className="relative flex-1">
           <Ticket className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-subtle" />
@@ -90,5 +130,6 @@ export function PromocodeCard({ onActivated }: { onActivated?: () => void }) {
       )}
       {error && <p className="mt-3 text-sm text-danger">{error}</p>}
     </Card>
+    </div>
   );
 }

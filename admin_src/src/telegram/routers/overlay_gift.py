@@ -342,11 +342,13 @@ async def on_pay_balance(
         await callback.answer(f"Недостаточно средств: нужно {price:.0f} ₽", show_alert=True)
         return
 
+    cert = overlay_gift.certificate_url(gift_code)
+    share = overlay_gift.gift_share_keyboard(cert, plan.name, days)
+    rows = (share.inline_keyboard if share else []) + _menu_row()
     await callback.message.edit_text(
-        f"🎁 Подарок готов: <b>{_esc(plan.name)}</b> на {days} дн.\n\n"
-        f"Код для получателя:\n<code>{gift_code}</code>\n\n"
-        "Он вводит его в разделе «Промокод».",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=menu) if (menu := _menu_row()) else None,
+        overlay_gift.gift_ready_text(plan.name, days, gift_code, cert, paid=False),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None,
+        disable_web_page_preview=True,
     )
     await callback.answer("Куплено")
 

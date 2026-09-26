@@ -34,6 +34,10 @@ MODULES = [
     "src.infrastructure.taskiq.tasks.autopay_warning",
     "src.infrastructure.taskiq.tasks.backup_monitor",
     "src.infrastructure.taskiq.tasks.payment_reminder",
+    "src.infrastructure.services.overlay_churn_signals",
+    "src.infrastructure.taskiq.tasks.churn_signals",
+    "src.telegram.routers.overlay_churn_signals",
+    "src.web.endpoints.admin.churn_signals",
     "src.infrastructure.taskiq.tasks.extra_devices",
     "src.infrastructure.taskiq.tasks.extra_traffic",
     "src.infrastructure.services.overlay_user_purge",
@@ -43,6 +47,9 @@ MODULES = [
     "src.web.endpoints.public.balance",
     "src.web.endpoints.public.info_content",
     "src.web.endpoints.admin.info",
+    # Проверка оплаты ЮKassa: функции уровня модуля правка не показывает
+    # expect_names_resolve (он видит только подставленное в класс).
+    "overlay_patches.yookassa_api_status",
 ]
 
 

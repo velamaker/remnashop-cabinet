@@ -48,7 +48,8 @@ import {
   Database,
   ShieldCheck,
   MonitorSmartphone,
-  BellRing,} from "lucide-react";
+  BellRing,
+  HeartPulse,} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
@@ -84,6 +85,7 @@ export const navGroups: { title: string; items: NavItem[] }[] = [
       { to: "/admin/import", icon: DownloadCloud, label: "adm.nav.import", section: "import" },
       { to: "/admin/abuse", icon: Fingerprint, label: "adm.nav.abuse", section: "abuse" },
       { to: "/admin/support", icon: LifeBuoy, label: "adm.nav.support", section: "support" },
+      { to: "/admin/churn-signals", icon: HeartPulse, label: "adm.nav.churn_signals", section: "settings" },
     ],
   },
   {

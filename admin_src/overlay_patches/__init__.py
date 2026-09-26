@@ -54,6 +54,12 @@ _names_checked: set[int] = set()
 class PatchTargetChanged(RuntimeError):
     """Цель правки выглядит не так, как мы ожидали, — апстрим её изменил."""
 
+    # Что правка поставила ВМЕСТО себя, когда не встала. Пусто — осталось поведение
+    # базы; так у всех правок, кроме тех, где поведение базы опасно (приём оплаты
+    # ЮKassa: без правки он засчитывает подделку) — те выключают функцию и пишут,
+    # что выключили, чтобы в тревоге не стояло «бот работает как база».
+    fallback: str = ""
+
 
 # Карта «uuid ↔ числовой id», созданная слоем 3.x. Кладётся сюда провайдером SDK и
 # нужна другим правкам: вебхуки панели 3.x приходят БЕЗ uuid, и восстановить его
@@ -250,9 +256,10 @@ def _run(name: str, fn: Callable[[], str], target_module: str = "") -> None:
         detail = fn()
     except Exception as exc:  # noqa: BLE001 — любая причина одинаково важна
         _failures.append((name, f"{type(exc).__name__}: {exc}"))
+        fallback = getattr(exc, "fallback", "") or "Бот работает на исходном поведении базы."
         print(
             f"\n!!! OVERLAY: правка «{name}» НЕ ПРИМЕНИЛАСЬ: {type(exc).__name__}: {exc}\n"
-            f"!!! Бот работает на исходном поведении базы. Разберитесь до деплоя.\n",
+            f"!!! {fallback} Разберитесь до деплоя.\n",
             file=sys.stderr,
             flush=True,
         )
@@ -456,11 +463,56 @@ def install() -> None:
             ),
         )
 
+    # ЮKassa: статус оплаты — только из её API. Правка шлюза и сверка эндпоинта, на
+    # устройстве которого держится повтор вебхука при сбое проверки, — два модуля.
+    # Правка шлюза, не встав, НЕ оставляет базовое поведение (оно засчитывает
+    # подделку), а выключает приём вебхуков ЮKassa — см. yookassa_api_status.py.
+    yookassa = (
+        (
+            "ЮKassa: статус оплаты из её API",
+            "src.infrastructure.payment_gateways.yookassa",
+            "apply",
+        ),
+        (
+            "ЮKassa: эндпоинт вебхука не менялся",
+            "src.web.endpoints.payments",
+            "check_endpoint",
+        ),
+    )
+
+    for name, target, func in yookassa:
+        on_import(
+            target,
+            lambda n=name, f=func, t=target: _run(
+                n, lambda: getattr(import_module(".yookassa_api_status", __package__), f)(), t
+            ),
+        )
+
     for name, target, func in replica:
         on_import(
             target,
             lambda n=name, f=func, t=target: _run(
                 n, lambda: getattr(import_module(".web_replica", __package__), f)(), t
+            ),
+        )
+
+    # Deep link новичка (подарок по ссылке `?start=promo_<код>`) при обязательных
+    # правилах: мидлварь правил гасит /start, а «Принять» открывает главное меню.
+    # Запомнить и выполнить — два разных модуля базы, поэтому своим списком.
+    rules_deeplink = (
+        ("deep link до правил: запомнить", "src.telegram.middlewares.rules", "apply_remember"),
+        (
+            "deep link до правил: выполнить после «Принять»",
+            "src.telegram.routers.menu.handlers",
+            "apply_resume",
+        ),
+    )
+
+    for name, target, func in rules_deeplink:
+        on_import(
+            target,
+            lambda n=name, f=func, t=target: _run(
+                n, lambda: getattr(import_module(".rules_deeplink", __package__), f)(), t
             ),
         )
 

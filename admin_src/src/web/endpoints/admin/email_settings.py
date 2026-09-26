@@ -17,6 +17,7 @@ from src.core.constants import EMAIL_VERIFICATION_SUBJECT
 from src.infrastructure.services.email_sender import SmtpEmailSender
 from src.infrastructure.services.email_settings import (
     PRESETS,
+    explain_send_error,
     load_email_settings,
     save_email_settings,
 )
@@ -115,6 +116,6 @@ async def send_test_email(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Не удалось отправить тестовое письмо: {exc}",
+            detail=f"Не удалось отправить тестовое письмо: {explain_send_error(exc, load_email_settings(config).get('provider'))}",
         )
     return {"success": True, "to": body.to}

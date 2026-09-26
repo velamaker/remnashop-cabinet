@@ -76,7 +76,8 @@ jobs:
           APP_JWT_SECRET=ci-jwt-secret
           ENV
           docker run --rm --env-file ci.env \
-            -v "$PWD/admin_src/tests:/tmp/tests:ro" remnashop-ci \
+            -v "$PWD/admin_src/tests:/tmp/tests:ro" \
+            -v "$PWD/admin_src:/tmp/admin_src:ro" remnashop-ci \
             sh -c 'pip install -q --target /tmp/pylibs pytest pytest-asyncio &&
                    PYTHONPATH=/tmp/pylibs python -m pytest /tmp/tests -q \
                      --asyncio-mode=auto -p no:cacheprovider'

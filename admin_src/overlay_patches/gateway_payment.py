@@ -58,7 +58,12 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # не требуется — overlay_topup не тянет application-слой на верхнем уровне.
-from src.infrastructure.services.overlay_gift import try_issue_gift
+from src.infrastructure.services.overlay_gift import (
+    certificate_url,
+    gift_ready_text,
+    gift_share_keyboard,
+    try_issue_gift,
+)
 from src.infrastructure.services.overlay_topup import try_credit_topup
 # Сервис переноса остатка: только stdlib/sqlalchemy/loguru, как и два выше.
 from src.infrastructure.services import overlay_plan_change as carry
@@ -715,6 +720,9 @@ def apply() -> str:
                             f"✅ Баланс пополнен на {credited['total']} ₽{bonus_part}."
                         )
                     },
+                    # Не самоудалять: по умолчанию сообщение живёт 30 с (overlay notifications),
+                    # и человек/владелец видит лишь вспышку — так уже терялись рассылки и коды подарков.
+                    delete_after=None,
                 ),
             )
             logger.info(
@@ -737,17 +745,18 @@ def apply() -> str:
                     )
                 except Exception as exc:  # noqa: BLE001 — не мешаем выдаче кода
                     logger.warning(f"Gift: не удалил сообщение с оплатой: {exc}")
+            cert = certificate_url(gift["code"])
             await self.notifier.notify_user(
                 user,
                 payload=MessagePayloadDto(
                     i18n_key="raw-message",
                     i18n_kwargs={
-                        "content": (
-                            f"🎁 Подарок оплачен: {gift['plan_name']} на {gift['duration_days']} дн.\n"
-                            f"Код для получателя:\n<code>{gift['code']}</code>\n\n"
-                            "Он вводит его в разделе «Промокод»."
+                        "content": gift_ready_text(
+                            gift["plan_name"], int(gift["duration_days"]), gift["code"], cert, paid=True
                         )
                     },
+                    # Ссылка на сертификат и «Поделиться» — пересылают именно её.
+                    reply_markup=gift_share_keyboard(cert, gift["plan_name"], int(gift["duration_days"])),
                     # ОБЯЗАТЕЛЬНО: по умолчанию у payload delete_after=5 — сообщение с
                     # кодом самоуничтожалось через 5 секунд, и код терялся навсегда.
                     delete_after=None,
@@ -843,6 +852,9 @@ def apply() -> str:
                         "name": user.name,
                         "email": user.email,
                     },
+                    # Не самоудалять: по умолчанию сообщение живёт 30 с (overlay notifications),
+                    # и человек/владелец видит лишь вспышку — так уже терялись рассылки и коды подарков.
+                    delete_after=None,
                 ),
                 roles=[Role.OWNER, Role.DEV],
                 notification_type=SystemNotificationType.SYSTEM,
@@ -935,6 +947,9 @@ def apply() -> str:
                             "name": user.name,
                             "email": user.email,
                         },
+                        # Не самоудалять: по умолчанию сообщение живёт 30 с (overlay notifications),
+                        # и человек/владелец видит лишь вспышку — так уже терялись рассылки и коды подарков.
+                        delete_after=None,
                     )
                 )
 

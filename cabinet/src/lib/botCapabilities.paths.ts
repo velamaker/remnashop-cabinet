@@ -53,6 +53,9 @@ export const PATH_NEEDS_BOT: Record<string, BotCap> = {
   "GET /api/admin/subscriptions/user/{}/extra-traffic": "extra_traffic",
   "GET /api/admin/payment-reminder": "payment_reminder",
   "PUT /api/admin/payment-reminder": "payment_reminder",
+  // «Сигналы до ухода»: страницу прячет canPage (PAGE_NEEDS_BOT).
+  "GET /api/admin/churn-signals": "churn_signals",
+  "PUT /api/admin/churn-signals": "churn_signals",
   "POST /api/admin/subscriptions/user/{}/extra-traffic/{}/revoke": "extra_traffic",
 };
 
@@ -77,6 +80,8 @@ export const PATH_GRACEFUL: Record<string, string> = {
     "страница отписки открывается только из письма нового бота; 404 = «ссылка недействительна»",
   "POST /api/admin/users/{}/delete":
     "кнопку прячет реестр возможностей: честный 501 старого бэкенда убирает её насовсем (useCapabilities)",
+  "GET /api/gift/certificate/{}":
+    "страницу сертификата открывают только по ссылке, которую выдал новый бот; 404 = «такого подарка нет»",
   "PUT /api/admin/gateways/order":
     "стрелки порядка: отказ показывает причину и возвращает список к тому, что в базе — страница остаётся рабочей",
 };

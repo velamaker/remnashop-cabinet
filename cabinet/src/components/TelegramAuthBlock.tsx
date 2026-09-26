@@ -4,6 +4,7 @@ import { useBranding } from "@/contexts/BrandingContext";
 import { useT } from "@/i18n/I18nContext";
 import { TelegramLoginButton } from "@/components/TelegramLoginButton";
 import { ApiError, type TelegramAuthRequest } from "@/types/api";
+import { safeInternalPath, withNext } from "@/lib/nav";
 
 const TELEGRAM_BOT_USERNAME = import.meta.env.VITE_TELEGRAM_BOT_USERNAME || "";
 
@@ -35,13 +36,19 @@ export function TelegramAuthBlock({
   const navigate = useNavigate();
   const { loginWithTelegram } = useAuth();
   const { telegramOidcEnabled, emailAuthEnabled } = useBranding();
+  // next приходит со страницы, но проверяем и здесь: компонент уводит по нему
+  // сам — и роутером после виджета, и браузером на сервер для OIDC.
+  const target = safeInternalPath(next);
 
   if (!telegramOidcEnabled && !TELEGRAM_BOT_USERNAME) return null;
 
   const handleAuth = async (data: TelegramAuthRequest) => {
     try {
       await loginWithTelegram(data);
-      navigate(next);
+      // Этот переход случается ПОСЛЕ того, как PublicOnlyRoute уже увёл на next:
+      // пользователь выставляется раньше, чем промис входа завершится. Поэтому
+      // вести он обязан туда же — с «/» он перебивал next, и код подарка терялся.
+      navigate(target);
     } catch (err) {
       // 428 — «нужно согласие с документами». Через кнопку-виджет его не передать:
       // их ручка кладёт список принятых документов В ПРОВЕРКУ ПОДПИСИ, поэтому
@@ -63,7 +70,9 @@ export function TelegramAuthBlock({
           <button
             type="button"
             onClick={() => {
-              window.location.href = "/api/auth/telegram/oidc/start";
+              // next едет через сервер: он хранит его в подписанной tx-куке на
+              // время входа у Telegram и по возврату ведёт туда же.
+              window.location.href = withNext("/api/auth/telegram/oidc/start", target);
             }}
             className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#2aabee] text-sm font-semibold text-white shadow-[0_10px_26px_-14px_rgba(42,171,238,0.9)] transition-colors hover:bg-[#1f97d4]"
           >
@@ -84,7 +93,9 @@ export function TelegramAuthBlock({
       {emailAuthEnabled && (
         <div className="my-6 flex items-center gap-3">
           <div className="h-px flex-1 bg-border-subtle" />
-          <span className="mono-label text-fg-subtle">{t("common.or")}</span>
+          <span className="font-mono text-[11px] font-medium uppercase leading-none tracking-[0.2em] text-fg-subtle">
+            {t("common.or")}
+          </span>
           <div className="h-px flex-1 bg-border-subtle" />
         </div>
       )}

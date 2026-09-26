@@ -22,6 +22,7 @@ redirect_uri (зарегистрировать в BotFather → Allowed URLs):
 import base64
 import hashlib
 import os
+import re
 import secrets
 import time
 from typing import Any, Optional
@@ -107,6 +108,33 @@ def _jwks() -> "jwt.PyJWKClient":
     return _jwk_client
 
 
+# Куда вернуть человека после входа. Значение приходит из адресной строки, поэтому
+# проверяем его сами: открытый редирект на чужой сайт — классическая дыра входа, а
+# ссылку с ?next= легко подсунуть. Правило то же, что в кабинете
+# (cabinet/src/lib/nav.ts safeInternalPath) — меняешь здесь, поменяй и там:
+#   * только один ведущий слэш (иначе `//evil.com` — адрес чужого хоста);
+#   * никаких обратных слэшей и закодированных разделителей в начале;
+#   * никаких управляющих символов и пробелов: парсер адреса молча выкидывает их
+#     из любого места, и `/\t/evil.com` превращается в `//evil.com`;
+#   * никаких сегментов «.» и «..»: их схлопывает тот же парсер.
+_UNSAFE_NEXT = re.compile(r"[\x00-\x20\x7f-\xa0\u2028\u2029\ufeff]")
+_DOUBLE_LEAD_NEXT = re.compile(r"^[/\\](?:[/\\]|%2f|%5c)", re.IGNORECASE)
+
+
+def safe_next_path(raw: Optional[str]) -> str:
+    """Проверенный внутренний путь или пустая строка (значит «на главную»)."""
+    value = (raw or "").strip()
+    if not value or not value.startswith("/"):
+        return ""
+    if "\\" in value or _UNSAFE_NEXT.search(value) or _DOUBLE_LEAD_NEXT.match(value):
+        return ""
+    path = value.split("?", 1)[0].split("#", 1)[0]
+    for segment in path.split("/"):
+        if segment.replace("%2e", ".").replace("%2E", ".") in (".", ".."):
+            return ""
+    return value
+
+
 @router.get("/start")
 @inject
 async def oidc_start(
@@ -127,6 +155,13 @@ async def oidc_start(
         "cv": code_verifier,
         "exp": int(time.time()) + TX_TTL,
     }
+
+    # Куда вернуть после входа. Кладём в ту же ПОДПИСАННУЮ куку, что state и nonce:
+    # по дороге через Telegram адрес возврата иначе теряется, и человек со ссылки
+    # подарка попадал на главную, а код подарка пропадал.
+    next_path = safe_next_path(request.query_params.get("next"))
+    if next_path:
+        tx_payload["nx"] = next_path
 
     # Режим ПРИВЯЗКИ (?mode=link): не логинимся, а привязываем Telegram к уже
     # залогиненному аккаунту. Запоминаем id текущего пользователя в подписанной
@@ -337,7 +372,11 @@ async def oidc_callback(
             await uow.commit()
     access_token, refresh_token, _ = await issue_session(user, config, auth_session)
 
-    resp = RedirectResponse(_cabinet_url() or "/", status_code=302)
+    # Возвращаем туда, откуда пришли (?next= со страницы входа), иначе на главную.
+    # Путь уже проверен на входе в oidc_start и лежит в подписанной куке, но
+    # проверяем ещё раз: кука расшифрована, а цена ошибки — открытый редирект.
+    back = safe_next_path(tx.get("nx"))
+    resp = RedirectResponse(f"{_cabinet_url()}{back}" or "/", status_code=302)
     set_auth_cookies(resp, access_token, refresh_token)
     resp.delete_cookie(TX_COOKIE, httponly=True, secure=True, samesite="lax")
     return resp

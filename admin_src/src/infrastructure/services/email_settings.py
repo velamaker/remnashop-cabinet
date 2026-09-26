@@ -13,6 +13,7 @@
 
 import json
 import os
+import smtplib
 from pathlib import Path
 from typing import Any, Optional
 
@@ -121,3 +122,68 @@ def email_enabled_now(config: Optional[AppConfig] = None) -> bool:
     """Включена ли почта ПРЯМО СЕЙЧАС — для мест, где отправителя под рукой нет."""
     cfg = config or AppConfig.get()
     return settings_allow_sending(load_email_settings(cfg))
+
+
+def explain_send_error(exc: BaseException, provider: Optional[str] = None) -> str:
+    """Почему письмо не ушло — словами для админа, с ответом сервера в хвосте.
+
+    ЗАЧЕМ. Отправитель заворачивает ошибку SMTP в общее «Failed to send email»:
+    человеку в кабинете подробности ни к чему. Но на кнопке «Проверить» админу
+    нужна именно настоящая причина, а она лежит в `__cause__`. Раньше кнопка
+    показывала сырой ответ вида `(534, b'5.7.9 Application-specific password
+    required ...')` — по нему нельзя догадаться, что Gmail просто хочет пароль
+    приложения вместо обычного.
+    """
+    # Идём по цепочке «из-за чего» до САМОГО дна, но останавливаемся на первом
+    # звене, которое уже всё объясняет. Без этого таймаут httpx уходил глубже
+    # нужного: ConnectTimeout → httpcore.ConnectTimeout → TimeoutError →
+    # asyncio.CancelledError. Корнем оказывалась отмена задачи — не таймаут и не
+    # ошибка связи, подсказки не было вовсе, а админ видел внутренний текст anyio.
+    # Туда же не спускаемся через звенья, которые не Exception (CancelledError —
+    # BaseException): объяснять админу устройство асинхронной отмены незачем.
+    root: BaseException = exc
+    seen = 0
+    while seen < 6:
+        if isinstance(root, (TimeoutError, ConnectionError, smtplib.SMTPException)):
+            break
+        nxt = root.__cause__ or root.__context__
+        if nxt is None or not isinstance(nxt, Exception):
+            break
+        root, seen = nxt, seen + 1
+
+    raw = str(root).strip() or type(root).__name__
+    low = raw.lower()
+
+    # Код ответа SMTP берём из самого исключения, а не ищем цифры в тексте: «535»
+    # встречается и в номере порта, и в идентификаторе очереди почтовика.
+    smtp_code = getattr(root, "smtp_code", None)
+
+    hint = ""
+    # Именно гугловский отказ, а не любой код 5.7.9: по RFC 4954 он общий
+    # («механизм проверки слишком слабый»), и совет про пароль приложения к нему
+    # не подходит.
+    if "application-specific password" in low or "invalidsecondfactor" in low:
+        hint = (
+            "Gmail не принимает обычный пароль от почты: нужен ПАРОЛЬ ПРИЛОЖЕНИЯ. "
+            "Создайте его в Аккаунте Google → Безопасность → Пароли приложений "
+            "(нужна включённая двухэтапная проверка) и вставьте в поле «Пароль»"
+        )
+    elif smtp_code == 535 or "badcredentials" in low \
+            or "username and password not accepted" in low \
+            or "authentication failed" in low or "authentication credentials invalid" in low:
+        hint = "Логин или пароль не подошли — проверьте их (у Gmail и Яндекса нужен пароль приложения)"
+    elif "timed out" in low or "connection refused" in low or "connection reset" in low \
+            or isinstance(root, (TimeoutError, ConnectionError)):
+        if str(provider or "").lower() == "brevo":
+            # Уже Brevo — советовать «выберите Brevo» значит увести не туда.
+            hint = (
+                "Brevo не отвечает — проверьте, что сервер выходит в интернет по HTTPS "
+                "(api.brevo.com) и что ключ API действителен"
+            )
+        else:
+            hint = (
+                "Почтовый сервер не отвечает на этом порту — часто хостер закрывает "
+                "исходящую почту. Выберите провайдера Brevo: он шлёт через HTTPS"
+            )
+
+    return f"{hint} (ответ сервера: {raw})" if hint else raw

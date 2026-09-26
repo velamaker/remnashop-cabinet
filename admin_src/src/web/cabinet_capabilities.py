@@ -38,6 +38,7 @@ CABINET_CAPABILITIES: tuple[str, ...] = (
     "extra_traffic",
     "payment_reminder",
     "info_i18n",
+    "churn_signals",
 )
 
 # Заметные изменения ТОЛЬКО в боте — кабинета не касаются, но при «только кабинет»
@@ -47,6 +48,9 @@ CABINET_CAPABILITIES: tuple[str, ...] = (
 BOT_ONLY_CHANGES: dict[str, str] = {
     "expiry_reminders_3x": "Напоминания об окончании подписки на панели Remnawave 3.x",
     "device_webhooks_3x": "Уведомления о новых и удалённых устройствах на панели Remnawave 3.x",
+    "yookassa_api_check": "ЮKassa: оплата засчитывается только после подтверждения через её API",
+    "rules_deeplink": "Ссылка на подарок, тариф или приглашение доживает до принятия правил бота",
+    "notification_keep": "Сообщение о пополнении баланса и тревоги владельцу больше не самоудаляются",
 }
 
 

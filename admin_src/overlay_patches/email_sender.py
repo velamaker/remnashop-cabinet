@@ -507,5 +507,15 @@ def apply() -> str:
     for qualname, sha in BASE_METHODS.items():
         expect_source(target, qualname, sha, qualname)
 
+    # Подменяем имя В ОБОИХ местах. Контейнер берёт класс из пакета
+    # (`from src.infrastructure.services import SmtpEmailSender`), а админские
+    # кнопки «Проверить» и оповещение о входе — из самого модуля
+    # (`from src.infrastructure.services.email_sender import SmtpEmailSender`).
+    # Пока подмена была только в пакете, кнопка «Проверить» слала через `.env`,
+    # а настоящие письма — через настройки из админки: тест показывал «работает»
+    # на одном пароле, письма падали на другом (у Gmail — 534, «нужен пароль
+    # приложения»). Базовый класс остаётся родителем по MRO, поэтому super() и
+    # сверка исходника (она выше, до подмены) от этого не страдают.
     services.SmtpEmailSender = OverlaySmtpEmailSender
+    target.SmtpEmailSender = OverlaySmtpEmailSender
     return "письма в оформлении кабинета (+ запасной канал Brevo)"

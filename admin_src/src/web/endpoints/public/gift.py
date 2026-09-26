@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.application.common import BotService
 from src.application.common.dao import PaymentGatewayDao, PromocodeDao, TransactionDao
 from src.application.common.uow import UnitOfWork
 from src.application.dto import (
@@ -173,6 +174,20 @@ async def create_gift(
             expires_at=None,
         )
         await promocode_dao.create(promo)
+        # История подарков — в ТОЙ ЖЕ транзакции, что списание и код. Раньше она
+        # писалась отдельно «по возможности» после коммита: сорвись эта запись —
+        # код действителен, а ссылка-сертификат ведёт на «такого подарка нет»
+        # (страница ищет подарок по истории).
+        payment_uuid = uuid.uuid4()
+        await overlay_gift.insert_issued_gift(
+            session,
+            payment_id=payment_uuid,
+            user_id=user.id,
+            plan_snapshot=plan_snapshot,
+            duration_days=body.duration_days,
+            amount=price,
+            code=code,
+        )
         await session.commit()
     except Exception as e:  # noqa: BLE001 — при любой ошибке откатываем всю транзакцию
         # Списание и создание промокода — В ОДНОЙ незакоммиченной транзакции (единственный
@@ -182,24 +197,6 @@ async def create_gift(
         await session.rollback()
         logger.warning(f"gift: создание подарка user_id={user.id} упало ({e}), списание отменено")
         raise HTTPException(status_code=502, detail="Не удалось создать подарок, средства возвращены")
-
-    payment_uuid = uuid.uuid4()
-
-    # История подарков (та же таблица, что и у шлюзовых) — чтобы код можно было
-    # посмотреть позже: в ответе API он приходит один раз. Best-effort по той же
-    # причине, что и транзакция ниже: подарок уже выдан.
-    try:
-        await overlay_gift.record_issued_gift(
-            session,
-            payment_id=payment_uuid,
-            user_id=user.id,
-            plan_snapshot=plan_snapshot,
-            duration_days=body.duration_days,
-            amount=price,
-            code=code,
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"gift: подарок {code} выдан, но в истории подарков не записан ({e})")
 
     # Запись в историю баланса. Раньше подарок списывал деньги молча: в
     # transactions ничего не появлялось, и в кабинете трату было не найти.
@@ -240,6 +237,7 @@ async def create_gift(
     return {
         "paid_by": "balance",
         "code": code,
+        "certificate_url": overlay_gift.certificate_url(code),
         "plan_name": plan.name,
         "duration_days": body.duration_days,
         "price": str(price),
@@ -259,3 +257,28 @@ async def my_gifts(
     потеряли: раньше он приходил только сообщением в Telegram.
     """
     return {"items": await overlay_gift.list_user_gifts(session, user_id=user.id)}
+
+
+@router.get("/certificate/{code}")
+@inject
+async def gift_certificate(
+    code: str,
+    session: FromDishka[AsyncSession],
+    bot_service: FromDishka[BotService],
+) -> dict[str, Any]:
+    """Страница сертификата: что подарено и как активировать. БЕЗ входа.
+
+    Ссылку пересылают, открыть её может кто угодно — поэтому здесь только то, что
+    видно на открытке (тариф, срок, состояние), и ничего о покупателе. Отвечаем
+    только за подарочные коды: обычные промокоды магазина этой ручкой не проверить.
+    Перебор бессмыслен — в коде 128 бит.
+    """
+    cert = await overlay_gift.get_certificate(session, code)
+    if cert is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Подарок не найден")
+    cert["bot_url"] = (
+        await overlay_gift.bot_activation_url(bot_service, cert["code"])
+        if cert["state"] == "ready"
+        else None
+    )
+    return cert
