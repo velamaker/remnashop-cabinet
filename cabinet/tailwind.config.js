@@ -1,4 +1,17 @@
 /** @type {import('tailwindcss').Config} */
+
+// Палитра живёт в CSS-переменных (index.css) — тема переключается без пересборки.
+// Но простая строка "var(--success)" ломает модификаторы прозрачности: классы
+// вида `bg-success/10`, `border-accent/30` не давали НИКАКОГО css и молча
+// пропадали. Поэтому цвет объявлен функцией: без модификатора — переменная как
+// есть, с модификатором — color-mix (он умеет прозрачность для любого формата
+// цвета, включая hex и rgba в переменной).
+const token = (name) => ({ opacityValue } = {}) => {
+  const alpha = Number(opacityValue);
+  if (!Number.isFinite(alpha) || alpha === 1) return `var(${name})`;
+  return `color-mix(in srgb, var(${name}) ${alpha * 100}%, transparent)`;
+};
+
 export default {
   darkMode: "class",
   content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
@@ -6,29 +19,29 @@ export default {
     extend: {
       colors: {
         bg: {
-          DEFAULT: "var(--bg)",
-          subtle: "var(--bg-subtle)",
-          raised: "var(--bg-raised)",
-          overlay: "var(--bg-overlay)",
+          DEFAULT: token("--bg"),
+          subtle: token("--bg-subtle"),
+          raised: token("--bg-raised"),
+          overlay: token("--bg-overlay"),
         },
         border: {
-          DEFAULT: "var(--border)",
-          subtle: "var(--border-subtle)",
+          DEFAULT: token("--border"),
+          subtle: token("--border-subtle"),
         },
         fg: {
-          DEFAULT: "var(--fg)",
-          muted: "var(--fg-muted)",
-          subtle: "var(--fg-subtle)",
+          DEFAULT: token("--fg"),
+          muted: token("--fg-muted"),
+          subtle: token("--fg-subtle"),
         },
         accent: {
-          DEFAULT: "var(--accent)",
-          hover: "var(--accent-hover)",
-          fg: "var(--accent-fg)",
-          subtle: "var(--accent-subtle)",
+          DEFAULT: token("--accent"),
+          hover: token("--accent-hover"),
+          fg: token("--accent-fg"),
+          subtle: token("--accent-subtle"),
         },
-        success: "var(--success)",
-        warning: "var(--warning)",
-        danger: "var(--danger)",
+        success: token("--success"),
+        warning: token("--warning"),
+        danger: token("--danger"),
       },
       fontFamily: {
         sans: ["var(--font-sans)"],
