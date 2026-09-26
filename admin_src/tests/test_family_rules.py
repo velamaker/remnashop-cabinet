@@ -106,13 +106,20 @@ def test_renewal_extends_every_profile_with_traffic_reset():
 
 
 def test_cron_resets_traffic_only_after_a_purchase_it_has_not_seen():
-    p = profile(1)
-    later = p.last_reconciled_at + timedelta(minutes=1)
-    d = family.plan_decisions(owner(), [p], NOW, 30, purchase_at=later)
+    """Обнуляет только оплата ПОЗЖЕ последнего свежего трафика профиля — не сверки:
+    отметку сверки сбрасывают и выключение, и только что заведённый профиль."""
+    reset_at = NOW - timedelta(days=3)
+    p = profile(1, traffic_reset_at=reset_at, last_reconciled_at=None)
+    d = family.plan_decisions(owner(), [p], NOW, 30, purchase_at=reset_at + timedelta(minutes=1))
     assert d[0].action == "sync" and d[0].reset
-    earlier = p.last_reconciled_at - timedelta(minutes=1)
-    d = family.plan_decisions(owner(), [p], NOW, 30, purchase_at=earlier)
+    d = family.plan_decisions(owner(), [p], NOW, 30, purchase_at=reset_at - timedelta(minutes=1))
     assert d[0].action == "noop"
+    # Отметки трафика ещё нет — отсчёт от создания профиля.
+    fresh = profile(2, created=NOW - timedelta(hours=1))
+    d = family.plan_decisions(owner(), [fresh], NOW, 30, purchase_at=NOW - timedelta(hours=2))
+    assert d[0].action == "noop"
+    d = family.plan_decisions(owner(), [fresh], NOW, 30, purchase_at=NOW - timedelta(minutes=5))
+    assert d[0].action == "sync" and d[0].reset
 
 
 @pytest.mark.parametrize(

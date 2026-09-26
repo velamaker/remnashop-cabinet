@@ -61,6 +61,12 @@ class ConflictError(Exception):
     status_code = 409
 
 
+class BadRequestError(Exception):
+    """Панель ответила и отказала: пользователь точно не создан."""
+
+    status_code = 400
+
+
 class Panel:
     """Панель в памяти. `calls` — что у неё просили, по порядку."""
 
@@ -534,7 +540,7 @@ async def test_panel_refusal_marks_failed_and_leaves_nothing(db):
     plan_id = await db.plan()
     owner_id = await db.owner(plan_id)
     users_before = await db.scalar("SELECT count(*) FROM users")
-    db.panel.fail_create = RuntimeError("400: validation failed")
+    db.panel.fail_create = BadRequestError("validation failed")
     rid = uuid_lib.uuid4()
     result = await db.create(owner_id, "Мама", rid)
     assert result["result"] == "failed"
@@ -1024,11 +1030,13 @@ async def test_unfreeze_sets_the_term_before_enabling(db):
 async def test_cron_pass_picks_up_a_changed_owner(db):
     tick = importlib.import_module("src.infrastructure.taskiq.tasks.family")
     _plan, owner_id, ids = await _family(db, 2)
-    # Сразу после создания всё сведено — проход ничего не трогает.
-    async with db.session() as s:
-        _users, subs = db.daos(s)
-        summary = await tick.run_pass(s, db.panel, subscription_dao=subs, full=False)
-    assert summary["owners"] == 0
+    # Только что заведённые профили ближайший проход сверяет (пока они создавались,
+    # владелец мог сменить тариф), следующий — уже ничего не трогает.
+    for expected in (1, 0):
+        async with db.session() as s:
+            _users, subs = db.daos(s)
+            summary = await tick.run_pass(s, db.panel, subscription_dao=subs, full=False)
+        assert summary["owners"] == expected
     # Владельца заблокировали — ближайший проход приостанавливает семью.
     await db.run("UPDATE users SET is_blocked = true, updated_at = now() WHERE id = :u", u=owner_id)
     async with db.session() as s:
@@ -1126,3 +1134,58 @@ async def test_reserve_never_picks_a_family_profile(db):
     picked = {r[0] for r in await db.rows(_reserve_select_sql(), w=7)}
     assert owner_id in picked, "контроль: владелец с оплатой резерв получает"
     assert shadow not in picked
+
+
+async def test_create_timeout_is_not_a_failure(db):
+    """Панель не ответила на создание — это не «не создала»: строка остаётся «создаётся»
+    и решается кроном после отсрочки, а не признаётся неудачной сразу."""
+    plan_id = await db.plan()
+    owner_id = await db.owner(plan_id)
+    db.panel.fail_create = TimeoutError("read timeout")
+    result = await db.create(owner_id, "Мама")
+    assert result["result"] == "pending"
+    assert await db.scalar("SELECT status FROM family_profiles") == "creating"
+
+
+async def test_user_created_late_for_a_failed_attempt_is_removed_by_cron(db, monkeypatch):
+    """Панель досоздала пользователя уже после того, как попытку признали неудачной:
+    ссылку никто не видел — крон удаляет его сам и владельцу бота об этом не пишет."""
+    tick = importlib.import_module("src.infrastructure.taskiq.tasks.family")
+    sent: list[str] = []
+
+    async def fake_send(text):
+        sent.append(text)
+
+    monkeypatch.setattr(tick, "send_to_owner", fake_send)
+    plan_id = await db.plan()
+    owner_id = await db.owner(plan_id)
+    await db.create(owner_id, "Живой")
+    db.panel.fail_create = BadRequestError("rejected")
+    assert (await db.create(owner_id, "Мама"))["result"] == "failed"
+    name = await db.scalar("SELECT panel_username FROM family_profiles WHERE status = 'failed'")
+    db.panel.fail_create = None
+    await db.panel.users.create_user(
+        SimpleNamespace(
+            username=name,
+            expire_at=now(),
+            traffic_limit_bytes=0,
+            hwid_device_limit=1,
+            traffic_limit_strategy=None,
+            tag=None,
+            active_internal_squads=[],
+            external_squad_uuid=None,
+            description="",
+        )
+    )
+    async with db.session() as s:
+        _users, subs = db.daos(s)
+        await tick.run_pass(s, db.panel, subscription_dao=subs, full=True)
+    assert db.panel.by_name(name) is None, "поздний пользователь неудачной попытки остался"
+    assert db.panel.by_name("rs_fam_x") is None and len(db.panel.store) == 1
+    assert sent == []
+
+
+async def test_fresh_profile_waits_for_a_reconcile(db):
+    """Отметки сверки у только что заведённого профиля нет — крон сверит его сразу."""
+    _plan, owner_id, _ids = await _family(db, 1)
+    assert (await db.profiles(owner_id))[0].last_reconciled_at is None

@@ -32,6 +32,11 @@ Create Date: 2026-09-26
   * `panel_username UNIQUE` — по имени крон находит в панели профиль, созданный перед
     падением процесса, и не заводит второго.
 
+`traffic_reset_at` — когда профиль в последний раз получил свежий трафик (создание
+или обнуление после оплаты владельца). Обнулять снова можно только за оплату позже
+этой отметки: «сверил» и «обнулил» — разные события, и отметка сверки для этого не
+годится (её сбрасывают и выключение, и только что заведённый профиль).
+
 FK на users(id) обязательны: scripts/merge-duplicate.py переносит строки двойника по
 FK, а удаление владельца должно уносить и его профили. `profile_user_id` — nullable:
 у неудачной попытки теневой аккаунт уже удалён, а строка остаётся, чтобы повтор с тем
@@ -76,6 +81,7 @@ def upgrade() -> None:
             panel_uuid         UUID,
             suspended_at       TIMESTAMPTZ,
             last_reconciled_at TIMESTAMPTZ,
+            traffic_reset_at   TIMESTAMPTZ,
             fail_count         INTEGER      NOT NULL DEFAULT 0,
             last_error         TEXT,
             created_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),

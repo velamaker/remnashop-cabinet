@@ -241,6 +241,8 @@ class ProfileRow:
     sub_url: Optional[str] = None
     sub_remna_id: Optional[str] = None
     sub_device_reset_at: Optional[datetime] = None
+    # Когда профиль в последний раз получил свежий трафик (создание или обнуление).
+    traffic_reset_at: Optional[datetime] = None
 
     @property
     def remna_uuid(self) -> Optional[str]:
@@ -520,10 +522,12 @@ def plan_decisions(
         ):
             out.append(Decision(p.id, "delete", reason="panel_missing"))
             continue
+        # Оплата позже последнего свежего трафика профиля — значит, хук оплаты не
+        # дошёл, и обнулить должен крон. Отметка — именно трафика, а не сверки:
+        # сверку сбрасывают и выключение, и только что заведённый профиль.
+        fresh_at = p.traffic_reset_at or p.created_at
         reset = reset_traffic or (
-            purchase_at is not None
-            and p.last_reconciled_at is not None
-            and purchase_at > p.last_reconciled_at
+            purchase_at is not None and fresh_at is not None and purchase_at > fresh_at
         )
         if p.status == "suspended":
             out.append(Decision(p.id, "resume", target=target, reset=reset))
@@ -602,7 +606,7 @@ PROFILES_SQL = (
     "fp.suspended_at, fp.last_reconciled_at, fp.fail_count, fp.created_at, fp.updated_at, "
     "s.id, s.status::text, s.expire_at, s.device_limit, s.traffic_limit, "
     "s.traffic_limit_strategy::text, s.internal_squads::text[], s.external_squad::text, "
-    "s.url, s.user_remna_id::text, s.device_all_reset_at "
+    "s.url, s.user_remna_id::text, s.device_all_reset_at, fp.traffic_reset_at "
     "FROM family_profiles fp "
     "LEFT JOIN users pu ON pu.id = fp.profile_user_id "
     "LEFT JOIN subscriptions s ON s.id = pu.current_subscription_id "
@@ -686,6 +690,7 @@ def _row_profile(r: Any) -> ProfileRow:
         sub_url=r[23],
         sub_remna_id=r[24],
         sub_device_reset_at=r[25],
+        traffic_reset_at=r[26],
     )
 
 
@@ -848,6 +853,19 @@ class PanelGone(PanelError):
 
 def _is_not_found(exc: BaseException) -> bool:
     return type(exc).__name__ == "NotFoundError" or getattr(exc, "status_code", None) == 404
+
+
+def _is_rejection(exc: BaseException) -> bool:
+    """Панель ТОЧНО не создала пользователя: ответила отказом или запрос не ушёл.
+
+    4xx — панель ответила и отказала (кроме 408: это «не дождалась»). Ошибка разбора
+    тела у нас — запрос не отправлялся вовсе. Таймаут, обрыв и 5xx — не знаем:
+    панель могла создать пользователя уже после нашего вопроса.
+    """
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return 400 <= status < 500 and status != 408
+    return type(exc).__name__ == "ValidationError"
 
 
 def _is_conflict(exc: BaseException) -> bool:
@@ -1071,8 +1089,13 @@ async def _store_status(session: "AsyncSession", p: ProfileRow, status: str) -> 
 
 
 async def _profile_ok(session: "AsyncSession", profile_id: int, **fields: Any) -> None:
-    """Профиль сведён: новые поля, счётчик неудач в ноль, отметка сверки."""
-    sets = ["fail_count = 0", "last_error = NULL", "updated_at = now()", "last_reconciled_at = now()"]
+    """Профиль сведён: новые поля, счётчик неудач в ноль, отметка сверки.
+
+    `last_reconciled_at` можно передать явно (None — «сверить ближайшим проходом»).
+    """
+    sets = ["fail_count = 0", "last_error = NULL", "updated_at = now()"]
+    if "last_reconciled_at" not in fields:
+        sets.append("last_reconciled_at = now()")
     params: dict[str, Any] = {"id": profile_id}
     for key, value in fields.items():
         if value is _NOW:
@@ -1267,6 +1290,13 @@ async def create_profile(
             await _profile_fail(session, profile_id, f"create: {exc}; lookup: {lookup_exc}")
             await session.commit()
             return {"result": "pending", "profile_id": profile_id}
+        if created is None and not _is_rejection(exc):
+            # Ответа не было (таймаут, обрыв, 5xx): панель могла создать профиль уже
+            # после нашего вопроса. «Не удалось» сейчас оставило бы сироту с работающей
+            # ссылкой — строка остаётся `creating`, её решит крон после отсрочки.
+            await _profile_fail(session, profile_id, f"create: {type(exc).__name__}: {exc}")
+            await session.commit()
+            return {"result": "pending", "profile_id": profile_id}
         if created is None:
             try:
                 await _mark_failed(
@@ -1383,7 +1413,16 @@ async def _adopt(
         ),
     )
     await subscription_dao.create(subscription, p.profile_user_id)
-    await _profile_ok(session, profile_id, status="active", panel_uuid=str(remna.uuid))
+    # Отметку сверки НЕ ставим: пока профиль создавался, владелец мог сменить тариф
+    # или уйти на паузу. Пустая отметка — ближайший проход крона сверит профиль.
+    await _profile_ok(
+        session,
+        profile_id,
+        status="active",
+        panel_uuid=str(remna.uuid),
+        last_reconciled_at=None,
+        traffic_reset_at=_NOW,
+    )
     await _event(session, owner_id, profile_id, "created", actor, {"label": p.label})
     await session.commit()
     return {"result": "created", "profile_id": profile_id}
@@ -1856,6 +1895,8 @@ async def _apply_sync(
         new_status = "ACTIVE"
     await _store_target(session, p, target, status=new_status)
     fields: dict[str, Any] = {"device_limit": target.device_limit}
+    if reset:
+        fields["traffic_reset_at"] = _NOW
     if resume:
         fields.update(status="active", suspend_reason=None, suspended_at=None)
     await _profile_ok(session, p.id, **fields)
@@ -1944,24 +1985,31 @@ async def orphan_scan(
 ) -> list[str]:
     """Пользователи панели `rs_fam_*`, за которыми у нас нет живой строки.
 
-    Такие профили работают, а мы о них не знаем: их не продлит и не приостановит
-    никто. Удалять молча нельзя — там могла быть чья-то рабочая ссылка; сообщаем
-    владельцу бота, решает он.
+    Два случая:
+      * имя совпадает со строкой в `failed` — панель досоздала пользователя уже после
+        того, как попытку признали неудачной (ответ на создание потерялся). Ссылку никто
+        не видел — такого пользователя удаляем сами, владельцу бота не пишем;
+      * иначе — сирота неизвестного происхождения: он работает, а мы о нём не знаем.
+        Удалять молча нельзя — там могла быть чья-то рабочая ссылка; сообщаем
+        владельцу бота (возвращаемый список), решает он.
     """
     rows = (
         await session.execute(
             text(
-                "SELECT fp.panel_username, fp.panel_uuid::text, s.user_remna_id::text "
+                "SELECT fp.panel_username, fp.panel_uuid::text, s.user_remna_id::text, "
+                "fp.status, fp.owner_user_id, fp.id "
                 "FROM family_profiles fp "
-                "LEFT JOIN subscriptions s ON s.user_id = fp.profile_user_id "
-                "WHERE fp.status <> 'failed'"
+                "LEFT JOIN subscriptions s ON s.user_id = fp.profile_user_id"
             )
         )
     ).all()
     await session.rollback()
-    names = {str(r[0]) for r in rows if r[0]}
-    uuids = {str(v).lower() for r in rows for v in (r[1], r[2]) if v}
+    live = [r for r in rows if r[3] != "failed"]
+    names = {str(r[0]) for r in live if r[0]}
+    uuids = {str(v).lower() for r in live for v in (r[1], r[2]) if v}
+    failed = {str(r[0]): (int(r[4]), int(r[5])) for r in rows if r[3] == "failed" and r[0]}
     orphans: list[str] = []
+    cleaned: list[tuple[str, int, int]] = []
     for index in range(max_pages):
         resp = await sdk.users.get_all_users(start=index * page, size=page)
         users = list(getattr(resp, "users", None) or [])
@@ -1971,9 +2019,22 @@ async def orphan_scan(
                 continue
             if str(getattr(user, "uuid", "")).lower() in uuids:
                 continue
+            if name in failed:
+                try:
+                    await panel_delete(sdk, str(user.uuid))
+                except PanelError as exc:
+                    logger.warning(f"family: поздний профиль '{name}' не удалён: {exc}")
+                    continue
+                cleaned.append((str(name), *failed[name]))
+                continue
             orphans.append(str(name))
         if len(users) < page:
             break
+    for name, owner_id, profile_id in cleaned:
+        await _event(session, owner_id, profile_id, "late_orphan_deleted", "cron", {"name": name})
+    if cleaned:
+        await session.commit()
+        logger.info(f"family: удалены поздно созданные профили неудачных попыток: {[c[0] for c in cleaned]}")
     return sorted(set(orphans))
 
 
