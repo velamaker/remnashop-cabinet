@@ -274,3 +274,121 @@ def test_сброс_baseline_помнит_кому_писали(files):
     state = df.load_state()
     assert state["baselined"] is False
     assert state["sent"] == {"1": NOW.isoformat()}, "пауза между сообщениями одному человеку не обнуляется"
+
+
+# ── неполный список устройств ────────────────────────────────────────────────
+
+
+class _Secret(str):
+    def get_secret_value(self) -> str:
+        return str(self)
+
+
+def panel_config():
+    rw = SimpleNamespace(token=_Secret("t"), caddy_token=_Secret(""), cf_client_id=_Secret(""),
+                         cf_client_secret=_Secret(""), is_external=True, url=_Secret("http://panel"),
+                         cookies={})
+    return SimpleNamespace(remnawave=rw, web_cabinet_url="https://cab.example")
+
+
+class FakePanel:
+    """Вместо httpx.AsyncClient: GET /hwid/devices постранично.
+
+    broken — на каких `start` панель отвечает 500; total — что панель называет общим
+    числом (по умолчанию честное); cap — сколько панель отдаёт на страницу максимум.
+    """
+
+    def __init__(self, devices, *, broken=(), total=None, cap=None):
+        self.devices, self.broken, self.total, self.cap = devices, set(broken), total, cap
+
+    def __call__(self, **_kwargs):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+    async def get(self, _path, params):
+        start, size = params["start"], min(params["size"], self.cap or params["size"])
+        if start in self.broken:
+            return SimpleNamespace(status_code=500, json=lambda: {})
+        total = len(self.devices) if self.total is None else self.total
+        body = {"response": {"devices": self.devices[start:start + size], "total": total}}
+        return SimpleNamespace(status_code=200, json=lambda: body)
+
+
+DEVICES = [dev("uuid-1", "A"), dev("uuid-2", "B")]
+
+
+def test_строгая_загрузка_не_отдаёт_неполный_список(monkeypatch):
+    from src.infrastructure.taskiq.tasks import new_device as nd
+
+    monkeypatch.setattr(nd, "_PAGE", 1)
+    fetch = lambda **kw: asyncio.run(nd._fetch_devices(panel_config(), **kw))
+
+    monkeypatch.setattr(nd, "AsyncClient", FakePanel(DEVICES, broken={1}))
+    with pytest.raises(RuntimeError, match="500"):
+        fetch(strict=True)
+    # «Новое устройство» как было: берёт прочитанное и не падает.
+    assert fetch() == DEVICES[:1]
+
+    monkeypatch.setattr(nd, "AsyncClient", FakePanel(DEVICES, total=3))
+    with pytest.raises(RuntimeError, match="2 из 3"):
+        fetch(strict=True)
+
+    # Панель урезала страницу: строгий обход читает до total, а не до короткой страницы.
+    monkeypatch.setattr(nd, "_PAGE", 2)
+    monkeypatch.setattr(nd, "AsyncClient", FakePanel(DEVICES, cap=1))
+    assert fetch(strict=True) == DEVICES
+    assert fetch() == DEVICES[:1], "best-effort путь «нового устройства» не изменился"
+
+
+def test_частичный_проход_затем_полный_писем_нет(files, tmp_path, monkeypatch):
+    """Панель мигнула на второй странице. Раньше крон брал недочитанный список, второй
+    человек выпадал из снимка «заполнен», и следующий полный проход писал ему
+    «только что заняли последнее место», хотя места заняты давно."""
+    from src.infrastructure.services import overlay_cron_guard as guard
+    from src.infrastructure.taskiq.tasks import new_device as nd
+
+    monkeypatch.setattr(guard, "STATE_PATH", tmp_path / "cron_guard_state.json")
+    monkeypatch.setattr(guard, "LOCK_PATH", tmp_path / ".cron_guard.lock")
+    owner: list[str] = []
+
+    async def to_owner(text):
+        owner.append(text)
+
+    monkeypatch.setattr(guard, "send_to_owner", to_owner)
+    monkeypatch.setattr(task, "datetime_now", lambda: NOW)
+    monkeypatch.setattr(nd, "_PAGE", 1)
+    df._atomic_write(df.CONFIG_PATH, {"enabled": True})
+    df.save_state({"baselined": True, "full": {"1": NOW.isoformat(), "2": NOW.isoformat()},
+                   "sent": {}, "last_run": fresh_run()})
+    before = df.STATE_PATH.read_bytes()
+
+    sent: list[int] = []
+
+    class Notifier:
+        async def notify_user(self, user, payload):
+            sent.append(user.id)
+            return SimpleNamespace(message_id=1)
+
+    class Users:
+        async def get_by_id(self, uid):
+            return SimpleNamespace(id=uid, telegram_id=100 + uid)
+
+    # Задача под @broker.task и @inject — зовём сторожа крона, как это сделал бы dishka.
+    job = task.run_device_full.original_func.__dishka_orig_func__
+    run = lambda: asyncio.run(job(session=FakeSession([row(1), row(2)]), notifier=Notifier(),
+                                  user_dao=Users(), config=panel_config(), sdk=None))
+
+    monkeypatch.setattr(nd, "AsyncClient", FakePanel(DEVICES, broken={1}))
+    run()
+    assert df.STATE_PATH.read_bytes() == before, "неполный список не должен трогать снимок"
+    assert "device_full" in guard._read(guard.STATE_PATH), "неполный список — сбой прохода"
+
+    monkeypatch.setattr(nd, "AsyncClient", FakePanel(DEVICES))
+    run()
+    assert sent == [], "полный проход после неполного написал давно заполненным"
+    assert "device_full" not in guard._read(guard.STATE_PATH)

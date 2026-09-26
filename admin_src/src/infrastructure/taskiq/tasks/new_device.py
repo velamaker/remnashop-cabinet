@@ -67,7 +67,20 @@ def _set_baselined() -> None:
         logger.warning(f"new_device: не сохранил стейт: {e}")
 
 
-async def _fetch_devices(config: AppConfig) -> list[dict[str, Any]]:
+async def _fetch_devices(config: AppConfig, *, strict: bool = False) -> list[dict[str, Any]]:
+    """Все HWID-устройства панели, постранично.
+
+    strict=False («новое устройство»): best-effort — не-200 на любой странице обрывает
+    обход, и отдаётся то, что успели прочитать. Здесь это безвредно: недочитанное
+    устройство просто заметят следующим проходом.
+
+    strict=True («все места заняты»): неполный список хуже, чем никакого. Человек, чьи
+    устройства не дочитали, выпал бы из снимка «заполнен», и следующий полный проход
+    написал бы ему «только что заняли последнее место», хотя заняты они давно. Поэтому
+    не-200 на любой странице, ответ без total или прочитано меньше total — исключение.
+    Страницы читаются до total, а не до первой неполной: панель вправе урезать размер
+    страницы, и короткая страница ещё не значит, что дальше ничего нет.
+    """
     c = config.remnawave
     headers = {
         "Authorization": f"Bearer {c.token.get_secret_value()}",
@@ -85,20 +98,29 @@ async def _fetch_devices(config: AppConfig) -> list[dict[str, Any]]:
         timeout=Timeout(connect=15, read=30, write=10, pool=5),
     ) as cl:
         start = 0
+        total = 0
         while True:
             r = await cl.get("/hwid/devices", params={"size": _PAGE, "start": start})
             if r.status_code != 200:
+                if strict:
+                    raise RuntimeError(f"/hwid/devices вернул {r.status_code} (start={start})")
                 logger.warning(f"new_device: /hwid/devices вернул {r.status_code}")
                 break
             resp = r.json().get("response", {}) or {}
             batch = resp.get("devices", []) or []
+            if strict:
+                if resp.get("total") is None:
+                    raise RuntimeError("/hwid/devices не вернул total — полноту списка не проверить")
+                total = int(resp["total"])
             if not batch:
                 break
             devices.extend(batch)
             total = int(resp.get("total", 0) or 0)
             start += len(batch)
-            if start >= total or len(batch) < _PAGE:
+            if start >= total or (not strict and len(batch) < _PAGE):
                 break
+    if strict and len(devices) < total:
+        raise RuntimeError(f"/hwid/devices: прочитано {len(devices)} из {total} — список неполный")
     return devices
 
 
