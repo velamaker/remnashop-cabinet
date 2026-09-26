@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   LifeBuoy,
   Wallet,
+  UsersRound,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useBranding } from "@/contexts/BrandingContext";
@@ -24,6 +25,7 @@ import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
 import { NotificationBell } from "@/components/NotificationBell";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { getTelegramWebApp } from "@/hooks/useTelegramWebApp";
+import { useFamilyNav } from "@/hooks/useFamilyNav";
 
 // `feature` — раздел живёт только если бэкенд это умеет. Поля нет = показываем
 // всегда (так работает наш бот, см. lib/features).
@@ -39,6 +41,8 @@ const navItems: {
   // «Устройства» без feature: HWID приходят из панели Remnawave, а не от бота —
   // от смены бота раздел не исчезает.
   { to: "/devices", icon: Smartphone, labelKey: "nav.devices" },
+  // «Семья» — только тем, кому раздел нужен: см. useFamilyNav ниже.
+  { to: "/family", icon: UsersRound, labelKey: "nav.family", feature: "family_profiles" },
   { to: "/referral", icon: Gift, labelKey: "nav.referral", feature: "referral" },
   { to: "/support", icon: LifeBuoy, labelKey: "nav.support", feature: "tickets" },
   { to: "/settings", icon: Settings, labelKey: "nav.settings" },
@@ -48,6 +52,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const { user, isAdmin, logout } = useAuth();
   // Что умеет бэкенд под кабинетом: разделы, которых у него нет, не показываем.
   const { can } = useBranding();
+  // Пункт «Семья»: бот умеет — мало, нужна включённая функция и семейный тариф
+  // (или уже заведённые профили).
+  const familyNav = useFamilyNav();
+  const shown = (to: string, feature?: FeatureKey) =>
+    (!feature || can(feature)) && (to !== "/family" || familyNav);
   const t = useT();
   const navigate = useNavigate();
   const location = useLocation();
@@ -100,7 +109,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
         {/* Та же причина, что и в админке: на низком окне у меню появлялась
             толстая системная полоса прокрутки. */}
         <nav className="scrollbar-thin flex flex-1 flex-col gap-0.5 overflow-y-auto min-h-0">
-          {navItems.filter(({ feature }) => !feature || can(feature)).map(({ to, icon: Icon, labelKey }) => (
+          {navItems.filter(({ to, feature }) => shown(to, feature)).map(({ to, icon: Icon, labelKey }) => (
             <NavLink
               key={to}
               to={to}
@@ -190,6 +199,16 @@ export function AppLayout({ children }: { children: ReactNode }) {
           <BrandWordmark className="min-w-0 text-sm" />
         </NavLink>
         <div className="flex shrink-0 items-center gap-1 pl-1">
+          {/* «Семья» на телефоне: таб-бар внизу занят, а другого входа здесь нет. */}
+          {familyNav && (
+            <NavLink
+              to="/family"
+              aria-label={t("nav.family")}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-fg-muted transition-colors hover:bg-bg-subtle active:opacity-70"
+            >
+              <UsersRound className="h-5 w-5" strokeWidth={1.75} />
+            </NavLink>
+          )}
           {/* Вход в админку — только для админов (на мобиле другого входа нет) */}
           {isAdmin && can("admin") && (
             <NavLink
@@ -226,7 +245,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
       {/* Mobile bottom nav — без «Устройства» и «Рефералка» (доступны с Главной/Подписки) */}
       <nav className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-around border-t border-[var(--border)] bg-bg px-2 pb-2 pt-2 shadow-[0_-4px_16px_-8px_rgba(0,0,0,0.3)] md:hidden">
         {navItems
-          .filter(({ to, feature }) => to !== "/devices" && to !== "/referral" && (!feature || can(feature)))
+          .filter(
+            ({ to, feature }) =>
+              to !== "/devices" && to !== "/referral" && to !== "/family" && shown(to, feature),
+          )
           .map(({ to, icon: Icon, labelKey }) => (
           <NavLink
             key={to}

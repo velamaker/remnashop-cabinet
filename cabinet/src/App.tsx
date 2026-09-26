@@ -21,6 +21,7 @@ import BillingPage from "@/pages/BillingPage";
 import SettingsPage from "@/pages/SettingsPage";
 import ReferralPage from "@/pages/ReferralPage";
 import BalancePage from "@/pages/BalancePage";
+import FamilyPage from "@/pages/FamilyPage";
 import InfoPage from "@/pages/InfoPage";
 
 import AdminHomePage from "@/pages/admin/AdminHomePage";
@@ -164,6 +165,17 @@ export default function App() {
               element={
                 <ProtectedRoute>
                   <SettingsPage />
+                </ProtectedRoute>
+              }
+            />
+            {/* «Семья» — профили для близких к семейному тарифу. Пункт меню виден
+                только тем, кому раздел нужен (useFamilyNav); прямой заход без права
+                покажет, что профилей нет и почему. */}
+            <Route
+              path="/family"
+              element={
+                <ProtectedRoute>
+                  <FamilyPage />
                 </ProtectedRoute>
               }
             />
