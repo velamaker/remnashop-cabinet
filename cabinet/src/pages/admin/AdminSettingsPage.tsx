@@ -1408,6 +1408,15 @@ export function WinbackCard() {
     try {
       const updated = await winbackAdminApi.update({
         enabled: cfg.enabled,
+        // Старый бот этих полей не знает и молча их выбросит — поэтому шлём, только
+        // когда бот сам их прислал (поле mode есть в ответе).
+        ...(cfg.mode
+          ? {
+              mode: cfg.mode,
+              term_days: Math.min(365, Math.max(31, Number(cfg.term_days) || 90)),
+              pay_days: Math.min(364, Math.max(30, Number(cfg.pay_days) || 60)),
+            }
+          : {}),
         percent: Math.min(100, Math.max(1, Number(cfg.percent) || 1)),
         days_after: Math.min(90, Math.max(1, Number(cfg.days_after) || 1)),
         lifetime_hours: Math.min(1440, Math.max(1, Number(cfg.lifetime_hours) || 1)),
@@ -1431,9 +1440,46 @@ export function WinbackCard() {
   return (
     <Section title={t("adm.settings.wb_title")} desc={t("adm.settings.wb_desc")}>
       <Toggle label={t("adm.settings.wb_enable")} sub={t("adm.settings.off_by_default")} checked={cfg.enabled} onChange={(v) => patch({ enabled: v })} />
+      {cfg.mode && (
+        <fieldset className="space-y-2">
+          <legend className="mb-1 text-xs text-fg-muted">{t("adm.settings.wb_mode")}</legend>
+          {(["term", "percent"] as const).map((m) => (
+            <label key={m} className="flex items-start gap-2 text-sm text-fg">
+              <input
+                type="radio"
+                name="winback-mode"
+                className="mt-1"
+                checked={cfg.mode === m}
+                onChange={() => patch({ mode: m })}
+              />
+              <span>
+                {t(m === "term" ? "adm.settings.wb_mode_term" : "adm.settings.wb_mode_percent", {
+                  term: cfg.term_days ?? 90,
+                  pay: cfg.pay_days ?? 60,
+                })}
+                {m === "term" && <span className="block text-xs text-fg-muted">{t("adm.settings.wb_mode_term_hint")}</span>}
+              </span>
+            </label>
+          ))}
+        </fieldset>
+      )}
+      {cfg.mode === "term" && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.wb_term_days")}</label>
+            <input type="number" min={31} max={365} value={String(cfg.term_days ?? 90)} onChange={(e) => patch({ term_days: Number(e.target.value) })} className={inputCls} />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.wb_pay_days")}</label>
+            <input type="number" min={30} max={364} value={String(cfg.pay_days ?? 60)} onChange={(e) => patch({ pay_days: Number(e.target.value) })} className={inputCls} />
+          </div>
+        </div>
+      )}
       <div className="grid gap-3 sm:grid-cols-3">
         <div>
-          <label className="mb-1 block text-xs text-fg-muted">{t("adm.settings.f_percent")}</label>
+          <label className="mb-1 block text-xs text-fg-muted">
+            {cfg.mode === "term" ? t("adm.settings.wb_percent_fallback") : t("adm.settings.f_percent")}
+          </label>
           <input type="number" min={1} max={100} value={String(cfg.percent)} onChange={(e) => patch({ percent: Number(e.target.value) })} className={inputCls} />
         </div>
         <div>

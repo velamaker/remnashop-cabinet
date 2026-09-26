@@ -19,6 +19,9 @@ router = APIRouter(prefix="/winback", tags=["Admin - Winback"])
 
 class WinbackUpdate(BaseModel):
     enabled: Optional[bool] = None
+    mode: Optional[str] = None
+    term_days: Optional[int] = None
+    pay_days: Optional[int] = None
     percent: Optional[int] = None
     days_after: Optional[int] = None
     lifetime_hours: Optional[int] = None
@@ -32,7 +35,7 @@ async def get_winback(_admin: AdminUser) -> dict[str, Any]:
 @router.put("")
 async def update_winback(body: WinbackUpdate, _admin: AdminUser) -> dict[str, Any]:
     current = load_config()
-    for field in ("enabled", "percent", "days_after", "lifetime_hours"):
+    for field in ("enabled", "mode", "term_days", "pay_days", "percent", "days_after", "lifetime_hours"):
         val = getattr(body, field)
         if val is not None:
             current[field] = val
