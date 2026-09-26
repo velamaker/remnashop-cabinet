@@ -47,6 +47,16 @@ ok()   { printf '%s✓%s %s\n' "$GRN" "$RST" "$*"; }
 warn() { printf '%s!%s %s\n' "$YLW" "$RST" "$*"; }
 die()  { printf '%s✗ %s%s\n' "$RED" "$*" "$RST" >&2; exit 1; }
 
+# Благодарность и адреса для поддержки проекта — последним, когда всё уже сделано
+# (см. scripts/thanks.sh). site-install.sh зовёт нас посередине своей работы и
+# ставит RS_THANKS_LATER=1: скажет спасибо сам, в самом конце, а не между сборкой
+# и настройкой HTTPS.
+show_thanks() {
+  [ "${RS_THANKS_LATER:-}" = 1 ] && return 0
+  if [ -f scripts/thanks.sh ]; then . scripts/thanks.sh && thanks_banner README.md; fi
+  return 0
+}
+
 # ── зависимости ──────────────────────────────────────────────────────────────
 command -v docker  >/dev/null 2>&1 || die "Не найден docker: https://docs.docker.com/engine/install/"
 command -v openssl >/dev/null 2>&1 || die "Не найден openssl."
@@ -893,6 +903,7 @@ if [ "$MODE" = "site" ]; then
     say "    ${DIM}у него лимит 30 регистраций в сутки и 10 попыток входа в минуту НА АДРЕС,${RST}"
     say "    ${DIM}то есть один человек упирает в них весь кабинет.${RST}"
   fi
+  show_thanks
   exit 0
 fi
 
@@ -1131,3 +1142,5 @@ else
   say "  ${YLW}Дальше:${RST} убедитесь, что API бота доступен по https снаружи (домен → :5000),"
   say "          затем на ОТДЕЛЬНОМ сервере запустите site-install.sh."
 fi
+
+show_thanks

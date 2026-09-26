@@ -41,6 +41,8 @@ export HARNESS_CALLS="$CALLS" HARNESS_TMP="$TMP" HARNESS_CAPS_PY="$CAPS_PY"
 cat > "$BIN/docker" <<'EOF'
 #!/usr/bin/env bash
 printf 'docker %s\n' "$*" >> "$HARNESS_CALLS"
+# Метка в ВЫВОДЕ: по ней сценарии T проверяют, что благодарность стоит до логов.
+case "$*" in *" logs -f "*) echo "@@LOGS@@" ;; esac
 case "$1 ${2:-}" in
   "compose version") exit 0 ;;
   "ps --format") [ "${FAKE_DB:-1}" = 1 ] && echo remnashop-db; exit 0 ;;
@@ -475,6 +477,68 @@ run_notty "$D"
 rc_is 0
 out_has "Поставить вручную"
 [ ! -f "$HARNESS_TMP/crontab.txt" ] || fail "без терминала записали cron"
+
+# ── T: спасибо и адреса для поддержки проекта ─────────────────────────────────
+# Баннер берёт адреса из README.md установки (scripts/thanks.sh). Главное: он стоит
+# ДО `logs -f` — после него человек его не увидел бы никогда (logs -f не кончается,
+# а Ctrl+C прерывает скрипт). Подделка docker печатает @@LOGS@@ на logs -f — по
+# порядку строк в выводе и сверяем.
+add_thanks() {
+  mkdir -p "$1/scripts"
+  cp "$ROOT/scripts/thanks.sh" "$1/scripts/thanks.sh"
+  cp "${2:-$ROOT/README.md}" "$1/README.md"
+}
+thanks_before_logs() {
+  local t l
+  t="$(grep -nF "Спасибо, что выбрали velamaker" "$OUT" | head -1 | cut -d: -f1)"
+  l="$(grep -nF "@@LOGS@@" "$OUT" | head -1 | cut -d: -f1)"
+  [ -n "$t" ] || { fail "нет благодарности"; return; }
+  [ -n "$l" ] || { fail "логи не запускались"; return; }
+  [ "$t" -lt "$l" ] || fail "благодарность после логов (строка $t, логи с $l)"
+}
+# Адреса — только из раздела донатов README и НЕ через разбор thanks.sh: сверяем
+# его вывод с независимым чтением, иначе тест проверял бы сам себя.
+README_ADDRS="$(sed -n '/^## .*Поддержать проект/,/^## /p' "$ROOT/README.md" | grep -E '^\|' \
+  | grep -oE '`[A-Za-z0-9_-]{16,128}`' | tr -d '`')"
+[ "$(printf '%s\n' "$README_ADDRS" | grep -c .)" -ge 1 ] || { echo "В README нет адресов" >&2; exit 2; }
+
+case_ "T: полное обновление в терминале — спасибо со всеми адресами README, до логов"
+D="$(make_inst t1 bot git)"; add_thanks "$D"
+run_tty "$D" '' --with-bot
+rc_is 0; golden_full; thanks_before_logs
+while IFS= read -r a; do out_has "$a"; done <<<"$README_ADDRS"
+out_has "поддержите его (USDT)"; out_has "github.com/velamaker/remnashop-cabinet"
+
+case_ "T': только кабинет — тоже спасибо и тоже до логов"
+D="$(make_inst t2 bot git)"; add_thanks "$D"
+run_tty "$D" '' --cabinet-only
+rc_is 0; cabinet_only_calls cabinet; thanks_before_logs
+
+case_ "T'': без терминала (cron) — без спасибо"
+D="$(make_inst t3 bot git)"; add_thanks "$D"
+run_notty "$D"
+rc_is 0; golden_full; out_lacks "Спасибо, что выбрали"
+
+case_ "T''': README без раздела донатов — вместо адресов ссылка, обновление не падает"
+D="$(make_inst t4 bot git)"
+printf '# RemnaShop\n\n## Установка\n\n| **TON** | `UQDg8ZMFH_ei_Dr42Qrrh20mYruaU6wOvfjl34ArjWwN9lpr` |\n' > "$TMP/readme-nodonate.md"
+add_thanks "$D" "$TMP/readme-nodonate.md"
+run_tty "$D" '' --with-bot
+rc_is 0; golden_full; thanks_before_logs
+out_has "поддержать его можно здесь"; out_lacks "UQDg8ZMFH"
+
+case_ "T4: чужой текст в таблице README не уходит в терминал как есть"
+D="$(make_inst t5 bot git)"
+printf '## ❤️ Поддержать проект (USDT)\n\n| **TON** | `UQDg8ZMFH_ei_Dr42Qrrh20mYruaU6wOvfjl34ArjWwN9lpr` |\n| **Evil\033]0;x\007** | `AAAAAAAAAAAAAAAAAAAA` |\n| **SOL** | `$(rm -rf /)AAAAAAAAAAAAAAAA` |\n' > "$TMP/readme-evil.md"
+add_thanks "$D" "$TMP/readme-evil.md"
+run_tty "$D" '' --with-bot
+rc_is 0; out_has "UQDg8ZMFH_ei_Dr42Qrrh20mYruaU6wOvfjl34ArjWwN9lpr"
+out_lacks "Evil"; out_lacks "rm -rf"
+
+case_ "T5: модуля благодарности нет (старый архив) — обновление как обычно"
+D="$(make_inst t6 bot git)"
+run_tty "$D" '' --with-bot
+rc_is 0; golden_full; out_lacks "Спасибо, что выбрали"
 
 echo
 if [ "$FAILS" = 0 ]; then

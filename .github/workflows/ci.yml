@@ -109,7 +109,7 @@ jobs:
       # -S error — только настоящие ошибки (синтаксис, неверные конструкции): стиль
       # скрипта, который владелец запускает на проде, CI не блокирует.
       - name: shellcheck
-        run: shellcheck -S error update.sh scripts/tests/update-sh.sh
+        run: shellcheck -S error update.sh install.sh site-install.sh scripts/thanks.sh scripts/tests/update-sh.sh
 
       # Сценарии «обновить и бота / только кабинет», флаги, сервер кабинета, режим api,
       # перезапуск тарбол-ветки. docker, git и curl подменены — ничего не собирается.

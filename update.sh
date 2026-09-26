@@ -611,14 +611,29 @@ cabinet_only_summary() {
   echo "  но без бэкапа базы. Обновляйте его через ./update.sh."
 }
 
-# ── 5. Логи ───────────────────────────────────────────────────────────────────
+# ── 5. Спасибо и логи ─────────────────────────────────────────────────────────
+# Благодарность — ДО логов, а не после: `logs -f` сам не кончается, а Ctrl+C
+# прерывает и сам скрипт, так что всё, что стоит ниже него, не увидел бы никто.
+# Модуль берём из только что обновлённого кода; его может не быть (архив старой
+# версии, ручная сборка) — тогда просто без благодарности.
+show_thanks() {
+  if [ -f scripts/thanks.sh ]; then . scripts/thanks.sh && thanks_banner README.md; fi
+  return 0
+}
+
 if [ "$SCOPE" = cabinet ]; then
   cabinet_only_summary
   echo
-  ok "${BOLD}Обновление применено.${RST} Логи кабинета (${DIM}Ctrl+C — выход${RST}):"
+  ok "${BOLD}Обновление применено.${RST}"
+  show_thanks
+  echo
+  info "Логи кабинета (${DIM}Ctrl+C — выход${RST}):"
   $DC "${COMPOSE[@]}" logs -f --tail=30 "${SERVICES[@]}"
 else
   echo
-  ok "${BOLD}Обновление применено.${RST} Логи (${DIM}Ctrl+C — выход${RST}):"
+  ok "${BOLD}Обновление применено.${RST}"
+  show_thanks
+  echo
+  info "Логи (${DIM}Ctrl+C — выход${RST}):"
   $DC "${COMPOSE[@]}" logs -f --tail=30
 fi
