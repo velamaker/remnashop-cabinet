@@ -116,11 +116,19 @@ jobs:
       # индекс payment_id — на пустой базе семь его тестов падают, а не пропускаются.
       # Заодно это проверка, что цепочка миграций проходит на чистом Postgres, то есть
       # что свежая установка вообще поднимется.
-      - name: Схема базы (миграции бота)
+      #
+      # Две цепочки, как на старте контейнера: сначала база (alembic_version), затем
+      # overlay (своя таблица alembic_version_overlay; тот же вызов делает
+      # overlay_app._run_overlay_migrations). Без второй команды новая overlay-таблица
+      # с ошибкой в миграции проходила бы CI и роняла старт бота у владельца.
+      - name: Схема базы (миграции бота и overlay)
         run: |
           docker run --rm --env-file ci.env --network "${{ job.services.postgres.network }}" \
             -e DATABASE_HOST=postgres remnashop-ci \
             alembic -c src/infrastructure/database/alembic.ini upgrade head
+          docker run --rm --env-file ci.env --network "${{ job.services.postgres.network }}" \
+            -e DATABASE_HOST=postgres remnashop-ci \
+            alembic -c src/infrastructure/database/migrations_overlay/alembic_overlay.ini upgrade head
 
       # Одна строка DSN годится обоим видам тестов: admin_src/tests/_pg_dsn.py сам
       # приводит её к виду для asyncpg или для SQLAlchemy.
