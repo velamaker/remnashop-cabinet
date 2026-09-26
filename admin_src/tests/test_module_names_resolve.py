@@ -85,6 +85,28 @@ def _globals_of(code: types.CodeType) -> set[str]:
     return names
 
 
+def _unwrap(value: object) -> object:
+    """Добраться до ТЕЛА функции сквозь обёртки.
+
+    Крон — это `@broker.task` → `@inject` → `@cron_guard` → тело. Задача taskiq — не
+    функция вовсе (тело у неё в `original_func`), обёртка dishka хранит исходную в
+    `__dishka_orig_func__` (а `__wrapped__` не ставит), cron_guard — в `__wrapped__`.
+    Без разворота сторож смотрел на код обёрток (с чужими глобалями) и тела кронов и
+    ручек под dishka не проверял вовсе.
+    """
+    try:
+        target = getattr(value, "original_func", None) or value
+        target = getattr(target, "__dishka_orig_func__", None) or target
+        for _ in range(20):  # цепочка обёрток конечна; мок отдал бы её бесконечной
+            inner = getattr(target, "__wrapped__", None)
+            if inner is None or inner is target:
+                break
+            target = inner
+    except Exception:  # noqa: BLE001 — ленивые атрибуты модулей бывают капризны
+        return value
+    return target
+
+
 def _functions(obj: object, seen: set[int]) -> list:
     """Функции модуля: верхнего уровня и методы классов, без повторов."""
     out = []
@@ -95,23 +117,21 @@ def _functions(obj: object, seen: set[int]) -> list:
             value = getattr(obj, name)
         except Exception:  # noqa: BLE001 — свойства модулей бывают ленивыми
             continue
-        target = getattr(value, "__wrapped__", value)
+        target = _unwrap(value)
         if isinstance(target, types.FunctionType):
             if id(target) not in seen:
                 seen.add(id(target))
                 out.append(target)
         elif isinstance(target, type):
             for attr in vars(target).values():
-                attr = getattr(attr, "__wrapped__", attr)
+                attr = _unwrap(attr)
                 if isinstance(attr, types.FunctionType) and id(attr) not in seen:
                     seen.add(id(attr))
                     out.append(attr)
     return out
 
 
-@pytest.mark.parametrize("module_name", MODULES)
-def test_все_имена_модуля_находятся(module_name: str):
-    module = importlib.import_module(module_name)
+def _broken_names(module: object) -> dict[str, list[str]]:
     seen: set[int] = set()
     broken: dict[str, list[str]] = {}
     for func in _functions(module, seen):
@@ -124,4 +144,57 @@ def test_все_имена_модуля_находятся(module_name: str):
         )
         if missing:
             broken[f"{func.__module__}.{func.__qualname__}"] = missing
+    return broken
+
+
+@pytest.mark.parametrize("module_name", MODULES)
+def test_все_имена_модуля_находятся(module_name: str):
+    module = importlib.import_module(module_name)
+    broken = _broken_names(module)
     assert not broken, f"имена не находятся: {broken}"
+
+
+# Крон в полной обвязке, как в tasks/*.py, с именем, которого в модуле нет.
+_SELFTEST_SRC = '''
+from dishka.integrations.taskiq import FromDishka, inject
+from src.infrastructure.services.overlay_cron_guard import cron_guard
+
+
+@broker.task(schedule=[{"cron": "*/5 * * * *"}], retry_on_error=False)
+@inject(patch_module=True)
+@cron_guard("names_selftest", "Самопроверка сторожа имён")
+async def run_selftest() -> None:
+    return pricing_lost_in_refactor  # имени в модуле нет — так и уехал NameError 1.5.0
+
+
+class Handlers:
+    @staticmethod
+    @cron_guard("names_selftest_method", "Самопроверка: метод")
+    async def method() -> None:
+        return matched_lost_in_refactor
+'''
+
+
+def test_сторож_видит_тело_крона_под_обёртками(monkeypatch):
+    """Мутационная самопроверка: сторож, который не разворачивает обёртки, прошёл бы
+    мимо тела крона — а ради кронов и денежных путей он и заведён."""
+    import sys
+
+    from taskiq import InMemoryBroker
+
+    module = types.ModuleType("rs_names_selftest")
+    # taskiq ищет модуль задачи в sys.modules — кладём на время теста.
+    monkeypatch.setitem(sys.modules, "rs_names_selftest", module)
+    # Свой брокер: в настоящий самопроверочная задача попасть не должна.
+    module.broker = InMemoryBroker()  # type: ignore[attr-defined]
+    exec(compile(_SELFTEST_SRC, "rs_names_selftest", "exec"), module.__dict__)  # noqa: S102
+    assert type(module.run_selftest).__name__ == "AsyncTaskiqDecoratedTask", "обвязка не та, что у кронов"
+
+    broken = _broken_names(module)
+    assert broken.get("rs_names_selftest.run_selftest") == ["pricing_lost_in_refactor"], broken
+    assert broken.get("rs_names_selftest.Handlers.method") == ["matched_lost_in_refactor"], broken
+
+    # И на настоящем кроне: проверяется его тело, а не обёртка dishka или сторожа.
+    real = importlib.import_module("src.infrastructure.taskiq.tasks.device_full")
+    bodies = {f.__qualname__: f.__code__.co_filename for f in _functions(real, set())}
+    assert bodies.get("run_device_full", "").endswith("tasks/device_full.py"), bodies.get("run_device_full")
