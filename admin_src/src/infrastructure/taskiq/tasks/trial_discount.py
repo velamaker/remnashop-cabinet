@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.config import AppConfig
 from src.infrastructure.services.overlay_push import notify_user_push
 from src.infrastructure.services.overlay_trial_discount import load_config
+from src.infrastructure.services.overlay_cron_guard import cron_guard
 from src.infrastructure.taskiq.broker import broker
 
 _MSG = {
@@ -76,6 +77,7 @@ async def _expire_pass(session: AsyncSession) -> int:
 
 @broker.task(schedule=[{"cron": "7 * * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("trial_discount", "Скидка триальщикам")
 async def run_trial_discount(
     session: FromDishka[AsyncSession],
     config: FromDishka[AppConfig],

@@ -35,6 +35,7 @@ from src.application.common import Notifier
 from src.application.dto import MessagePayloadDto
 from src.core.enums import Role
 from src.infrastructure.services.overlay_morning_summary import load_config
+from src.infrastructure.services.overlay_cron_guard import cron_failed, cron_guard, cron_skipped
 from src.infrastructure.taskiq.broker import broker
 
 ASSETS_DIR = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets"))
@@ -195,19 +196,25 @@ def _summary_keyboard() -> Optional[InlineKeyboardMarkup]:
 
 @broker.task(schedule=[{"cron": "0 * * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("morning_summary", "Утренняя сводка владельцу")
 async def send_morning_summary(
     session: FromDishka[AsyncSession],
     notifier: FromDishka[Notifier],
 ) -> None:
     cfg = load_config()
+    # Крон почасовой, сводка — раз в сутки: прочие прогоны не говорят ни о поломке,
+    # ни о починке (иначе упавшая сводка «чинилась» бы через час сама).
     if not cfg["enabled"]:
+        cron_skipped()
         return
     if datetime.now().hour != cfg["hour"]:
+        cron_skipped()
         return
 
     today = date.today().isoformat()
     state = _load_state()
     if state.get("last_sent") == today:
+        cron_skipped()
         return  # уже слали сегодня
 
     days = cfg["expiring_days"]
@@ -343,6 +350,7 @@ async def send_morning_summary(
         )
     except Exception as e:  # noqa: BLE001
         logger.warning(f"morning_summary: не смог отправить сводку: {e}")
+        cron_failed(e)
         return
 
     state["last_sent"] = today

@@ -18,6 +18,7 @@ from src.application.common import Remnawave
 from src.infrastructure.services.overlay_extra_device import shift_on_unfreeze
 from src.infrastructure.services.overlay_freeze import load_config
 from src.infrastructure.services.overlay_push import notify_user_push
+from src.infrastructure.services.overlay_cron_guard import cron_failed, cron_guard
 from src.infrastructure.taskiq.broker import broker
 
 _MSG = {
@@ -28,6 +29,7 @@ _MSG = {
 
 @broker.task(schedule=[{"cron": "52 * * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("freeze", "Авто-возобновление замороженных подписок")
 async def run_freeze_autoresume(
     session: FromDishka[AsyncSession],
     remnawave: FromDishka[Remnawave],
@@ -35,6 +37,7 @@ async def run_freeze_autoresume(
     max_days = load_config()["max_days"]
     sdk = getattr(remnawave, "sdk", None)
     if sdk is None:
+        cron_failed("нет клиента панели — паузы не возобновлены")
         return
 
     rows = (

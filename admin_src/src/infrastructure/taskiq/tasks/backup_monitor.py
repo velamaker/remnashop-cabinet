@@ -26,6 +26,7 @@ from loguru import logger
 from src.application.common import Notifier
 from src.application.dto import MessagePayloadDto
 from src.core.enums import Role
+from src.infrastructure.services.overlay_cron_guard import cron_guard, cron_skipped
 from src.infrastructure.taskiq.broker import broker
 
 ASSETS_DIR = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets"))
@@ -138,8 +139,10 @@ def _check() -> tuple[bool, str]:
 
 @broker.task(schedule=[{"cron": "0 */6 * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("backup_monitor", "Проверка бэкапов БД")
 async def check_backups(notifier: FromDishka[Notifier]) -> None:
     if not _enabled():
+        cron_skipped()
         return
 
     bad, reason = _check()

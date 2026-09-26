@@ -44,6 +44,7 @@ from src.application.use_cases.plan.queries.match import MatchPlan
 from src.application.use_cases.user.queries.plans import GetAvailablePlans
 from src.infrastructure.services.overlay_balance import renewal_quote
 from src.infrastructure.services.overlay_push import notify_user_push
+from src.infrastructure.services.overlay_cron_guard import cron_guard, cron_skipped
 from src.infrastructure.taskiq.broker import broker
 
 #: Сколько человек разбираем за проход. Крон почасовой, хвост уедет следующим.
@@ -147,6 +148,7 @@ async def _tell(notifier: Notifier, user: Any, content: str) -> None:
 
 @broker.task(schedule=[{"cron": "23 * * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("autopay_warning", "Предупреждение «не хватит на автопродление»")
 async def run_autopay_warning(
     session: FromDishka[AsyncSession],
     user_dao: FromDishka[UserDao],
@@ -158,6 +160,7 @@ async def run_autopay_warning(
     match_plan: FromDishka[MatchPlan],
 ) -> None:
     if not _enabled():
+        cron_skipped()
         return
 
     days = _days_before()

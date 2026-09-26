@@ -58,6 +58,7 @@ from src.infrastructure.services.overlay_renewal_discount import (
     load_candidates,
     load_config,
 )
+from src.infrastructure.services.overlay_cron_guard import cron_failed, cron_guard
 from src.infrastructure.taskiq.broker import broker
 
 # Не больше 50 выдач за прогон: крон почасовой, и хвост уйдёт следующим часом, а
@@ -293,6 +294,7 @@ async def run_once(
 
 @broker.task(schedule=[{"cron": "47 * * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("renewal_discount", "Скидка на продление")
 async def run_renewal_discount(
     session: FromDishka[AsyncSession],
     notifier: FromDishka[Notifier],
@@ -324,6 +326,7 @@ async def run_renewal_discount(
         except Exception:  # noqa: BLE001
             pass
         logger.warning(f"renewal_discount: прогон не удался: {exc}")
+        cron_failed(exc)
         return
 
     if report["granted"] or report["used"] or report["expired"] or report["resent"] or report["errors"]:

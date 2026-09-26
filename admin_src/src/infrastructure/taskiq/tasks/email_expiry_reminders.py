@@ -24,6 +24,7 @@ from src.infrastructure.services.overlay_renewal_discount import (
     active_grant_offers_by_user,
     email_discount_line,
 )
+from src.infrastructure.services.overlay_cron_guard import cron_guard, cron_skipped
 from src.infrastructure.taskiq.broker import broker
 
 # Точки напоминания: (часы до окончания, человеческая формулировка «когда»).
@@ -76,6 +77,7 @@ def _body(
 
 @broker.task(schedule=[{"cron": "0 * * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("email_expiry_reminders", "Письма «подписка заканчивается»")
 async def send_email_expiry_reminders(
     session: FromDishka[AsyncSession],
     email_sender: FromDishka[EmailSender],
@@ -84,6 +86,7 @@ async def send_email_expiry_reminders(
     # админке, и у такой установки напоминания молчали бы при работающей почте.
     if not email_sender.is_enabled:
         logger.debug("Email не настроен — пропускаю напоминания об окончании")
+        cron_skipped()
         return
     await send_reminders(session, email_sender, datetime.now(timezone.utc))
 

@@ -37,6 +37,7 @@ from src.application.common.dao import UserDao
 from src.application.dto import MessagePayloadDto
 from src.infrastructure.services import overlay_extra_traffic as extra
 from src.infrastructure.services.overlay_push import notify_user_push
+from src.infrastructure.services.overlay_cron_guard import cron_failed, cron_guard, cron_skipped
 from src.infrastructure.taskiq.broker import broker
 
 # Сколько заказов и людей берём за проход. Хвост уедет следующим проходом — лучше,
@@ -372,6 +373,7 @@ async def _report_reconcile(
 # один подождёт другого. Остальные 3 запуска в час расходятся с ним намеренно.
 @broker.task(schedule=[{"cron": "*/17 * * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("extra_traffic", "Докупленный трафик: заказы и сроки")
 async def run_extra_traffic_tick(
     session: FromDishka[AsyncSession],
     remnawave: FromDishka[Remnawave],
@@ -382,6 +384,7 @@ async def run_extra_traffic_tick(
     sdk = getattr(remnawave, "sdk", None)
     if sdk is None:
         logger.warning("extra_traffic: панель недоступна — проход пропущен")
+        cron_failed("панель недоступна — проход пропущен")
         return
     now = extra.now_utc()
 
@@ -407,6 +410,7 @@ async def run_extra_traffic_tick(
     except TablesMissing:
         # Воркер пересоздали раньше, чем контейнер бота накатил 0012. Это штатное
         # окно выкатки, а не поломка: молчим до следующего прохода.
+        cron_skipped()
         return
     if settled or touched:
         logger.info(f"extra_traffic: заказов доведено {settled}, людей сведено {touched}")

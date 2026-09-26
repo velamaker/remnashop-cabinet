@@ -52,6 +52,8 @@ MODULES = [
     "overlay_patches.yookassa_api_status",
     # Приём оплаты звёздами: проверка «платёжный ли апдейт» — функция уровня модуля.
     "overlay_patches.stars_payment",
+    # Тревога о падении кронов: сорвись она на NameError — молчали бы все кроны сразу.
+    "src.infrastructure.services.overlay_cron_guard",
 ]
 
 

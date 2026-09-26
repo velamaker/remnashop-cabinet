@@ -20,6 +20,7 @@ from pathlib import Path
 from loguru import logger
 
 from src.infrastructure.services.overlay_app_links import ASSETS_DIR, fetch_and_store
+from src.infrastructure.services.overlay_cron_guard import cron_failed, cron_guard
 from src.infrastructure.taskiq.broker import broker
 
 _ALERT_STATE_PATH: Path = ASSETS_DIR / "app_links_alert_state.json"
@@ -92,6 +93,7 @@ async def _alert_owner(new_degraded: list[str], new_missing: list[str], recovere
 
 
 @broker.task(schedule=[{"cron": "0 6 * * *"}], retry_on_error=False)
+@cron_guard("app_links", "Обновление ссылок установки приложений")
 async def run_refresh_app_links() -> None:
     # Ленивый импорт — не тянем web-слой на старте воркера.
     from src.web.endpoints.public.apps import load_apps_config
@@ -101,6 +103,7 @@ async def run_refresh_app_links() -> None:
     result = await fetch_and_store(url)
     if not result.get("ok"):
         logger.warning(f"app_links: не удалось обновить: {result.get('error')}")
+        cron_failed(result.get("error") or "ссылки не обновились")
         return
 
     degraded = list(result.get("degraded") or [])

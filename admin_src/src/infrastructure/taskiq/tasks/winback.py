@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.config import AppConfig
 from src.infrastructure.services.overlay_push import notify_user_push
 from src.infrastructure.services.overlay_winback import load_config
+from src.infrastructure.services.overlay_cron_guard import cron_guard
 from src.infrastructure.taskiq.broker import broker
 
 # Окно поимки: юзеров, истёкших от days_after до days_after+CATCH дней назад.
@@ -71,6 +72,7 @@ async def _expire_pass(session: AsyncSession) -> int:
 
 @broker.task(schedule=[{"cron": "37 * * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("winback", "Скидка «возвращайтесь»")
 async def run_winback(
     session: FromDishka[AsyncSession],
     config: FromDishka[AppConfig],

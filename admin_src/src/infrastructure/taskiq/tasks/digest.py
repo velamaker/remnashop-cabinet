@@ -41,6 +41,7 @@ from src.infrastructure.services.overlay_digest_email import (
     sender_settings,
 )
 from src.infrastructure.services.overlay_push import _fill, notify_user_push
+from src.infrastructure.services.overlay_cron_guard import cron_failed, cron_guard, cron_skipped
 from src.infrastructure.taskiq.broker import broker
 
 ASSETS_DIR = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets"))
@@ -66,6 +67,7 @@ def _save_month(month: str) -> None:
 
 @broker.task(schedule=[{"cron": "0 * * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("digest", "Месячная сводка")
 async def run_digest(
     session: FromDishka[AsyncSession],
     remnawave: FromDishka[Remnawave],
@@ -73,18 +75,24 @@ async def run_digest(
     email_sender: FromDishka[EmailSender],
 ) -> None:
     cfg = load_config()
+    # Крон почасовой, а работа — раз в месяц: остальные 719 прогонов не говорят ни о
+    # поломке, ни о починке (иначе упавшая сводка «чинилась» бы через час сама).
     if not cfg["enabled"]:
+        cron_skipped()
         return
 
     now = datetime.now(timezone.utc)
     if now.day != cfg["day_of_month"] or now.hour != cfg["hour"]:
+        cron_skipped()
         return
     month_key = now.strftime("%Y-%m")
     if _sent_month() == month_key:
+        cron_skipped()
         return  # уже слали в этом месяце
 
     sdk = getattr(remnawave, "sdk", None)
     if sdk is None:
+        cron_failed("нет клиента панели — сводка не собрана")
         return
 
     # Активные USER с подпиской и хотя бы одним каналом (Telegram или push).
@@ -181,3 +189,4 @@ async def run_digest(
             # Журнал недоступен — проход прерван до следующей записи. Кому письмо
             # успело уйти, у того строка уже `sent`/`sending`: повтора не будет.
             logger.error(f"digest: проход писем прерван: {type(e).__name__}: {e}")
+            cron_failed(e)

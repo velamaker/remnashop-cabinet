@@ -22,6 +22,7 @@ from src.application.use_cases.remnawave.commands.synchronization import (
     SyncAllUsersFromPanel,
 )
 from src.infrastructure.redis.keys import SyncPanelRunningKey
+from src.infrastructure.services.overlay_cron_guard import cron_failed, cron_guard, cron_skipped
 from src.infrastructure.taskiq.broker import broker
 
 
@@ -33,15 +34,18 @@ def _enabled() -> bool:
 
 @broker.task(schedule=[{"cron": "*/30 * * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("sync_panel_users", "Синхронизация пользователей из панели")
 async def auto_sync_panel_users(
     sync_all_users: FromDishka[SyncAllUsersFromPanel],
     redis: FromDishka[Redis],
     retort: FromDishka[Retort],
 ) -> None:
     if not _enabled():
+        cron_skipped()
         return
     key = retort.dump(SyncPanelRunningKey())
     if await redis.get(key):
+        cron_skipped()
         return  # уже идёт (ручной импорт или прошлый прогон) — не дублируем
     await redis.set(key, value=1, ex=600)
     try:
@@ -51,5 +55,6 @@ async def auto_sync_panel_users(
             logger.info(f"auto-sync panel: добавлено {added} юзеров из панели ({res})")
     except Exception as e:  # noqa: BLE001 — авто-синхрон не должен ронять воркер
         logger.warning(f"auto-sync panel: ошибка: {e}")
+        cron_failed(e)
     finally:
         await redis.delete(key)

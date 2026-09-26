@@ -69,6 +69,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.application.common import Remnawave
 from src.infrastructure.services.overlay_push import _fill, notify_user_push
 from src.infrastructure.services.overlay_reserve import ASSETS_DIR, load_config
+from src.infrastructure.services.overlay_cron_guard import cron_failed, cron_guard
 from src.infrastructure.taskiq.broker import broker
 
 _GB = 1024 ** 3
@@ -393,6 +394,7 @@ async def _repair_active(session: AsyncSession, sdk: object, gb: int, squad: str
 
 @broker.task(schedule=[{"cron": "27 * * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("reserve", "Резервный доступ истёкшим")
 async def run_reserve(
     session: FromDishka[AsyncSession],
     remnawave: FromDishka[Remnawave],
@@ -417,6 +419,7 @@ async def run_reserve(
     sdk = getattr(remnawave, "sdk", None)
     if sdk is None:
         logger.warning("reserve: Remnawave SDK недоступен — пропуск")
+        cron_failed("нет клиента панели — резервы не выданы и не проверены")
         return
 
     fixed = await _repair_active(session, sdk, gb, squad)

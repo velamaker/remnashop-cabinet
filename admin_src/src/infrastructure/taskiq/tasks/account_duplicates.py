@@ -29,6 +29,7 @@ from src.application.dto import MessagePayloadDto
 from src.core.config import AppConfig
 from src.core.enums import Role
 from src.infrastructure.services.overlay_duplicates import describe, find_broken_pairs
+from src.infrastructure.services.overlay_cron_guard import cron_failed, cron_guard, cron_skipped
 from src.infrastructure.taskiq.broker import broker
 
 ASSETS_DIR = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets"))
@@ -110,18 +111,21 @@ async def _panel_users(config: AppConfig) -> list[dict[str, Any]]:
 # регистрирует задачу под своим именем (dishka.integrations.base:...), и в
 # логах планировщика она неотличима от любой другой.
 @inject(patch_module=True)
+@cron_guard("account_duplicates", "Поиск двойников аккаунтов")
 async def check_account_duplicates(
     session: FromDishka[AsyncSession],
     config: FromDishka[AppConfig],
     notifier: FromDishka[Notifier],
 ) -> None:
     if not _enabled():
+        cron_skipped()
         return
 
     try:
         panel_users = await _panel_users(config)
-    except Exception as exc:  # noqa: BLE001 — панель недоступна: не наша беда
+    except Exception as exc:  # noqa: BLE001 — панель недоступна: прогон не состоялся
         logger.warning(f"duplicates: не смог получить пользователей панели: {exc}")
+        cron_failed(exc)
         return
     if not panel_users:
         return
@@ -130,6 +134,7 @@ async def check_account_duplicates(
         pairs = await find_broken_pairs(session, panel_users)
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"duplicates: разбор не удался: {exc}")
+        cron_failed(exc)
         return
 
     state = _load()

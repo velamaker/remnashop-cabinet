@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from remnapy import RemnawaveSDK
 
 from src.core.config import AppConfig
+from src.infrastructure.services.overlay_cron_guard import cron_failed, cron_guard
 from src.infrastructure.taskiq.broker import broker
 
 _PAGE = 1000  # устройств немного (сотни) — одной страницы обычно хватает.
@@ -133,6 +134,7 @@ async def _fetch_tid_to_uuid(
 
 @broker.task(schedule=[{"cron": "17 */6 * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("abuse_hwid", "Снимок устройств для поиска абьюза")
 async def snapshot_hwid_devices(
     session: FromDishka[AsyncSession],
     config: FromDishka[AppConfig],
@@ -142,6 +144,7 @@ async def snapshot_hwid_devices(
         devices = await _fetch_all_devices(config)
     except Exception as e:
         logger.warning(f"abuse_hwid: не удалось получить устройства с панели: {e}")
+        cron_failed(e)
         return
 
     if not devices:
@@ -171,6 +174,9 @@ async def snapshot_hwid_devices(
         if not tid_to_uuid:
             # Без моста все устройства новой панели «безхозные» → НЕ затираем снимок.
             logger.warning("abuse_hwid: карта t_id→uuid пуста — снимок не меняем")
+            # Ровно эта поломка на панели 3.x месяц стояла молча: прогон «удачный»,
+            # а снимок не обновляется. Для владельца это падение, а не пустой проход.
+            cron_failed("карта t_id→uuid пуста — снимок устройств не обновлён")
             return
 
     def _device_uuid(dev: dict[str, Any]) -> str:

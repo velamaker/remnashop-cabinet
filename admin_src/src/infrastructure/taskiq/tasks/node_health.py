@@ -39,6 +39,7 @@ from src.application.dto import MessagePayloadDto
 from src.core.config import AppConfig
 from src.core.enums import Role
 from src.infrastructure.services.overlay_panel_compat import empty_body_ok
+from src.infrastructure.services.overlay_cron_guard import cron_guard, cron_skipped
 from src.infrastructure.taskiq.broker import broker
 
 ASSETS_DIR = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets"))
@@ -666,12 +667,14 @@ async def _cert_days_left(host: str) -> Optional[int]:
 
 @broker.task(schedule=[{"cron": "*/5 * * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("node_health", "Мониторинг нод")
 async def check_node_health(
     config: FromDishka[AppConfig],
     notifier: FromDishka[Notifier],
     remnawave: FromDishka[Remnawave],
 ) -> None:
     if not _enabled():
+        cron_skipped()
         return
 
     state = _load_state()

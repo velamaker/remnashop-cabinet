@@ -40,6 +40,7 @@ from src.core.config import AppConfig
 from src.infrastructure.services import overlay_extra_traffic as extra
 from src.infrastructure.services.overlay_push import _fill, notify_user_push
 from src.infrastructure.services.overlay_traffic_alert import load_config
+from src.infrastructure.services.overlay_cron_guard import cron_failed, cron_guard, cron_skipped
 from src.infrastructure.taskiq.broker import broker
 
 ASSETS_DIR = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets"))
@@ -179,6 +180,7 @@ async def _catch_up_limited(
 
 @broker.task(schedule=[{"cron": "47 */3 * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("traffic_alert", "Предупреждения о трафике")
 async def run_traffic_alert(
     session: FromDishka[AsyncSession],
     config: FromDishka[AppConfig],
@@ -189,6 +191,7 @@ async def run_traffic_alert(
     now = extra.now_utc()
     if not cfg["enabled"] and not extra.effective_enabled(extra_cfg):
         # Ни предупреждений о трафике, ни докупки — ходить в панель незачем.
+        cron_skipped()
         return
     threshold = cfg["threshold_percent"]
 
@@ -196,6 +199,7 @@ async def run_traffic_alert(
         users = await _fetch_all_users(config)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"traffic_alert: не получил юзеров: {e}")
+        cron_failed(e)
         return
     if not users:
         return

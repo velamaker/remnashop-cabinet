@@ -32,6 +32,7 @@ from src.application.common.dao import UserDao
 from src.application.dto import MessagePayloadDto
 from src.infrastructure.services import overlay_extra_device as extra
 from src.infrastructure.services.overlay_push import notify_user_push
+from src.infrastructure.services.overlay_cron_guard import cron_failed, cron_guard
 from src.infrastructure.taskiq.broker import broker
 
 # Сколько заказов и людей берём за проход. Крон каждые 15 минут, хвост уедет
@@ -400,6 +401,7 @@ async def _retry_removals(
 
 @broker.task(schedule=[{"cron": "*/15 * * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("extra_devices", "Докупленные устройства: заказы и сроки")
 async def run_extra_devices_tick(
     session: FromDishka[AsyncSession],
     remnawave: FromDishka[Remnawave],
@@ -410,6 +412,7 @@ async def run_extra_devices_tick(
     sdk = getattr(remnawave, "sdk", None)
     if sdk is None:
         logger.warning("extra_device: панель недоступна — проход пропущен")
+        cron_failed("панель недоступна — проход пропущен")
         return
     now = extra.now_utc()
 

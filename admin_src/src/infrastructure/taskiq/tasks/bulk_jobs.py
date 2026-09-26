@@ -85,6 +85,7 @@ from src.infrastructure.services.overlay_bulk import (
     text_sha256,
 )
 from src.infrastructure.services.overlay_extend import compute_new_expire, push_subscription_expire
+from src.infrastructure.services.overlay_cron_guard import cron_failed, cron_guard
 from src.infrastructure.taskiq.broker import broker
 
 # Финальная сверка — только GET, без вебхуков обратно; пауза меньше, чем на записи.
@@ -1012,6 +1013,7 @@ async def run_bulk_job(
 
 @broker.task(schedule=[{"cron": "*/5 * * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("bulk_jobs_resume", "Перезапуск зависших массовых операций")
 async def resume_stalled_bulk_jobs(session: FromDishka[AsyncSession]) -> None:
     store = BulkStore(session)
     try:
@@ -1020,6 +1022,9 @@ async def resume_stalled_bulk_jobs(session: FromDishka[AsyncSession]) -> None:
     except Exception as exc:  # noqa: BLE001 — таблицы ещё нет: миграция не прошла
         await _safe_rollback(store)
         logger.debug(f"bulk: подбор зависших задач пропущен: {exc}")
+        # «Таблицы нет» сторож сам сочтёт пропуском; любая другая ошибка здесь —
+        # это зависшие операции, которые никто не подхватит, и о ней надо сказать.
+        cron_failed(exc)
         return
     for job_id in stalled:
         try:

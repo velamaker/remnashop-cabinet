@@ -47,6 +47,7 @@ from src.infrastructure.services.overlay_payment_reminder import (
     now_utc,
     window_bounds,
 )
+from src.infrastructure.services.overlay_cron_guard import cron_failed, cron_guard
 from src.infrastructure.taskiq.broker import broker
 
 # Потолок на прогон: крон частый, хвост подберёт следующий заход, а полсотни сообщений
@@ -193,6 +194,7 @@ def _row_params(c: Candidate, reason: Optional[str] = None) -> dict[str, Any]:
 
 @broker.task(schedule=[{"cron": "*/5 * * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("payment_reminder", "Напоминание о незавершённой оплате")
 async def run_payment_reminder(
     session: FromDishka[AsyncSession],
     notifier: FromDishka[Notifier],
@@ -229,6 +231,7 @@ async def run_payment_reminder(
         except Exception:  # noqa: BLE001
             pass
         logger.warning(f"payment_reminder: прогон не удался: {exc}")
+        cron_failed(exc)
         return
 
     if report.get("sent") or report.get("failed") or report.get("errors"):

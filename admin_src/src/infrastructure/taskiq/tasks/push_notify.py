@@ -24,6 +24,7 @@ from src.infrastructure.services.overlay_renewal_discount import (
     active_grants_by_user,
     push_discount_tail,
 )
+from src.infrastructure.services.overlay_cron_guard import cron_guard, cron_skipped
 from src.infrastructure.taskiq.broker import broker
 
 ASSETS_DIR = Path(os.environ.get("APP_ASSETS_DIR", "/opt/remnashop/assets"))
@@ -68,8 +69,10 @@ def _save_state(state: dict) -> None:
 
 @broker.task(schedule=[{"cron": "0 */6 * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("push_expiring", "Push «подписка заканчивается»")
 async def run_push_expiring(session: FromDishka[AsyncSession]) -> None:
     if not _enabled():
+        cron_skipped()
         return
 
     n = _days()

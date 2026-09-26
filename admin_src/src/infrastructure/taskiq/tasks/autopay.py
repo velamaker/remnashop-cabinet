@@ -29,6 +29,7 @@ from src.application.use_cases.plan.queries.match import MatchPlan
 from src.application.use_cases.user.queries.plans import GetAvailablePlans
 from src.infrastructure.services.overlay_balance import renew_current_from_balance
 from src.infrastructure.services.overlay_push import notify_user_push
+from src.infrastructure.services.overlay_cron_guard import cron_guard, cron_skipped
 from src.infrastructure.taskiq.broker import broker
 
 
@@ -45,6 +46,7 @@ def _days_before() -> int:
 
 @broker.task(schedule=[{"cron": "0 * * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("autopay", "Автопродление с баланса")
 async def run_autopay(
     session: FromDishka[AsyncSession],
     user_dao: FromDishka[UserDao],
@@ -58,6 +60,7 @@ async def run_autopay(
     process_payment: FromDishka[ProcessPayment],
 ) -> None:
     if not _autopay_enabled():
+        cron_skipped()
         return
 
     n = _days_before()

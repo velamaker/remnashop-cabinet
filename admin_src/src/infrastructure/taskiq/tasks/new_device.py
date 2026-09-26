@@ -28,6 +28,7 @@ from remnapy import RemnawaveSDK
 from src.core.config import AppConfig
 from src.infrastructure.services.overlay_new_device import load_config
 from src.infrastructure.services.overlay_push import notify_user_push
+from src.infrastructure.services.overlay_cron_guard import cron_failed, cron_guard, cron_skipped
 from src.infrastructure.taskiq.broker import broker
 # Мост t_id → uuid: с Remnawave 2.8 /hwid/devices отдаёт числовой userId вместо
 # userUuid. Переиспользуем реализацию из abuse_hwid (та же логика).
@@ -103,6 +104,7 @@ async def _fetch_devices(config: AppConfig) -> list[dict[str, Any]]:
 
 @broker.task(schedule=[{"cron": "17 */2 * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("new_device", "Уведомления о новых устройствах")
 async def run_new_device(
     session: FromDishka[AsyncSession],
     config: FromDishka[AppConfig],
@@ -110,12 +112,14 @@ async def run_new_device(
 ) -> None:
     cfg = load_config()
     if not cfg["enabled"]:
+        cron_skipped()
         return
 
     try:
         devices = await _fetch_devices(config)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"new_device: не получил устройства: {e}")
+        cron_failed(e)
         return
     if not devices:
         return
@@ -148,6 +152,7 @@ async def run_new_device(
             # Без моста устройства новой панели «безхозные» — пропускаем проход,
             # чтобы не занести пустой baseline и не пропустить реальные новые.
             logger.warning("new_device: карта t_id→uuid пуста — проход пропущен")
+            cron_failed("карта t_id→uuid пуста — новые устройства не проверены")
             return
 
     def _device_uuid(dev: dict[str, Any]) -> str:

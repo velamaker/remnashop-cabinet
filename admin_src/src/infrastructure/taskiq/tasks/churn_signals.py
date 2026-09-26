@@ -60,6 +60,7 @@ from src.infrastructure.services.overlay_churn_signals import (
     save_last_run,
     support_link,
 )
+from src.infrastructure.services.overlay_cron_guard import cron_failed, cron_guard, cron_skipped
 from src.infrastructure.taskiq.broker import broker
 
 # Потолок на проход: хвост подберёт следующий час, а полсотни сообщений подряд — это
@@ -354,6 +355,7 @@ def make_send_tg(notifier: Any, user_dao: Any, cabinet_url: str, support_url: st
 
 @broker.task(schedule=[{"cron": "17 * * * *"}], retry_on_error=False)
 @inject(patch_module=True)
+@cron_guard("churn_signals", "Сигналы до ухода")
 async def run_churn_signals(
     session: FromDishka[AsyncSession],
     notifier: FromDishka[Notifier],
@@ -363,6 +365,7 @@ async def run_churn_signals(
 ) -> None:
     cfg = load_config()
     if not any_enabled(cfg):
+        cron_skipped()
         return
     send_tg = make_send_tg(
         notifier,
@@ -386,6 +389,7 @@ async def run_churn_signals(
         except Exception:  # noqa: BLE001
             pass
         logger.warning(f"churn_signals: проход не удался: {exc}")
+        cron_failed(exc)
         return
 
     save_last_run(_report_for_file(report, now))

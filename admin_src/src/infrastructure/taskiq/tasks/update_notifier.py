@@ -17,6 +17,7 @@ import httpx
 from aiogram import Bot
 from loguru import logger
 
+from src.infrastructure.services.overlay_cron_guard import cron_guard, cron_skipped
 from src.infrastructure.taskiq.broker import broker
 
 # Репо форка. Совпадает с admin/updates.py; override через env UPDATE_REPO.
@@ -95,12 +96,15 @@ def _save_state(version: str) -> None:
 
 
 @broker.task(schedule=[{"cron": "0 9 * * *"}], retry_on_error=False)
+@cron_guard("update_notifier", "Проверка обновлений")
 async def check_update_and_notify() -> None:
     if not _enabled():
+        cron_skipped()
         return
     token = (os.environ.get("BOT_TOKEN") or "").strip()
     owner = (os.environ.get("BOT_OWNER_ID") or "").strip()
     if not token or not owner:
+        cron_skipped()
         return
 
     local = _local_version()
