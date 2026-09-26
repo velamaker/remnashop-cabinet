@@ -15,10 +15,20 @@ BACKUP_DIR="${BACKUP_DIR:-/opt/remnashop-backups}"
 PG_IMAGE="${PG_IMAGE:-postgres:17}"
 DB_NAME="${DB_NAME:-remnashop}"
 DB_USER="${DB_USER:-remnashop}"
+# Пароль шифрования — из окружения, а если его там нет, из .env установки: учение
+# идёт из крона, который .env не читает, и зашифрованный бэкап без этого не открылся бы.
+ENV_FILE="${ENV_FILE:-$(dirname "$(readlink -f "$0")")/../.env}"
+if [ -z "${BACKUP_PASSPHRASE:-}" ] && [ -z "${BACKUP_PASSPHRASE_FILE:-}" ] && [ -r "$ENV_FILE" ]; then
+    BACKUP_PASSPHRASE="$(grep -E '^BACKUP_PASSPHRASE=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//')" || true
+fi
 BACKUP_PASSPHRASE="${BACKUP_PASSPHRASE:-}"
 if [ -z "$BACKUP_PASSPHRASE" ] && [ -n "${BACKUP_PASSPHRASE_FILE:-}" ] && [ -f "${BACKUP_PASSPHRASE_FILE}" ]; then
     BACKUP_PASSPHRASE="$(cat "$BACKUP_PASSPHRASE_FILE")"
 fi
+# openssl читает пароль из ОКРУЖЕНИЯ процесса (-pass env:…). Прочитанный из файла или
+# .env пароль был обычной переменной оболочки — openssl его не видел, и зашифрованный
+# бэкап падал целиком. Экспортируем только его: токен бота дочерним процессам не нужен.
+export BACKUP_PASSPHRASE
 MIN_ROWS="${MIN_ROWS:-1}"        # минимум строк в users для «успеха»
 CHECK_TABLE="${CHECK_TABLE:-users}"
 # Опциональный шаг «restore→migrate»: после восстановления прогнать overlay-alembic на

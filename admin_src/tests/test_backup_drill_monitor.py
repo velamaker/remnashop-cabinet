@@ -121,3 +121,14 @@ def test_скрипт_учения_пишет_итог():
             assert "restore_drill.json" in text
             return
     pytest.skip("scripts/db-restore-verify.sh рядом нет (запуск внутри образа)")
+
+
+def test_зашифрованный_бэкап_считается_бэкапом(monitor, monkeypatch):
+    """С BACKUP_PASSPHRASE ежедневный файл — backup-*.sql.gz.enc. Раньше маска его не
+    видела, и включённое шифрование выглядело бы как «бэкапы остановились»."""
+    ns, tmp = monitor
+    monkeypatch.setenv("BACKUP_DIR", str(tmp))
+    monkeypatch.delenv("BACKUP_GLOB", raising=False)
+    (tmp / "backup-2026-09-26-040001.sql.gz.enc").write_bytes(b"x" * 5000)
+    bad, reason = ns["_check"]()
+    assert bad is False, reason

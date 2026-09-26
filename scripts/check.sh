@@ -31,7 +31,7 @@ need_backend() { [ "$STAGED_ONLY" = 0 ] || printf '%s\n' "$CH" | grep -qE '^admi
 # Стенд update.sh читает и манифесты возможностей бота — их формат ему тоже важен.
 need_update_sh() {
   [ "$STAGED_ONLY" = 0 ] || printf '%s\n' "$CH" | grep -qxE \
-    'update\.sh|scripts/tests/update-sh\.sh|cabinet/src/lib/botCapabilities\.ts|admin_src/src/web/cabinet_capabilities\.py'
+    'update\.sh|scripts/tests/update-sh\.sh|scripts/db-backup\.sh|scripts/db-restore-verify\.sh|scripts/tests/db-backup\.sh|cabinet/src/lib/botCapabilities\.ts|admin_src/src/web/cabinet_capabilities\.py'
 }
 
 # ---------- Кабинет: типы + линт ----------
@@ -88,6 +88,13 @@ if need_update_sh; then
     fi
   else
     echo "⚠ нет утилиты script (util-linux) — пропускаю стенд update.sh"
+  fi
+  echo "▶ db-backup.sh: сценарии копии бэкапа (docker/curl подменены)…"
+  if ! bk_out="$(bash scripts/tests/db-backup.sh 2>&1)"; then
+    printf '%s\n' "$bk_out" | grep -E '✗|❌' >&2
+    fail=1
+  else
+    printf '%s\n' "$bk_out" | tail -1
   fi
 fi
 

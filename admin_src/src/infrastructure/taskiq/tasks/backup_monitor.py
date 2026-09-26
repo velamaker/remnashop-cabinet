@@ -10,7 +10,8 @@ Auto-discover taskiq по глобу tasks/*.py.
 
 Env: BACKUP_MONITOR (вкл, по умолч. on), BACKUP_DIR (каталог),
 BACKUP_MAX_AGE_HOURS (порог свежести, 26), BACKUP_MIN_BYTES (минимум, 1000),
-BACKUP_GLOB (маска файлов, backup-*.sql.gz).
+BACKUP_GLOB (маска файлов, backup-*.sql.gz и зашифрованные backup-*.sql.gz.enc —
+без них включённое шифрование выглядело бы как «бэкапы остановились»).
 """
 
 import json
@@ -107,7 +108,7 @@ def _check() -> tuple[bool, str]:
     backup_dir = os.environ.get("BACKUP_DIR", "/opt/remnashop/backups")
     patterns = [
         p.strip()
-        for p in (os.environ.get("BACKUP_GLOB", "backup-*.sql.gz,db_backup_*.sql")).split(",")
+        for p in (os.environ.get("BACKUP_GLOB", "backup-*.sql.gz,backup-*.sql.gz.enc,db_backup_*.sql")).split(",")
         if p.strip()
     ]
     max_age_h = _env_int("BACKUP_MAX_AGE_HOURS", 26)
