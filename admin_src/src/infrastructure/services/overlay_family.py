@@ -93,8 +93,12 @@ VIEW_TIMEOUT_SECONDS = 8.0
 LIVE_STATUSES = ("creating", "active", "suspended")
 # Причины, по которым приостановленный профиль через `suspend_grace_days` удаляется.
 # Пауза и блокировка — временные состояния владельца, их профили ждут без срока.
-GRACE_REASONS = ("plan", "owner_gone")
-SUSPEND_REASONS = ("plan", "owner_expired", "owner_frozen", "owner_gone", "owner_blocked")
+# `panel_missing` — панель ПОДТВЕРДИЛА, что пользователя профиля у неё нет: удаляем не
+# сразу, а через ту же отсрочку (вдруг сопоставление uuid починят и он найдётся).
+GRACE_REASONS = ("plan", "owner_gone", "panel_missing")
+SUSPEND_REASONS = (
+    "plan", "owner_expired", "owner_frozen", "owner_gone", "owner_blocked", "panel_missing",
+)
 
 
 # ── конфиг ──────────────────────────────────────────────────────────────────
@@ -461,6 +465,12 @@ def plan_decisions(
         return (p.sub_status or "").upper() in ("ACTIVE", "LIMITED")
 
     def stay_suspended(p: ProfileRow, reason: str) -> Decision:
+        if p.status == "suspended" and p.suspend_reason == "panel_missing":
+            # Пользователя в панели нет — выключать и переименовывать причину нечего;
+            # причину не меняем, чтобы не сдвинуть отсрочку удаления.
+            if expired_grace(p, "panel_missing"):
+                return Decision(p.id, "delete", reason="panel_missing")
+            return Decision(p.id, "noop", reason="panel_missing")
         if p.status == "active":
             return Decision(p.id, "suspend", reason=reason)
         if p.suspend_reason != reason:
@@ -489,7 +499,7 @@ def plan_decisions(
                     out.append(Decision(p.id, "noop"))
             elif p.suspend_reason and expired_grace(p, p.suspend_reason):
                 out.append(Decision(p.id, "delete", reason=p.suspend_reason))
-            elif still_on(p):
+            elif still_on(p) and p.suspend_reason != "panel_missing":
                 out.append(Decision(p.id, "suspend", reason=p.suspend_reason or "owner_expired"))
             else:
                 out.append(Decision(p.id, "noop", reason=p.suspend_reason))
@@ -505,6 +515,11 @@ def plan_decisions(
     keep = ordered[: owner.terms.max_profiles] if owner.terms else []
     excess = ordered[len(keep):]
     for p in keep:
+        if p.status == "suspended" and p.suspend_reason == "panel_missing" and expired_grace(
+            p, "panel_missing"
+        ):
+            out.append(Decision(p.id, "delete", reason="panel_missing"))
+            continue
         reset = reset_traffic or (
             purchase_at is not None
             and p.last_reconciled_at is not None
@@ -877,6 +892,26 @@ async def panel_find(sdk: Any, username: str) -> Optional[Any]:
         if _is_not_found(exc):
             return None
         raise PanelError(f"{type(exc).__name__}: {exc}") from exc
+
+
+async def panel_presence(sdk: Any, p: "ProfileRow") -> Optional[Any]:
+    """Есть ли пользователь профиля в панели. None — ТОЧНО нет; PanelError — не знаем.
+
+    «Не найден» от панели ещё не значит «удалён»: слой панели 3.x отвечает им же на
+    uuid, который не удалось сопоставить с числовым id, и на любой 404 пути. Поэтому
+    «нет» — только когда панель не знает профиль ни по имени `rs_fam_<id>`, ни по uuid.
+    """
+    if p.panel_username:
+        found = await panel_find(sdk, p.panel_username)
+        if found is not None:
+            return found
+    if p.remna_uuid:
+        try:
+            return await _need(sdk).users.get_user_by_uuid(_uuid(p.remna_uuid))
+        except Exception as exc:  # noqa: BLE001 — наверх одна понятная ошибка
+            if not _is_not_found(exc):
+                raise PanelError(f"{type(exc).__name__}: {exc}") from exc
+    return None
 
 
 async def panel_create(
@@ -1618,6 +1653,15 @@ async def reconcile_owner(
             # вышло: доделает следующий проход (намерение «приостановлен» уже у нас).
             out["busy"] = True
             break
+        except PanelGone as exc:
+            try:
+                kind = await _on_panel_gone(session, sdk, owner_id, p, str(exc), actor=actor)
+            except (PanelError, ValueError) as lookup_exc:
+                await _profile_fail(session, p.id, f"{exc}; проверка: {lookup_exc}")
+                out["errors"].append({"profile_id": p.id, "error": str(lookup_exc)})
+            else:
+                if kind:
+                    out[kind].append(p.id)
         except (PanelError, ValueError) as exc:
             # ValueError — битый uuid в зеркале: это тоже «не свели», а не повод
             # бросить остальных членов семьи.
@@ -1660,14 +1704,63 @@ async def _apply_decision(
         return "resumed"
     if d.action == "suspend":
         return "suspended" if await _suspend(session, sdk, owner_id, p, d.reason, actor) else None
-    if d.action in ("delete", "gone"):
+    if d.action == "gone":
+        # Бот считает пользователя профиля удалённым (вебхук панели). Удаляем, только
+        # если панель подтверждает: иначе ошибочный вебхук унёс бы рабочую ссылку.
+        found = await panel_presence(sdk, p)
+        if found is not None:
+            raise PanelError("панель: пользователь профиля есть, а бот считает его удалённым")
+        await _mark_deleting(session, p.id)
+        await _event(session, owner_id, p.id, "panel_gone", actor, {"label": p.label})
+        return "gone"
+    if d.action == "delete":
         await _mark_deleting(session, p.id)
         await _event(
-            session, owner_id, p.id, "panel_gone" if d.action == "gone" else "expired_grace",
-            actor, {"label": p.label, "reason": d.reason},
+            session, owner_id, p.id, "expired_grace", actor, {"label": p.label, "reason": d.reason}
         )
-        return "gone" if d.action == "gone" else "deleted"
+        return "deleted"
     return None
+
+
+async def _on_panel_gone(
+    session: "AsyncSession", sdk: Any, owner_id: int, p: ProfileRow, error: str, *, actor: str
+) -> Optional[str]:
+    """Панель ответила «не найден» на действие с профилем. Удалять НЕ спешим.
+
+    * Панель знает профиль под другим uuid (сопоставление uuid сменилось) —
+      перепривязываем зеркало, следующий проход сделает действие по новому uuid.
+    * Знает под тем же — это не «удалён», а сбой пути: считаем неудачей, повторим.
+    * Не знает ни по имени, ни по uuid — профиль приостановлен с причиной
+      `panel_missing` и удалится через отсрочку, если так и не найдётся. Отсрочку
+      повторная проверка не сдвигает.
+    """
+    found = await panel_presence(sdk, p)
+    if found is not None:
+        new_uuid = str(getattr(found, "uuid", "") or "")
+        if new_uuid and new_uuid.lower() != str(p.remna_uuid or "").lower():
+            if p.sub_id is not None:
+                await session.execute(
+                    text("UPDATE subscriptions SET user_remna_id = :u, updated_at = now() WHERE id = :sid"),
+                    {"u": _uuid(new_uuid), "sid": p.sub_id},
+                )
+            await session.execute(
+                text(
+                    "UPDATE family_profiles SET panel_uuid = :u, last_reconciled_at = NULL, "
+                    "updated_at = now() WHERE id = :id"
+                ),
+                {"u": _uuid(new_uuid), "id": p.id},
+            )
+            await _event(session, owner_id, p.id, "relinked", actor, {"from": p.remna_uuid, "to": new_uuid})
+            await _profile_fail(session, p.id, f"uuid профиля в панели сменился: {error}")
+            return None
+        raise PanelError(f"панель не нашла профиль по uuid, но знает его по имени: {error}")
+    fields: dict[str, Any] = {"status": "suspended", "suspend_reason": "panel_missing"}
+    already = p.status == "suspended" and p.suspend_reason == "panel_missing"
+    if not already:
+        fields["suspended_at"] = _NOW
+        await _event(session, owner_id, p.id, "panel_missing", actor, {"label": p.label})
+    await _profile_ok(session, p.id, **fields)
+    return None if already else "suspended"
 
 
 async def _suspend(
@@ -2098,6 +2191,7 @@ _REASON_RU = {
     "owner_frozen": "подписка на паузе",
     "owner_gone": "подписки больше нет",
     "owner_blocked": "аккаунт заблокирован",
+    "panel_missing": "профиль не найден на сервере подписок",
     "inactive": "профиль приостановлен",
 }
 

@@ -345,3 +345,19 @@ def test_suspended_profile_that_is_still_on_is_switched_off_again():
     gone = owner(expire_at=NOW - timedelta(hours=1), sub_status="EXPIRED")
     on_expired = profile(2, status="suspended", reason="owner_expired", suspended_at=NOW, sub_status="LIMITED")
     assert actions(family.plan_decisions(gone, [on_expired], NOW, 30)) == {2: ("suspend", "owner_expired")}
+
+
+def test_panel_missing_waits_for_grace_whatever_the_owner_does():
+    """Пользователя профиля нет в панели: причину не переписываем (отсрочка не
+    сдвигается), выключать нечего, удаляем только по истечении отсрочки."""
+    fresh = profile(1, status="suspended", reason="panel_missing", suspended_at=NOW, sub_status="ACTIVE")
+    old = profile(2, status="suspended", reason="panel_missing", suspended_at=NOW - timedelta(days=31))
+    for state in ({"frozen": True}, {"is_blocked": True}, {"terms": None}):
+        d = family.plan_decisions(owner(**state), [fresh, old], NOW, 30)
+        assert actions(d) == {1: ("noop", "panel_missing"), 2: ("delete", "panel_missing")}, state
+    gone = owner(expire_at=NOW - timedelta(hours=1), sub_status="EXPIRED")
+    d = family.plan_decisions(gone, [fresh, old], NOW, 30)
+    assert actions(d) == {1: ("noop", "panel_missing"), 2: ("delete", "panel_missing")}
+    # Владелец платит: свежий пробуем вернуть (вдруг нашёлся), старый — удаляем.
+    d = family.plan_decisions(owner(), [fresh, old], NOW, 30)
+    assert actions(d) == {1: ("resume", None), 2: ("delete", "panel_missing")}

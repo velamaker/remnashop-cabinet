@@ -75,6 +75,8 @@ class Panel:
         # «Медленная панель»: вызовы update/disable ждут, пока тест не откроет ворота.
         self.gate: asyncio.Event | None = None
         self.entered = asyncio.Event()
+        # uuid, которые «слой 3.x не сопоставил»: по uuid — 404, по имени — есть.
+        self.unmapped: set[str] = set()
         self.users = _Users(self)
         self.hwid = _Hwid(self)
         self.ip_control = _Connections()
@@ -91,6 +93,8 @@ class _Users:
         self.p = panel
 
     def _get(self, uuid) -> SimpleNamespace:
+        if str(uuid) in self.p.unmapped:
+            raise NotFoundError(f"uuid {uuid} не сопоставлен")
         user = self.p.store.get(str(uuid))
         if user is None:
             raise NotFoundError(str(uuid))
@@ -901,6 +905,90 @@ async def test_busy_family_answers_busy_instead_of_waiting(db, monkeypatch):
         await holder.close()
     assert deleted == {"result": "busy"} and reset == {"result": "busy"}
     assert db.panel.count("create") == 1 and db.panel.count("delete") == 0
+
+
+async def _one_profile(db: Db):
+    _plan, owner_id, (pid,) = await _family(db, 1)
+    p = (await db.profiles(owner_id))[0]
+    return owner_id, pid, p
+
+
+async def _touch_terms(db: Db, devices: int = 3) -> None:
+    """Условия тарифа поменялись — сверке есть что отправить в панель."""
+    await db.run(
+        "UPDATE family_plan_terms SET devices_per_profile = :d, updated_at = now()", d=devices
+    )
+
+
+async def test_not_found_by_uuid_but_known_by_name_is_not_deleted(db):
+    """Слой панели 3.x отвечает «не найден» на несопоставленный uuid. Профиль при этом
+    жив — удалять его ссылку нельзя: сбой считается неудачей и повторится."""
+    owner_id, pid, p = await _one_profile(db)
+    db.panel.unmapped.add(p.sub_remna_id)
+    await _touch_terms(db)
+    out = await db.reconcile(owner_id)
+    assert out["errors"] and not out["gone"] and not out["deleted"]
+    assert db.panel.count("delete") == 0 and len(db.panel.store) == 1
+    after = (await db.profiles(owner_id))[0]
+    assert after.status == "active" and after.fail_count == 1
+
+
+async def test_user_found_under_another_uuid_is_relinked(db):
+    """Панель знает профиль под другим uuid — зеркало перепривязывается, и следующая
+    сверка делает своё дело по новому uuid, ничего не удаляя."""
+    owner_id, pid, p = await _one_profile(db)
+    user = db.panel.store.pop(p.sub_remna_id)
+    new_uuid = uuid_lib.uuid4()
+    user.uuid = new_uuid
+    db.panel.store[str(new_uuid)] = user
+    await _touch_terms(db)
+    await db.reconcile(owner_id)
+    relinked = (await db.profiles(owner_id))[0]
+    assert relinked.sub_remna_id == str(new_uuid) and relinked.status == "active"
+    out = await db.reconcile(owner_id)
+    assert out["synced"] == [pid]
+    assert db.panel.store[str(new_uuid)].hwid_device_limit == 3
+    assert db.panel.count("delete") == 0
+
+
+async def test_confirmed_missing_is_suspended_and_deleted_only_after_grace(db):
+    """Пользователя удалили в панели руками (вебхук не дошёл): профиль не удаляется
+    сразу, а приостанавливается и удаляется через отсрочку."""
+    owner_id, pid, p = await _one_profile(db)
+    db.panel.store.clear()
+    await _touch_terms(db)
+    await db.reconcile(owner_id)
+    after = (await db.profiles(owner_id))[0]
+    assert after.status == "suspended" and after.suspend_reason == "panel_missing"
+    suspended_at = after.suspended_at
+    # Повторная проверка не сдвигает отсрочку.
+    await db.run("UPDATE family_profiles SET last_reconciled_at = NULL")
+    await db.reconcile(owner_id)
+    assert (await db.profiles(owner_id))[0].suspended_at == suspended_at
+
+    await db.run("UPDATE family_profiles SET suspended_at = now() - interval '31 days'")
+    await db.reconcile(owner_id)
+    assert await db.scalar("SELECT count(*) FROM family_profiles") == 0
+    assert await db.scalar("SELECT count(*) FROM users WHERE id = :u", u=p.profile_user_id) == 0
+
+
+async def test_deleted_by_webhook_but_alive_in_panel_is_kept(db):
+    """Зеркало говорит «удалён» (вебхук), а панель пользователя знает — не удаляем."""
+    owner_id, pid, p = await _one_profile(db)
+    await db.run("UPDATE subscriptions SET status = 'DELETED' WHERE id = :s", s=p.sub_id)
+    out = await db.reconcile(owner_id)
+    assert out["errors"] and not out["gone"]
+    assert await db.scalar("SELECT count(*) FROM family_profiles") == 1
+    assert db.panel.count("delete") == 0
+
+
+async def test_deleted_by_webhook_and_gone_from_panel_is_cleaned_up(db):
+    owner_id, pid, p = await _one_profile(db)
+    await db.run("UPDATE subscriptions SET status = 'DELETED' WHERE id = :s", s=p.sub_id)
+    db.panel.store.clear()
+    out = await db.reconcile(owner_id)
+    assert out["gone"] == [pid]
+    assert await db.scalar("SELECT count(*) FROM family_profiles") == 0
 
 
 async def test_unfreeze_sets_the_term_before_enabling(db):
