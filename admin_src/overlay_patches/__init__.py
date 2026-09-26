@@ -414,6 +414,11 @@ def install() -> None:
             "src.application.services.remnawave",
             "traffic_reset_date",
         ),
+        (
+            "семейные профили: синхрон без двойников",
+            "src.application.use_cases.remnawave.commands.synchronization",
+            "family_sync_guard",
+        ),
     )
 
     # Правки запасной копии бэкенда: у них по три разные цели, поэтому идут

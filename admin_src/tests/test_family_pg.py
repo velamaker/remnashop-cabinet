@@ -1,0 +1,862 @@
+"""Семейные профили на НАСТОЯЩЕМ Postgres: гонки, каскады и сбои панели.
+
+ЗАЧЕМ ЖИВАЯ БАЗА. Всё, на чём держится семья, живёт в самой базе: замок строки
+владельца (двойной клик «создать» из двух вкладок), UNIQUE по request_id и имени,
+каскады FK (удаление теневого аккаунта уносит подписку и строку профиля, удаление
+владельца — всю семью), перечисления базы в колонках подписки. Подделка сессии
+ничего этого не знает.
+
+Схема — НАСТОЯЩАЯ: таблицы базы из её ORM-моделей, наши служебные таблицы тем же
+DDL, которым их создаёт бот при старте, и миграция 0016 — ровно та, что уедет на
+бой. Теневые аккаунты и подписки создают базовые DAO — так же, как в проде.
+
+Панель — подделка SDK, как в тестах докупки устройства: она помнит пользователей,
+считает вызовы и умеет «падать» по команде теста. В сеть ничего не уходит.
+
+ЗАПУСК — ПО ЖЕЛАНИЮ, нужен одноразовый Postgres:
+
+    docker run -d --name pg -e POSTGRES_PASSWORD=x -p 5432:5432 postgres:17
+    RS_PG_DSN=postgresql+asyncpg://postgres:x@localhost/postgres pytest test_family_pg.py
+"""
+
+import ast
+import asyncio
+import importlib
+import importlib.util
+import uuid as uuid_lib
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from _pg_dsn import sqlalchemy_dsn  # noqa: E402 — соседний модуль тестов
+
+family = importlib.import_module("src.infrastructure.services.overlay_family")
+
+DSN = sqlalchemy_dsn()
+pytestmark = pytest.mark.skipif(not DSN, reason="нужен RS_PG_DSN (одноразовый Postgres)")
+
+# Отдельная схема: на том же RS_PG_DSN гоняются соседние opt-in тесты.
+SCHEMA_NAME = "family_pg_test"
+SQUAD = "11111111-2222-3333-4444-555555555555"
+
+
+def now() -> datetime:
+    """Настоящие часы: срок сравнивают и база (now()), и код — фиксированная дата
+    протухла бы через сутки."""
+    return datetime.now(timezone.utc)
+
+
+# ── подделка панели ─────────────────────────────────────────────────────────
+
+
+class NotFoundError(Exception):
+    """Как в remnapy: код узнаёт её по имени класса."""
+
+    status_code = 404
+
+
+class ConflictError(Exception):
+    status_code = 409
+
+
+class Panel:
+    """Панель в памяти. `calls` — что у неё просили, по порядку."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, SimpleNamespace] = {}
+        self.calls: list[tuple] = []
+        self.fail_create: Exception | None = None
+        self.lose_create_response = False
+        self.fail_lookup = False
+        self.fail_delete = False
+        self.fail_update = False
+        self.users = _Users(self)
+        self.hwid = _Hwid(self)
+        self.ip_control = _Connections()
+
+    def by_name(self, name: str) -> SimpleNamespace | None:
+        return next((u for u in self.store.values() if u.username == name), None)
+
+    def count(self, kind: str) -> int:
+        return sum(1 for c in self.calls if c[0] == kind)
+
+
+class _Users:
+    def __init__(self, panel: Panel) -> None:
+        self.p = panel
+
+    def _get(self, uuid) -> SimpleNamespace:
+        user = self.p.store.get(str(uuid))
+        if user is None:
+            raise NotFoundError(str(uuid))
+        return user
+
+    async def create_user(self, body):
+        from remnapy.enums.users import UserStatus
+
+        self.p.calls.append(("create", body.username))
+        if self.p.fail_create is not None:
+            raise self.p.fail_create
+        if self.p.by_name(body.username) is not None:
+            raise ConflictError(body.username)
+        uid = uuid_lib.uuid4()
+        user = SimpleNamespace(
+            uuid=uid,
+            username=body.username,
+            status=UserStatus.ACTIVE,
+            expire_at=body.expire_at,
+            subscription_url=f"https://sub.example/{uid.hex[:8]}",
+            traffic_limit_bytes=body.traffic_limit_bytes,
+            hwid_device_limit=body.hwid_device_limit,
+            traffic_limit_strategy=body.traffic_limit_strategy,
+            tag=body.tag,
+            active_internal_squads=[SimpleNamespace(uuid=s) for s in body.active_internal_squads or []],
+            external_squad_uuid=body.external_squad_uuid,
+            telegram_id=None,
+            description=body.description,
+            used_traffic_bytes=123,
+        )
+        self.p.store[str(uid)] = user
+        if self.p.lose_create_response:
+            raise TimeoutError("read timeout")
+        return user
+
+    async def get_user_by_username(self, name):
+        if self.p.fail_lookup:
+            raise RuntimeError("panel is down")
+        user = self.p.by_name(name)
+        if user is None:
+            raise NotFoundError(name)
+        return user
+
+    async def get_user_by_uuid(self, uuid):
+        return self._get(uuid)
+
+    async def update_user(self, body):
+        fields = sorted(body.model_dump(exclude_unset=True).keys())
+        self.p.calls.append(("update", str(body.uuid), fields, body.expire_at))
+        if self.p.fail_update:
+            raise RuntimeError("panel is down")
+        user = self._get(body.uuid)
+        for name in body.model_fields_set:
+            if name == "uuid":
+                continue
+            value = getattr(body, name)
+            if name == "active_internal_squads":
+                value = [SimpleNamespace(uuid=s) for s in value or []]
+            setattr(user, name, value)
+        return user
+
+    async def enable_user(self, uuid):
+        from remnapy.enums.users import UserStatus
+
+        self.p.calls.append(("enable", str(uuid)))
+        user = self._get(uuid)
+        user.status = UserStatus.ACTIVE
+        return user
+
+    async def disable_user(self, uuid):
+        from remnapy.enums.users import UserStatus
+
+        self.p.calls.append(("disable", str(uuid)))
+        user = self._get(uuid)
+        user.status = UserStatus.DISABLED
+        return user
+
+    async def reset_user_traffic(self, uuid):
+        self.p.calls.append(("reset", str(uuid)))
+        user = self._get(uuid)
+        user.used_traffic_bytes = 0
+        return user
+
+    async def delete_user(self, uuid):
+        self.p.calls.append(("delete", str(uuid)))
+        if self.p.fail_delete:
+            raise RuntimeError("panel is down")
+        self._get(uuid)
+        del self.p.store[str(uuid)]
+        return SimpleNamespace(is_deleted=True)
+
+    async def get_all_users(self, start=0, size=25):
+        users = list(self.p.store.values())
+        return SimpleNamespace(users=users[start : start + size], total=len(users))
+
+
+class _Hwid:
+    def __init__(self, panel: Panel) -> None:
+        self.p = panel
+
+    async def get_hwid_user(self, uuid):
+        return SimpleNamespace(total=1, devices=[SimpleNamespace(hwid="h1")])
+
+    async def delete_all_hwid_user(self, body):
+        self.p.calls.append(("hwid_reset", str(body.user_uuid)))
+        return SimpleNamespace(total=0, devices=[])
+
+
+class _Connections:
+    async def drop_connections(self, body=None):
+        return None
+
+
+class RemnawaveFacade:
+    """То, что `purge_user` получает вместо RemnawaveImpl: удаление по uuid."""
+
+    def __init__(self, panel: Panel, fail: bool = False) -> None:
+        self.sdk = panel
+        self.fail = fail
+
+    async def delete_user(self, uuid) -> bool:
+        if self.fail:
+            raise RuntimeError("panel is down")
+        try:
+            await self.sdk.users.delete_user(uuid)
+        except NotFoundError:
+            return False
+        return True
+
+
+# ── схема ───────────────────────────────────────────────────────────────────
+
+
+def _migration_statements() -> list[str]:
+    """DDL миграции 0016 — ровно тот, что уедет на бой, а не его пересказ."""
+    here = Path(__file__).resolve()
+    name = "src/infrastructure/database/migrations_overlay/versions/0016_family_profiles.py"
+    candidates = [Path("/opt/remnashop") / name, here.parents[1] / name]
+    path = next(p for p in candidates if p.exists())
+    spec = importlib.util.spec_from_file_location("family_migration_0016", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    collected: list[str] = []
+    module.op = SimpleNamespace(execute=collected.append)
+    module.upgrade()
+    return collected
+
+
+class Db:
+    def __init__(self, engine, panel: Panel) -> None:
+        self.engine = engine
+        self.panel = panel
+
+    def session(self):
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        return AsyncSession(self.engine, expire_on_commit=False)
+
+    @staticmethod
+    def daos(session):
+        from src.infrastructure.database.dao.subscription import SubscriptionDaoImpl
+        from src.infrastructure.database.dao.user import UserDaoImpl
+        from src.infrastructure.di.providers.retort import RetortProvider
+
+        provider = RetortProvider()
+        retort = RetortProvider.__dict__["get_retort"].origin(provider)
+        conversion = RetortProvider.__dict__["get_conversion_retort"].origin(provider, retort, object())
+        users = UserDaoImpl(session, retort, conversion, None)
+        subs = SubscriptionDaoImpl(session, retort, conversion, None, users)
+        return users, subs
+
+    async def scalar(self, sql: str, **params):
+        from sqlalchemy import text
+
+        async with self.session() as s:
+            return (await s.execute(text(sql), params)).scalar()
+
+    async def rows(self, sql: str, **params):
+        from sqlalchemy import text
+
+        async with self.session() as s:
+            return (await s.execute(text(sql), params)).all()
+
+    async def run(self, sql: str, **params) -> None:
+        from sqlalchemy import text
+
+        async with self.session() as s:
+            await s.execute(text(sql), params)
+            await s.commit()
+
+    async def plan(self, *, family_terms=(2, 2), name=None, trial=False) -> int:
+        from sqlalchemy import text
+
+        async with self.session() as s:
+            plan_id = (
+                await s.execute(
+                    text(
+                        "INSERT INTO plans (public_code, name, type, availability, "
+                        "traffic_limit_strategy, traffic_limit, device_limit, internal_squads, "
+                        "order_index, is_active, is_trial) VALUES (:code, :name, 'BOTH', 'ALL', "
+                        "'MONTH', 200, 3, ARRAY[CAST(:sq AS uuid)], 1, true, :trial) RETURNING id"
+                    ),
+                    {
+                        "code": uuid_lib.uuid4().hex[:8],
+                        "name": name or f"План {uuid_lib.uuid4().hex[:6]}",
+                        "sq": SQUAD,
+                        "trial": trial,
+                    },
+                )
+            ).scalar()
+            if family_terms:
+                await s.execute(
+                    text(
+                        "INSERT INTO family_plan_terms (plan_id, max_profiles, devices_per_profile) "
+                        "VALUES (:p, :m, :d)"
+                    ),
+                    {"p": plan_id, "m": family_terms[0], "d": family_terms[1]},
+                )
+            await s.commit()
+        return int(plan_id)
+
+    async def owner(self, plan_id: int, *, days: int = 30, telegram_id: int | None = None) -> int:
+        from remnapy.enums import TrafficLimitStrategy
+
+        from src.application.dto import PlanSnapshotDto, SubscriptionDto, UserDto
+        from src.core.enums import Locale, PlanType, Role, SubscriptionStatus
+
+        async with self.session() as s:
+            users, subs = self.daos(s)
+            owner = await users.create(
+                UserDto(
+                    telegram_id=telegram_id or int(uuid_lib.uuid4().int % 10**9),
+                    referral_code=uuid_lib.uuid4().hex[:10],
+                    name="Владелец",
+                    role=Role.USER,
+                    language=Locale.RU,
+                    is_rules_accepted=True,
+                    is_trial_available=False,
+                )
+            )
+            await subs.create(
+                SubscriptionDto(
+                    user_remna_id=uuid_lib.uuid4(),
+                    status=SubscriptionStatus.ACTIVE,
+                    traffic_limit=200,
+                    device_limit=3,
+                    traffic_limit_strategy=TrafficLimitStrategy.MONTH,
+                    internal_squads=[uuid_lib.UUID(SQUAD)],
+                    expire_at=now() + timedelta(days=days),
+                    url="https://sub.example/owner",
+                    plan_snapshot=PlanSnapshotDto(
+                        id=plan_id,
+                        name="Семейный",
+                        type=PlanType.BOTH,
+                        traffic_limit=200,
+                        device_limit=3,
+                        duration=30,
+                        traffic_limit_strategy=TrafficLimitStrategy.MONTH,
+                        internal_squads=[uuid_lib.UUID(SQUAD)],
+                    ),
+                ),
+                owner.id,
+            )
+            await s.commit()
+        return int(owner.id)
+
+    async def create(self, owner_id: int, label: str, request_id=None) -> dict:
+        async with self.session() as s:
+            users, subs = self.daos(s)
+            return await family.create_profile(
+                s,
+                self.panel,
+                owner_id=owner_id,
+                label=label,
+                request_id=request_id or uuid_lib.uuid4(),
+                user_dao=users,
+                subscription_dao=subs,
+                actor="test",
+            )
+
+    async def reconcile(self, owner_id: int, **kw) -> dict:
+        async with self.session() as s:
+            return await family.reconcile_owner(s, self.panel, owner_id, **kw)
+
+    async def sweep(self) -> dict:
+        async with self.session() as s:
+            _users, subs = self.daos(s)
+            return await family.sweep_pending(s, self.panel, subscription_dao=subs)
+
+    async def profiles(self, owner_id: int):
+        async with self.session() as s:
+            return await family.load_profiles(s, owner_id)
+
+    async def age_pending(self) -> None:
+        await self.run("UPDATE family_profiles SET updated_at = now() - interval '10 minutes'")
+
+
+@pytest.fixture
+async def db(tmp_path, monkeypatch):
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    import src.infrastructure.database.models as models
+
+    baseline = importlib.import_module("src.infrastructure.database.overlay_baseline_ddl")
+
+    monkeypatch.setattr(family, "ASSETS_DIR", tmp_path)
+    monkeypatch.setattr(family, "CONFIG_PATH", tmp_path / "family.json")
+    monkeypatch.setattr(family, "ORPHANS_STATE_PATH", tmp_path / "family_orphans_state.json")
+    family.save_config({"enabled": True, "suspend_grace_days": 30})
+
+    setup = create_async_engine(DSN)
+    async with setup.begin() as conn:
+        await conn.execute(text(f"DROP SCHEMA IF EXISTS {SCHEMA_NAME} CASCADE"))
+        await conn.execute(text(f"CREATE SCHEMA {SCHEMA_NAME}"))
+        await conn.execute(text(f"SET search_path TO {SCHEMA_NAME}"))
+        await conn.run_sync(models.BaseSql.metadata.create_all)
+        for ddl in baseline.BASELINE_DDL:
+            await conn.execute(text(ddl))
+        for statement in _migration_statements():
+            await conn.execute(text(statement))
+    await setup.dispose()
+
+    engine = create_async_engine(
+        DSN, pool_size=5, connect_args={"server_settings": {"search_path": SCHEMA_NAME}}
+    )
+    yield Db(engine, Panel())
+    await engine.dispose()
+
+    cleanup = create_async_engine(DSN)
+    async with cleanup.begin() as conn:
+        await conn.execute(text(f"DROP SCHEMA IF EXISTS {SCHEMA_NAME} CASCADE"))
+    await cleanup.dispose()
+
+
+async def _family(db: Db, n: int = 2, terms=(2, 2)) -> tuple[int, int, list[int]]:
+    plan_id = await db.plan(family_terms=terms)
+    owner_id = await db.owner(plan_id)
+    ids = []
+    for i in range(n):
+        result = await db.create(owner_id, f"Профиль {i + 1}")
+        assert result["result"] == "created", result
+        ids.append(result["profile_id"])
+    return plan_id, owner_id, ids
+
+
+# ── создание ────────────────────────────────────────────────────────────────
+
+
+async def test_created_profile_is_a_shadow_account_with_its_own_subscription(db):
+    _plan, owner_id, (pid,) = await _family(db, 1)
+    p = (await db.profiles(owner_id))[0]
+    assert p.id == pid and p.status == "active"
+    panel_user = db.panel.by_name(p.panel_username)
+    assert panel_user is not None and p.panel_username == f"rs_fam_{p.profile_user_id}"
+    # Устройства — условие тарифа (2), трафик — тарифный целиком, телеграма нет.
+    assert panel_user.hwid_device_limit == 2
+    assert panel_user.traffic_limit_bytes == 200 * 1024**3
+    assert panel_user.telegram_id is None
+    assert "Семья rs_" in panel_user.description and "«Профиль 1»" in panel_user.description
+    # Теневой аккаунт: войти нельзя, пробника нет, код с префиксом, подписка своя.
+    shadow = (
+        await db.rows(
+            "SELECT telegram_id, email, password_hash, is_trial_available, is_rules_accepted, "
+            "referral_code, current_subscription_id FROM users WHERE id = :u",
+            u=p.profile_user_id,
+        )
+    )[0]
+    assert shadow[0] is None and shadow[1] is None and shadow[2] is None
+    assert shadow[3] is False and shadow[4] is True
+    assert shadow[5].startswith("fam_") and shadow[6] == p.sub_id
+    assert p.sub_remna_id == str(panel_user.uuid)
+    # Снимок «тарифа» профиля — синтетический: в выборки по тарифу он не попадает.
+    plan_id = await db.scalar(
+        "SELECT (plan_snapshot->>'id')::int FROM subscriptions WHERE id = :s", s=p.sub_id
+    )
+    assert plan_id == family.FAMILY_PLAN_ID
+    # Лимит владельца не тронут: семья не отнимает его устройства.
+    assert await db.scalar(
+        "SELECT s.device_limit FROM users u JOIN subscriptions s ON s.id = u.current_subscription_id "
+        "WHERE u.id = :u",
+        u=owner_id,
+    ) == 3
+
+
+async def test_double_request_id_gives_one_profile_and_one_panel_call(db):
+    plan_id = await db.plan()
+    owner_id = await db.owner(plan_id)
+    rid = uuid_lib.uuid4()
+    first, second = await asyncio.gather(
+        db.create(owner_id, "Мама", rid), db.create(owner_id, "Мама", rid)
+    )
+    assert {first["result"], second["result"]} <= {"created", "pending"}
+    assert "created" in {first["result"], second["result"]}
+    assert db.panel.count("create") == 1
+    assert await db.scalar("SELECT count(*) FROM family_profiles") == 1
+    # Повтор после — тот же профиль, панель не зовётся.
+    again = await db.create(owner_id, "Мама", rid)
+    assert again["result"] == "created" and again.get("repeat")
+    assert db.panel.count("create") == 1
+    # Чужой ключ — «conflict» без подробностей.
+    other = await db.owner(plan_id)
+    assert (await db.create(other, "Мама", rid))["result"] == "conflict"
+
+
+async def test_two_tabs_cannot_overrun_the_limit(db):
+    """Последнее место, две вкладки, разные ключи: заводит одна, вторая видит лимит.
+
+    Держит замок строки владельца: без него обе прошли бы проверку «профилей меньше
+    максимума» до того, как любая из них записала свою строку.
+    """
+    plan_id = await db.plan(family_terms=(1, 2))
+    owner_id = await db.owner(plan_id)
+    results = await asyncio.gather(db.create(owner_id, "Мама"), db.create(owner_id, "Папа"))
+    assert sorted(r["result"] for r in results) == ["created", "not_available"]
+    assert next(r for r in results if r["result"] == "not_available")["reason"] == "max_reached"
+    assert db.panel.count("create") == 1
+
+
+async def test_limit_and_duplicate_name_are_enforced(db):
+    _plan, owner_id, _ids = await _family(db, 2, terms=(2, 2))
+    assert (await db.create(owner_id, "Третий"))["result"] == "not_available"
+    await db.run("UPDATE family_plan_terms SET max_profiles = 3")
+    assert (await db.create(owner_id, "профиль 1"))["result"] == "label_taken"
+    assert (await db.create(owner_id, "Третий"))["result"] == "created"
+
+
+async def test_panel_refusal_marks_failed_and_leaves_nothing(db):
+    plan_id = await db.plan()
+    owner_id = await db.owner(plan_id)
+    users_before = await db.scalar("SELECT count(*) FROM users")
+    db.panel.fail_create = RuntimeError("400: validation failed")
+    rid = uuid_lib.uuid4()
+    result = await db.create(owner_id, "Мама", rid)
+    assert result["result"] == "failed"
+    assert db.panel.store == {}
+    row = (await db.rows("SELECT status, profile_user_id FROM family_profiles"))[0]
+    assert row[0] == "failed" and row[1] is None
+    assert await db.scalar("SELECT count(*) FROM users") == users_before
+    # Повтор с тем же ключом — честное «не вышло», а не новый профиль.
+    assert (await db.create(owner_id, "Мама", rid))["result"] == "failed"
+    # Имя неудачная попытка не занимает.
+    db.panel.fail_create = None
+    assert (await db.create(owner_id, "Мама"))["result"] == "created"
+
+
+async def test_lost_panel_answer_is_finished_by_cron_by_name(db):
+    plan_id = await db.plan()
+    owner_id = await db.owner(plan_id)
+    db.panel.lose_create_response = True
+    db.panel.fail_lookup = True
+    result = await db.create(owner_id, "Мама")
+    assert result["result"] == "pending"
+    assert (await db.profiles(owner_id))[0].status == "creating"
+    assert len(db.panel.store) == 1  # панель создала, ответ потерялся
+
+    # Свежую строку крон не трогает: её, возможно, доводит веб-процесс.
+    db.panel.fail_lookup = False
+    assert (await db.sweep())["created"] == []
+    await db.age_pending()
+    out = await db.sweep()
+    assert out["created"] == [result["profile_id"]]
+    p = (await db.profiles(owner_id))[0]
+    assert p.status == "active" and p.sub_remna_id == next(iter(db.panel.store))
+    assert db.panel.count("create") == 1
+
+
+async def test_stuck_create_that_panel_never_made_becomes_failed(db):
+    plan_id = await db.plan()
+    owner_id = await db.owner(plan_id)
+    db.panel.fail_create = TimeoutError("connect timeout")
+    db.panel.fail_lookup = True
+    assert (await db.create(owner_id, "Мама"))["result"] == "pending"
+    db.panel.fail_lookup = False
+    await db.age_pending()
+    out = await db.sweep()
+    assert len(out["failed"]) == 1
+    assert await db.scalar("SELECT status FROM family_profiles") == "failed"
+    assert await db.scalar("SELECT count(*) FROM users WHERE name LIKE 'Семья #%'") == 0
+
+
+# ── синхрон панели ──────────────────────────────────────────────────────────
+
+
+def _remna(panel_user) -> SimpleNamespace:
+    """Пользователь панели в том виде, в каком его отдаёт синхрону SDK."""
+    return SimpleNamespace(
+        uuid=panel_user.uuid,
+        username=panel_user.username,
+        status=panel_user.status,
+        expire_at=panel_user.expire_at,
+        subscription_url=panel_user.subscription_url,
+        traffic_limit_bytes=panel_user.traffic_limit_bytes,
+        hwid_device_limit=panel_user.hwid_device_limit,
+        traffic_limit_strategy=panel_user.traffic_limit_strategy,
+        tag=panel_user.tag,
+        active_internal_squads=panel_user.active_internal_squads,
+        external_squad_uuid=panel_user.external_squad_uuid,
+        telegram_id=None,
+    )
+
+
+async def test_panel_sync_does_not_create_a_twin_for_family_profiles(db):
+    from src.application.use_cases.remnawave.commands.synchronization import (
+        SyncRemnaUser,
+        SyncRemnaUserDto,
+    )
+    from src.infrastructure.database.uow import UnitOfWorkImpl
+    from src.infrastructure.services.remnawave import RemnawaveImpl
+
+    assert getattr(SyncRemnaUser, "_overlay_family_guard", False), "правка синхрона не встала"
+    _plan, owner_id, _ids = await _family(db, 1)
+    live = db.panel.by_name((await db.profiles(owner_id))[0].panel_username)
+    # Сирота: пользователь панели rs_fam_* без строки у нас.
+    orphan = SimpleNamespace(**{**vars(_remna(live)), "uuid": uuid_lib.uuid4(), "username": "rs_fam_999999"})
+    users_before = await db.scalar("SELECT count(*) FROM users")
+
+    async with db.session() as s:
+        users, subs = db.daos(s)
+        sync = SyncRemnaUser(UnitOfWorkImpl(s), users, subs, None, RemnawaveImpl(None), None)
+        assert await sync._execute(None, SyncRemnaUserDto(orphan, True)) is False
+    assert await db.scalar("SELECT count(*) FROM users") == users_before
+
+    # Живой профиль идёт обычным путём базы: подписка обновляется, двойника нет.
+    later = live.expire_at + timedelta(days=5)
+    updated = SimpleNamespace(**{**vars(_remna(live)), "expire_at": later})
+    async with db.session() as s:
+        users, subs = db.daos(s)
+        sync = SyncRemnaUser(UnitOfWorkImpl(s), users, subs, None, RemnawaveImpl(None), None)
+        await sync._execute(None, SyncRemnaUserDto(updated, True))
+    assert await db.scalar("SELECT count(*) FROM users") == users_before
+    p = (await db.profiles(owner_id))[0]
+    assert abs(p.sub_expire_at - later) < timedelta(seconds=1)
+
+
+# ── удаление ────────────────────────────────────────────────────────────────
+
+
+async def test_delete_with_panel_down_stays_deleting_and_cron_retries(db):
+    _plan, owner_id, (pid,) = await _family(db, 1)
+    p = (await db.profiles(owner_id))[0]
+    db.panel.fail_delete = True
+    async with db.session() as s:
+        result = await family.delete_profile(s, db.panel, owner_id=owner_id, profile_id=pid, actor="test")
+    assert result["result"] == "pending"
+    assert await db.scalar("SELECT status FROM family_profiles WHERE id = :i", i=pid) == "deleting"
+    assert await db.scalar("SELECT count(*) FROM users WHERE id = :u", u=p.profile_user_id) == 1
+
+    db.panel.fail_delete = False
+    await db.age_pending()
+    out = await db.sweep()
+    assert out["deleted"] == [pid]
+    assert await db.scalar("SELECT count(*) FROM family_profiles") == 0
+    assert await db.scalar("SELECT count(*) FROM users WHERE id = :u", u=p.profile_user_id) == 0
+    assert await db.scalar("SELECT count(*) FROM subscriptions WHERE user_id = :u", u=p.profile_user_id) == 0
+    assert db.panel.store == {}
+    # Журнал переживает профиль: владелец видит, что и когда удалили.
+    assert await db.scalar(
+        "SELECT count(*) FROM family_events WHERE kind = 'deleted' AND owner_user_id = :o", o=owner_id
+    ) == 1
+
+
+async def test_someone_elses_profile_is_not_found(db):
+    plan_id, _owner, (pid,) = await _family(db, 1)
+    stranger = await db.owner(plan_id)
+    async with db.session() as s:
+        result = await family.delete_profile(s, db.panel, owner_id=stranger, profile_id=pid, actor="test")
+    assert result["result"] == "not_found"
+    async with db.session() as s:
+        result = await family.reset_profile_devices(
+            s, db.panel, owner_id=stranger, profile_id=pid, actor="test"
+        )
+    assert result["result"] == "not_found"
+    assert db.panel.count("delete") == 0 and db.panel.count("hwid_reset") == 0
+
+
+async def test_reset_devices_respects_cooldown(db):
+    _plan, owner_id, (pid,) = await _family(db, 1)
+    async with db.session() as s:
+        first = await family.reset_profile_devices(
+            s, db.panel, owner_id=owner_id, profile_id=pid, actor="test", cooldown_hours=24
+        )
+    async with db.session() as s:
+        second = await family.reset_profile_devices(
+            s, db.panel, owner_id=owner_id, profile_id=pid, actor="test", cooldown_hours=24
+        )
+    assert first["result"] == "reset" and second["result"] == "cooldown"
+    assert db.panel.count("hwid_reset") == 1
+
+
+# ── жизнь вместе с владельцем ───────────────────────────────────────────────
+
+
+async def test_renewal_hook_extends_profiles_with_traffic_reset(db):
+    _plan, owner_id, ids = await _family(db, 2)
+    new_expire = now() + timedelta(days=60)
+    await db.run(
+        "UPDATE subscriptions SET expire_at = :e, updated_at = now() WHERE id = "
+        "(SELECT current_subscription_id FROM users WHERE id = :u)",
+        e=new_expire,
+        u=owner_id,
+    )
+    async with db.session() as s:
+        out = await family.after_purchase(s, db.panel, owner_id)
+    assert sorted(out["synced"]) == sorted(ids)
+    for p in await db.profiles(owner_id):
+        assert abs(p.sub_expire_at - new_expire) < timedelta(seconds=1)
+        panel_user = db.panel.store[p.sub_remna_id]
+        assert abs(panel_user.expire_at - new_expire) < timedelta(seconds=1)
+        assert ("reset", p.sub_remna_id) in db.panel.calls
+    # По одному узкому PATCH на профиль — и ни одного лишнего.
+    assert db.panel.count("update") == 2
+
+
+async def test_change_to_regular_plan_suspends_all_and_back_resumes(db):
+    family_plan, owner_id, ids = await _family(db, 2)
+    regular = await db.plan(family_terms=None)
+    snapshot_sql = (
+        "UPDATE subscriptions SET plan_snapshot = jsonb_set(plan_snapshot, '{id}', to_jsonb(CAST(:p AS int))), "
+        "updated_at = now() WHERE id = (SELECT current_subscription_id FROM users WHERE id = :u)"
+    )
+    await db.run(snapshot_sql, p=regular, u=owner_id)
+    out = await db.reconcile(owner_id)
+    assert sorted(out["suspended"]) == sorted(ids)
+    for p in await db.profiles(owner_id):
+        assert p.status == "suspended" and p.suspend_reason == "plan"
+        assert ("disable", p.sub_remna_id) in db.panel.calls
+
+    await db.run(snapshot_sql, p=family_plan, u=owner_id)
+    out = await db.reconcile(owner_id)
+    assert sorted(out["resumed"]) == sorted(ids)
+    for p in await db.profiles(owner_id):
+        assert p.status == "active" and p.suspend_reason is None
+        assert db.panel.store[p.sub_remna_id].status.value == "ACTIVE"
+
+
+async def test_unfreeze_sets_the_term_before_enabling(db):
+    _plan, owner_id, (pid,) = await _family(db, 1)
+    await db.run(
+        "INSERT INTO subscription_freezes (user_id, remna_uuid, frozen_at, remaining_seconds, active) "
+        "VALUES (:u, gen_random_uuid()::text, now(), 86400, true)",
+        u=owner_id,
+    )
+    out = await db.reconcile(owner_id)
+    assert out["suspended"] == [pid]
+    assert (await db.profiles(owner_id))[0].suspend_reason == "owner_frozen"
+
+    # Разморозка: у владельца новый срок, пауза закрыта.
+    new_expire = now() + timedelta(days=45)
+    await db.run("UPDATE subscription_freezes SET active = false WHERE user_id = :u", u=owner_id)
+    await db.run(
+        "UPDATE subscriptions SET expire_at = :e WHERE id = "
+        "(SELECT current_subscription_id FROM users WHERE id = :u)",
+        e=new_expire,
+        u=owner_id,
+    )
+    db.panel.calls.clear()
+    out = await db.reconcile(owner_id)
+    assert out["resumed"] == [pid]
+    p = (await db.profiles(owner_id))[0]
+    kinds = [c[0] for c in db.panel.calls if len(c) > 1 and c[1] == p.sub_remna_id]
+    assert kinds.index("update") < kinds.index("enable"), f"сначала срок, потом включить: {kinds}"
+    update = next(c for c in db.panel.calls if c[0] == "update")
+    assert abs(update[3] - new_expire) < timedelta(seconds=1)
+
+
+async def test_cron_pass_picks_up_a_changed_owner(db):
+    tick = importlib.import_module("src.infrastructure.taskiq.tasks.family")
+    _plan, owner_id, ids = await _family(db, 2)
+    # Сразу после создания всё сведено — проход ничего не трогает.
+    async with db.session() as s:
+        _users, subs = db.daos(s)
+        summary = await tick.run_pass(s, db.panel, subscription_dao=subs, full=False)
+    assert summary["owners"] == 0
+    # Владельца заблокировали — ближайший проход приостанавливает семью.
+    await db.run("UPDATE users SET is_blocked = true, updated_at = now() WHERE id = :u", u=owner_id)
+    async with db.session() as s:
+        _users, subs = db.daos(s)
+        summary = await tick.run_pass(s, db.panel, subscription_dao=subs, full=False)
+    assert summary["owners"] == 1
+    assert {p.suspend_reason for p in await db.profiles(owner_id)} == {"owner_blocked"}
+
+
+async def test_orphans_are_reported_once(db, monkeypatch):
+    tick = importlib.import_module("src.infrastructure.taskiq.tasks.family")
+    sent: list[str] = []
+
+    async def fake_send(text):
+        sent.append(text)
+
+    monkeypatch.setattr(tick, "send_to_owner", fake_send)
+    await _family(db, 1)
+    await db.panel.users.create_user(
+        SimpleNamespace(
+            username="rs_fam_424242",
+            expire_at=now(),
+            traffic_limit_bytes=0,
+            hwid_device_limit=1,
+            traffic_limit_strategy=None,
+            tag=None,
+            active_internal_squads=[],
+            external_squad_uuid=None,
+            description="",
+        )
+    )
+    for _ in range(2):
+        async with db.session() as s:
+            _users, subs = db.daos(s)
+            await tick.run_pass(s, db.panel, subscription_dao=subs, full=True)
+    assert len(sent) == 1 and "rs_fam_424242" in sent[0]
+
+
+# ── удаление владельца ──────────────────────────────────────────────────────
+
+
+async def test_purge_owner_removes_the_whole_family_in_panel(db):
+    purge = importlib.import_module("src.infrastructure.services.overlay_user_purge")
+    _plan, owner_id, _ids = await _family(db, 2)
+    shadows = [p.profile_user_id for p in await db.profiles(owner_id)]
+    uuids = {p.sub_remna_id for p in await db.profiles(owner_id)}
+
+    async with db.session() as s:
+        result = await purge.purge_user(s, RemnawaveFacade(db.panel), owner_id)
+        await s.commit()
+    assert result["family_profiles_removed"] == 2
+    assert uuids <= {c[1] for c in db.panel.calls if c[0] == "delete"}
+    assert db.panel.store == {}
+    assert await db.scalar("SELECT count(*) FROM users WHERE id = ANY(:ids)", ids=shadows) == 0
+    assert await db.scalar("SELECT count(*) FROM family_profiles") == 0
+
+
+async def test_purge_with_panel_down_changes_nothing(db):
+    purge = importlib.import_module("src.infrastructure.services.overlay_user_purge")
+    _plan, owner_id, _ids = await _family(db, 2)
+    async with db.session() as s:
+        with pytest.raises(purge.PanelUnavailable):
+            await purge.purge_user(s, RemnawaveFacade(db.panel, fail=True), owner_id)
+        await s.rollback()
+    assert len(db.panel.store) == 2
+    assert {p.status for p in await db.profiles(owner_id)} == {"active"}
+    assert await db.scalar("SELECT count(*) FROM users WHERE name LIKE 'Семья #%'") == 2
+
+
+# ── резерв ──────────────────────────────────────────────────────────────────
+
+
+def _reserve_select_sql() -> str:
+    """Выборка выдачи резерва — ровно тот текст, что в кроне, достаём из исходника."""
+    reserve = importlib.import_module("src.infrastructure.taskiq.tasks.reserve")
+    tree = ast.parse(Path(reserve.__file__).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if node.value.startswith("SELECT u.id, s.user_remna_id") and "reserve_grants" in node.value:
+                return node.value
+    raise AssertionError("выборка резерва не найдена в tasks/reserve.py")
+
+
+async def test_reserve_never_picks_a_family_profile(db):
+    _plan, owner_id, _ids = await _family(db, 1)
+    shadow = (await db.profiles(owner_id))[0].profile_user_id
+    # Все истекли вчера; у владельца есть настоящая оплата, у профиля — нет и быть не может.
+    await db.run("UPDATE subscriptions SET expire_at = now() - interval '1 day'")
+    await db.run(
+        "INSERT INTO transactions (payment_id, user_id, status, is_test, purchase_type, "
+        "gateway_type, pricing, currency, plan_snapshot) VALUES (gen_random_uuid(), :u, "
+        "'COMPLETED', false, 'RENEW', 'YOOMONEY', '{}'::jsonb, 'RUB', '{\"id\": 7}'::jsonb)",
+        u=owner_id,
+    )
+    picked = {r[0] for r in await db.rows(_reserve_select_sql(), w=7)}
+    assert owner_id in picked, "контроль: владелец с оплатой резерв получает"
+    assert shadow not in picked

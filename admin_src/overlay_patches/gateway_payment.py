@@ -43,6 +43,11 @@ payment.py (608 строк). Меняются в нём ровно два мес
 нуля и с полным объёмом тарифа, и гаснущая прибавка ничего у него не отнимает. Обе
 ветки стоят рядом и подписаны комментариями-антонимами.
 
+СЕДЬМАЯ — СЕМЕЙНЫЕ ПРОФИЛИ. После успешной покупки периода профили семьи владельца
+получают его новый срок и свежий трафик (или приостанавливаются, если тариф перестал
+быть семейным). Best-effort в `try` с откатом сессии: панель не срывает оплаченную
+выдачу, а крон семьи (tasks/family.py) доводит пропущенное.
+
 ЭТО ДЕНЕЖНЫЙ ПУТЬ, поэтому сверка исходника обязательна: апстрим правит что-то
 внутри `_handle_success` — правка не применяется и кричит, а не подменяет молча
 изменившуюся логику зачисления.
@@ -71,6 +76,8 @@ from src.infrastructure.services import overlay_plan_change as carry
 from src.infrastructure.services import overlay_extra_device as extra
 # Сервис докупки трафика — там же и с тем же ограничением.
 from src.infrastructure.services import overlay_extra_traffic as etraffic
+# Семейные профили — то же ограничение: на модульном уровне только stdlib/sqlalchemy.
+from src.infrastructure.services import overlay_family as family
 
 from src.application.common import (
     EventPublisher,
@@ -909,6 +916,23 @@ def apply() -> str:
                 except Exception:  # noqa: BLE001
                     pass
 
+        # OVERLAY: семейные профили живут сроком и тарифом владельца. Он только что
+        # купил период (продление, смена тарифа, новая подписка) — семья получает тот
+        # же срок и свежий трафик, как база даёт его самому владельцу; тариф стал
+        # обычным или профилей больше, чем в новом тарифе, — лишние приостанавливаются.
+        # В try с откатом, как соседние блоки: оплаченная выдача не срывается из-за
+        # панели, а крон семьи повторит через пять минут.
+        try:
+            await family.after_purchase(
+                self.session, getattr(self.remnawave, "sdk", None), user.id
+            )
+        except Exception:  # noqa: BLE001 — крон семьи доведёт следующим проходом
+            logger.exception(f"family: семья после оплаты не сведена (user {user.log})")
+            try:
+                await self.session.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+
         # OVERLAY: отчёт о переносе остатка (best-effort). ПОСЛЕ выдачи и события покупки:
         # уведомление владельцу не задерживает и не срывает то, за что заплачено.
         if transaction.purchase_type in (PurchaseType.CHANGE, PurchaseType.RENEW):
@@ -1043,5 +1067,5 @@ def apply() -> str:
     target.ProcessPayment._execute = ProcessPayment_execute
     return (
         "пополнение баланса, подарок через шлюз, спасение опоздавших платежей, "
-        "отчёт о переносе остатка и докупка устройства"
+        "отчёт о переносе остатка, докупка устройства и семья после оплаты"
     )
