@@ -9,6 +9,7 @@ import { PromocodeCard } from "@/components/PromocodeCard";
 import { TrialDiscountBanner } from "@/components/TrialDiscountBanner";
 import { RenewalDiscountBanner } from "@/components/RenewalBanner";
 import { formatDate, formatTrafficLimit } from "@/lib/format";
+import { defaultTermDays, termSavings } from "@/lib/termSavings";
 import { changeExtraNote, renewExtraUntil, type ChangeExtraNote } from "@/lib/extraDevice";
 import { onReturnFromPayment, openPayment } from "@/lib/payment";
 import { changeTrafficNote, offerView } from "@/lib/extraTraffic";
@@ -354,7 +355,10 @@ export default function BillingPage() {
       const data = await subscriptionApi.offers();
       setOffers(data);
       if (data.gateways.length > 0) setSelectedGateway(data.gateways[0]!.gateway_type);
-      const firstDuration = data.plans[0]?.durations[0]?.days ?? null;
+      // По умолчанию — 90 дней, если такой срок есть (lib/termSavings: самый ходовой
+      // из длинных, и выгода на нём уже заметна). Ссылки с тарифом и сроком и
+      // «Продлить» из бота выбирают срок сами — ниже, через preselect.
+      const firstDuration = defaultTermDays(data.plans);
       // `?renew=1` — ссылка «Продлить» из сообщения бота: тариф и срок витрина
       // выбирает сама (см. renewPreselect), боту знать их неоткуда.
       const preselect =
@@ -471,6 +475,15 @@ export default function BillingPage() {
     offers?.plans.forEach((p) => p.durations.forEach((d) => set.add(d.days)));
     return Array.from(set).sort((a, b) => a - b);
   }, [offers]);
+
+  // Выгода каждого срока против помесячной оплаты — на кнопке срока (lib/termSavings).
+  const termSavingsBy = useMemo(() => {
+    const out: Record<number, number | null> = {};
+    termDays.forEach((d) => {
+      out[d] = offers ? termSavings(offers.plans, d, selectedGateway) : null;
+    });
+    return out;
+  }, [offers, termDays, selectedGateway]);
 
   const handlePurchase = async (plan: PlanOfferResponse) => {
     if (payBlocked) return;
@@ -597,6 +610,7 @@ export default function BillingPage() {
             <button
               key={d}
               onClick={() => setSelectedDays(d)}
+              title={termSavingsBy[d] != null ? `−${termSavingsBy[d]}%` : undefined}
               className={clsx(
                 "rounded-xl border px-4 py-2 text-sm font-medium transition-all",
                 selectedDays === d
@@ -605,6 +619,11 @@ export default function BillingPage() {
               )}
             >
               {t("billing.termDays", { d })}
+              {termSavingsBy[d] != null && (
+                <span aria-hidden="true" className="ml-1.5 rounded-md bg-success/15 px-1.5 py-0.5 text-[11px] font-semibold text-success">
+                  −{termSavingsBy[d]}%
+                </span>
+              )}
             </button>
           ))}
         </div>

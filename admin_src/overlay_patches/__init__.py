@@ -355,6 +355,11 @@ def install() -> None:
             "plan_change_bot",
         ),
         (
+            "выгода на кнопках сроков",
+            "src.telegram.routers.subscription.getters",
+            "duration_savings",
+        ),
+        (
             "письма в оформлении кабинета",
             "src.infrastructure.services",
             "email_sender",

@@ -56,6 +56,16 @@ function open(data: SubscriptionOffersResponse, url = "/billing") {
   );
 }
 
+/**
+ * По умолчанию витрина выбирает 90 дней (lib/termSavings). Сценарии ниже написаны про
+ * месячный срок — поэтому, как и человек, явно нажимаем «30 дн.»; сам выбор по
+ * умолчанию проверяет отдельный тест.
+ */
+async function openMonth(data: SubscriptionOffersResponse) {
+  open(data);
+  fireEvent.click(await screen.findByRole("button", { name: ru("billing.termDays", { d: 30 }) }));
+}
+
 /** Раскрыть карточку тарифа (заголовок карточки — кнопка с его именем). */
 async function expand(code: string) {
   fireEvent.click(await screen.findByRole("button", { name: new RegExp(code) }));
@@ -77,7 +87,7 @@ afterEach(cleanup);
 
 describe("BillingPage: смена тарифа с потерей дней — только после подтверждения", () => {
   it("шлюз: первый клик спрашивает, «Да» платит ровно один раз", async () => {
-    open(offers(showcase(), { current_days_left: 29 }));
+    await openMonth(offers(showcase(), { current_days_left: 29 }));
     await expand("DUO2");
     // Предупреждение видно ещё до клика.
     expect(document.body.textContent).toContain(ru("billing.changeWarn", { days: 29 }));
@@ -94,7 +104,7 @@ describe("BillingPage: смена тарифа с потерей дней — т
   });
 
   it("баланс: то же самое для списания с баланса", async () => {
-    open(offers(showcase(), { current_days_left: 29 }));
+    await openMonth(offers(showcase(), { current_days_left: 29 }));
     await expand("DUO2");
     fireEvent.click(balanceButton()!);
     await act(async () => {});
@@ -108,7 +118,7 @@ describe("BillingPage: смена тарифа с потерей дней — т
   });
 
   it("«Отмена» закрывает подтверждение и ничего не оплачивает", async () => {
-    open(offers(showcase(), { current_days_left: 29 }));
+    await openMonth(offers(showcase(), { current_days_left: 29 }));
     await expand("DUO2");
     fireEvent.click(selectButton()!);
     fireEvent.click(await screen.findByRole("button", { name: ru("common.cancel") }));
@@ -118,7 +128,7 @@ describe("BillingPage: смена тарифа с потерей дней — т
   });
 
   it("сменили срок после первого клика — подтверждение сброшено, клик снова только спрашивает", async () => {
-    open(offers(showcase(), { current_days_left: 29 }));
+    await openMonth(offers(showcase(), { current_days_left: 29 }));
     await expand("DUO2");
     fireEvent.click(selectButton()!);
     expect(yesButton()).not.toBeNull();
@@ -144,7 +154,7 @@ describe("BillingPage: смена тарифа с потерей дней — т
 
 describe("BillingPage: где терять нечего — как раньше, с первого клика", () => {
   it("продление своего тарифа — extend сразу, без вопросов", async () => {
-    open(offers(showcase(), { current_days_left: 29 }));
+    await openMonth(offers(showcase(), { current_days_left: 29 }));
     await expand("SOLO1");
     expect(document.body.textContent).not.toContain(ru("billing.changeWarn", { days: 29 }));
     fireEvent.click(selectButton()!);
@@ -172,12 +182,12 @@ describe("BillingPage: ссылка ?plan=&days= только предвыбир
     expect(payWithBalance).not.toHaveBeenCalled();
   });
 
-  it("?plan=bogus&days=abc — поведение по умолчанию: ничего не раскрыто, срок первый", async () => {
+  it("?plan=bogus&days=abc — поведение по умолчанию: ничего не раскрыто, срок 90 дней", async () => {
     open(offers(showcase(), { current_days_left: 29 }), "/billing?plan=bogus&days=abc");
     await screen.findByRole("button", { name: /DUO2/ });
     expect(selectButton()).toBeNull();
     await expand("DUO2");
-    expect(document.body.textContent).toContain(ru("billing.forDays", { days: 30 }));
+    expect(document.body.textContent).toContain(ru("billing.forDays", { days: 90 }));
   });
 });
 
@@ -205,7 +215,7 @@ const carrying = (entries: PlanChangeCarryEntry[], over: Partial<SubscriptionOff
 
 describe("BillingPage: перенос остатка — с первого клика, спрашиваем только при потере", () => {
   it("шлюз: «добавится 14 дн.» видно до клика, purchase — с первого клика ровно раз", async () => {
-    open(carrying([carryEntry("DUO2", 30, 14)]));
+    await openMonth(carrying([carryEntry("DUO2", 30, 14)]));
     await expand("DUO2");
     expect(document.body.textContent).toContain(ru("billing.changeCarry", { left: 29, bonus: 14 }));
     expect(document.body.textContent).not.toContain(ru("billing.changeWarn", { days: 29 }));
@@ -217,7 +227,7 @@ describe("BillingPage: перенос остатка — с первого кл�
   });
 
   it("баланс: то же — списание с первого клика", async () => {
-    open(carrying([carryEntry("DUO2", 30, 14)]));
+    await openMonth(carrying([carryEntry("DUO2", 30, 14)]));
     await expand("DUO2");
     fireEvent.click(balanceButton()!);
     await waitFor(() => expect(payWithBalance).toHaveBeenCalledTimes(1));
@@ -225,7 +235,7 @@ describe("BillingPage: перенос остатка — с первого кл�
   });
 
   it("часть перенести нельзя: первый клик только спрашивает, «Да» платит один раз", async () => {
-    open(carrying([carryEntry("DUO2", 30, 11, 3)]));
+    await openMonth(carrying([carryEntry("DUO2", 30, 11, 3)]));
     await expand("DUO2");
     expect(document.body.textContent).toContain(ru("billing.changeCarryLost", { bonus: 11, lost: 3 }));
 
@@ -239,7 +249,7 @@ describe("BillingPage: перенос остатка — с первого кл�
   });
 
   it("упор в предел: текст про предел переноса, а не «цена неизвестна»; подтверждение", async () => {
-    open(carrying([{ ...carryEntry("DUO2", 30, 3650, 964), capped: true, lost_reason: "cap" }], { plan_change_keeps_days: false }));
+    await openMonth(carrying([{ ...carryEntry("DUO2", 30, 3650, 964), capped: true, lost_reason: "cap" }], { plan_change_keeps_days: false }));
     await expand("DUO2");
     expect(document.body.textContent).toContain(ru("billing.changeCarryLostCap", { bonus: 3650, lost: 964 }));
     expect(document.body.textContent).not.toContain(ru("billing.changeCarryLost", { bonus: 3650, lost: 964 }));
@@ -250,7 +260,7 @@ describe("BillingPage: перенос остатка — с первого кл�
   });
 
   it("смена срока 30 → 90 меняет число в тексте", async () => {
-    open(carrying([carryEntry("DUO2", 30, 14), carryEntry("DUO2", 90, 45)]));
+    await openMonth(carrying([carryEntry("DUO2", 30, 14), carryEntry("DUO2", 90, 45)]));
     await expand("DUO2");
     expect(document.body.textContent).toContain(ru("billing.changeCarry", { left: 29, bonus: 14 }));
     fireEvent.click(screen.getByRole("button", { name: ru("billing.termDays", { d: 90 }) }));
@@ -259,7 +269,7 @@ describe("BillingPage: перенос остатка — с первого кл�
   });
 
   it("остаток дешевле дня нового тарифа — «ничего не добавится», без подтверждения", async () => {
-    open(carrying([carryEntry("DUO2", 30, 0)]));
+    await openMonth(carrying([carryEntry("DUO2", 30, 0)]));
     await expand("DUO2");
     expect(document.body.textContent).toContain(ru("billing.changeCarrySmall", { left: 29 }));
     fireEvent.click(selectButton()!);
@@ -294,7 +304,7 @@ describe("BillingPage: докупленные устройства при сме
     });
 
   it("перенос включён — «стоимость добавится днями», оплата с первого клика", async () => {
-    open(withExtras());
+    await openMonth(withExtras());
     await expand("DUO2");
     await waitFor(() =>
       expect(document.body.textContent).toContain(ru("billing.changeExtra", { n: 1, limit: 2 })),
