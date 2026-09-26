@@ -368,3 +368,14 @@ def test_panel_missing_waits_for_grace_whatever_the_owner_does():
     # Владелец платит: свежий пробуем вернуть (вдруг нашёлся), старый — удаляем.
     d = family.plan_decisions(owner(), [fresh, old], NOW, 30)
     assert actions(d) == {1: ("resume", None), 2: ("delete", "panel_missing")}
+
+
+def test_period_limit_counts_replacements():
+    """Мест 2 — за период можно завести 3 (одна замена), четвёртый — после продления."""
+    cfg = {"enabled": True}
+    assert family.period_limit(owner()) == 3
+    assert family.create_eligibility(owner(), cfg, 1, NOW, created_in_period=2) is None
+    assert family.create_eligibility(owner(), cfg, 1, NOW, created_in_period=3) == "period_limit"
+    # Мест нет вовсе — «максимум», а не «лимит периода»: причина честнее.
+    assert family.create_eligibility(owner(), cfg, 2, NOW, created_in_period=3) == "max_reached"
+    assert family.period_limit(owner(terms=None)) is None

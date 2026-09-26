@@ -117,6 +117,50 @@ describe("FamilyPage", () => {
     expect(first).toBe(second);
   });
 
+  it("сменили имя после обрыва — это новая просьба и новый ключ", async () => {
+    createMock.mockRejectedValueOnce(new Error("network")).mockResolvedValueOnce({ result: "created", profile_id: 7 });
+    renderPage();
+    const input = await screen.findByLabelText(ru("family.namePlaceholder"));
+    fireEvent.change(input, { target: { value: "Сын" } });
+    fireEvent.click(screen.getByRole("button", { name: ru("family.add") }));
+    await waitFor(() => expect(document.body.textContent).toContain(ru("family.errGeneric")));
+    fireEvent.change(input, { target: { value: "Дочь" } });
+    fireEvent.click(screen.getByRole("button", { name: ru("family.add") }));
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(2));
+    const [first, second] = createMock.mock.calls.map((c) => c[0] as { request_id: string; label: string });
+    expect(second!.label).toBe("Дочь");
+    expect(first!.request_id).not.toBe(second!.request_id);
+  });
+
+  it("семья занята — «повторите через минуту», повтор тем же ключом", async () => {
+    createMock.mockResolvedValueOnce({ result: "busy" }).mockResolvedValueOnce({ result: "created", profile_id: 8 });
+    renderPage();
+    const input = await screen.findByLabelText(ru("family.namePlaceholder"));
+    fireEvent.change(input, { target: { value: "Папа" } });
+    fireEvent.click(screen.getByRole("button", { name: ru("family.add") }));
+    await waitFor(() => expect(document.body.textContent).toContain(ru("family.errBusy")));
+    fireEvent.click(screen.getByRole("button", { name: ru("family.add") }));
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(2));
+    const [first, second] = createMock.mock.calls.map((c) => (c[0] as { request_id: string }).request_id);
+    expect(first).toBe(second);
+  });
+
+  it("правило замен за период видно до того, как в него упёрлись", async () => {
+    getMock.mockResolvedValue(answer({ created_in_period: 2, period_limit: 4 }));
+    renderPage();
+    await screen.findByText("Мама");
+    expect(document.body.textContent).toContain(ru("family.periodHint", { limit: 4, created: 2 }));
+  });
+
+  it("лимит за период — причина словами", async () => {
+    getMock.mockResolvedValue(answer({ available: false, reason: "period_limit" }));
+    renderPage();
+    await screen.findByText("Мама");
+    expect(document.body.textContent).toContain(
+      ru("family.cantAdd", { reason: ru("family.reason.period_limit") }),
+    );
+  });
+
   it("удаление — только после подтверждения", async () => {
     removeMock.mockResolvedValue({ result: "deleted" });
     renderPage();

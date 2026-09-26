@@ -233,6 +233,7 @@ export function AdminFamilyPage() {
       <section className={SECTION}>
         <h3 className="text-sm font-semibold text-fg">{t("adm.family.plans_title")}</h3>
         <p className="mt-0.5 text-xs text-fg-muted">{t("adm.family.plans_hint")}</p>
+        <p className="mt-1 text-xs text-fg-muted">{t("adm.family.period_note")}</p>
         {data.plans.length === 0 ? (
           <p className="mt-3 text-sm text-fg-muted">{t("adm.family.plans_empty")}</p>
         ) : (

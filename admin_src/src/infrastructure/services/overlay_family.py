@@ -78,6 +78,12 @@ TERMS_BOUNDS = (1, 10)
 # Отрицательный id не пускает профиль ни в выборки «по тарифу», ни в MRR.
 FAMILY_PLAN_ID = -6
 
+# Сколько профилей сверх мест тарифа можно завести за один оплаченный период —
+# «удалить и завести заново». Больше нельзя: новый профиль — это свежий трафик тарифа
+# и пустой список устройств, и без счётчика «удалить и завести» обходило бы и лимит
+# трафика, и перерыв между сбросами устройств. Счётчик обнуляется с новым периодом.
+REPLACEMENTS_PER_PERIOD = 1
+
 USERNAME_PREFIX = "rs_fam_"
 REFERRAL_PREFIX = "fam_"
 LABEL_MAX = 24
@@ -349,10 +355,25 @@ def owner_condition(owner: OwnerState, now: datetime) -> str:
     return "ok"
 
 
+def period_limit(owner: OwnerState) -> Optional[int]:
+    """Сколько профилей можно завести за оплаченный период (места + замены)."""
+    if owner.terms is None:
+        return None
+    return owner.terms.max_profiles + REPLACEMENTS_PER_PERIOD
+
+
 def create_eligibility(
-    owner: OwnerState, config: dict[str, Any], live_count: int, now: datetime
+    owner: OwnerState,
+    config: dict[str, Any],
+    live_count: int,
+    now: datetime,
+    created_in_period: int = 0,
 ) -> Optional[str]:
-    """Почему НЕЛЬЗЯ завести профиль (код причины) или None."""
+    """Почему НЕЛЬЗЯ завести профиль (код причины) или None.
+
+    `created_in_period` — сколько профилей уже заведено за текущий оплаченный период
+    (включая удалённые): см. REPLACEMENTS_PER_PERIOD.
+    """
     if not config.get("enabled"):
         return "disabled"
     if not owner.exists or owner.sub_id is None:
@@ -374,6 +395,9 @@ def create_eligibility(
         return "not_active"
     if live_count >= owner.terms.max_profiles:
         return "max_reached"
+    limit = period_limit(owner)
+    if limit is not None and created_in_period >= limit:
+        return "period_limit"
     return None
 
 
@@ -682,6 +706,27 @@ PENDING_SQL = (
 )
 HAS_ANY_SQL = "SELECT EXISTS (SELECT 1 FROM family_profiles)"
 
+# Начало текущего оплаченного периода: последняя выданная покупка (продление) или
+# создание строки подписки (смена тарифа, новая подписка) — что позже.
+PERIOD_START_SQL = (
+    "SELECT GREATEST(s.created_at, ("
+    "  SELECT max(t.updated_at) FROM transactions t "
+    "  WHERE t.user_id = u.id AND t.status::text = 'COMPLETED' AND t.is_test = false "
+    "  AND (CASE WHEN t.plan_snapshot->>'id' ~ '^-?[0-9]+$' "
+    "       THEN (t.plan_snapshot->>'id')::int ELSE 0 END) > 0 "
+    "  AND t.updated_at <= s.updated_at)) "
+    "FROM users u JOIN subscriptions s ON s.id = u.current_subscription_id "
+    "WHERE u.id = :uid"
+)
+# Сколько профилей заведено с начала периода: удачно созданные (журнал переживает
+# удаление профиля) и те, что создаются прямо сейчас.
+CREATED_IN_PERIOD_SQL = (
+    "SELECT (SELECT count(*) FROM family_events "
+    "        WHERE owner_user_id = :uid AND kind = 'created' AND created_at >= :since) "
+    "     + (SELECT count(*) FROM family_profiles "
+    "        WHERE owner_user_id = :uid AND status = 'creating')"
+)
+
 
 def _row_profile(r: Any) -> ProfileRow:
     return ProfileRow(
@@ -832,6 +877,16 @@ async def profile_by_request(session: "AsyncSession", request_id: Any) -> Option
 
 async def last_purchase_at(session: "AsyncSession", owner_id: int) -> Optional[datetime]:
     return (await session.execute(text(LAST_PURCHASE_SQL), {"uid": owner_id})).scalar()
+
+
+async def created_in_period(session: "AsyncSession", owner_id: int) -> int:
+    since = (await session.execute(text(PERIOD_START_SQL), {"uid": owner_id})).scalar()
+    if since is None:
+        return 0
+    return int(
+        (await session.execute(text(CREATED_IN_PERIOD_SQL), {"uid": owner_id, "since": since})).scalar()
+        or 0
+    )
 
 
 async def has_any_profiles(session: "AsyncSession") -> bool:
@@ -1260,7 +1315,8 @@ async def create_profile(
         return _replay(saved, owner_id)
     profiles = await load_profiles(session, owner_id)
     live = [p for p in profiles if p.status in LIVE_STATUSES]
-    why = create_eligibility(owner, config, len(live), now)
+    created = await created_in_period(session, owner_id)
+    why = create_eligibility(owner, config, len(live), now, created)
     if why is not None:
         await session.rollback()
         return {"result": "not_available", "reason": why}
@@ -2183,10 +2239,11 @@ async def family_view(
     now = now or now_utc()
     owner = await load_owner(session, owner_id)
     profiles = await load_profiles(session, owner_id)
+    created = await created_in_period(session, owner_id) if owner.terms else 0
     await session.rollback()
     visible = [p for p in profiles if p.status in ("creating", "active", "suspended", "deleting")]
     live = [p for p in profiles if p.status in LIVE_STATUSES]
-    why = create_eligibility(owner, config, len(live), now)
+    why = create_eligibility(owner, config, len(live), now, created)
     numbers: list[dict] = [{} for _ in visible]
     if with_panel and sdk is not None:
         jobs = [
@@ -2229,6 +2286,8 @@ async def family_view(
             else None
         ),
         "used": len(live),
+        "created_in_period": created,
+        "period_limit": period_limit(owner),
         "profiles": items,
     }
 
@@ -2268,6 +2327,10 @@ _REASON_RU = {
     "reserve": "подписка закончилась",
     "not_active": "подписка не активна",
     "max_reached": "профилей уже максимум",
+    "period_limit": (
+        "за этот оплаченный период профилей уже заведено максимум — новый можно будет "
+        "добавить после продления"
+    ),
     "plan": "тариф больше не семейный",
     "owner_expired": "подписка закончилась",
     "owner_frozen": "подписка на паузе",

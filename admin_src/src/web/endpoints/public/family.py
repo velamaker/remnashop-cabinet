@@ -87,6 +87,10 @@ def _payload(view: dict[str, Any], reset_enabled: bool, cooldown_hours: int) -> 
         "plan_name": view["plan_name"],
         "terms": view["terms"],
         "used": view["used"],
+        # Сколько профилей заведено за оплаченный период и сколько можно (места +
+        # одна замена): кабинет объясняет правило человеку до того, как он упрётся.
+        "created_in_period": view.get("created_in_period"),
+        "period_limit": view.get("period_limit"),
         "profiles": profiles,
         "reset_devices": {"enabled": reset_enabled, "cooldown_hours": cooldown_hours},
     }

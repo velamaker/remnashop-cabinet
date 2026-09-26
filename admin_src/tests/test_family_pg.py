@@ -1266,3 +1266,29 @@ async def test_owners_longest_unchecked_go_first(db):
     )
     async with db.session() as s:
         assert await family.owners_to_reconcile(s, full=True, limit=1) == [first]
+
+
+async def test_delete_and_recreate_is_limited_per_paid_period(db):
+    """«Удалить и завести заново» — свежий трафик и пустой список устройств. За период
+    можно завести на один профиль больше, чем мест; дальше — после продления."""
+    _plan, owner_id, (first, second) = await _family(db, 2, terms=(2, 2))
+
+    async def remove(pid: int) -> None:
+        async with db.session() as s:
+            result = await family.delete_profile(s, db.panel, owner_id=owner_id, profile_id=pid, actor="t")
+        assert result["result"] == "deleted"
+
+    await remove(first)
+    third = await db.create(owner_id, "Замена")
+    assert third["result"] == "created", "одна замена за период разрешена"
+    await remove(second)
+    refused = await db.create(owner_id, "Ещё одна")
+    assert refused == {"result": "not_available", "reason": "period_limit"}
+    async with db.session() as s:
+        view = await family.family_view(s, None, owner_id, with_panel=False)
+    assert view["reason"] == "period_limit" and view["period_limit"] == 3
+    assert view["created_in_period"] == 3
+
+    # Продление начинает новый период — завести снова можно.
+    await _renew_owner(db, owner_id, now() + timedelta(days=60))
+    assert (await db.create(owner_id, "Ещё одна"))["result"] == "created"

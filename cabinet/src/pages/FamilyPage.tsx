@@ -33,8 +33,16 @@ const REASONS = new Set([
   "reserve",
   "not_active",
   "max_reached",
+  "period_limit",
 ]);
-const SUSPEND_REASONS = new Set(["plan", "owner_expired", "owner_frozen", "owner_gone", "owner_blocked"]);
+const SUSPEND_REASONS = new Set([
+  "plan",
+  "owner_expired",
+  "owner_frozen",
+  "owner_gone",
+  "owner_blocked",
+  "panel_missing",
+]);
 
 function useFamily(allowed: boolean) {
   const [data, setData] = useState<FamilyResponse | null>(null);
@@ -141,6 +149,7 @@ function ProfileCard({
       if (res.result === "reset") setNote(t("family.resetDone"));
       else if (res.result === "cooldown")
         setError(t("family.resetCooldown", { date: res.available_at ? formatDateTime(res.available_at) : "—" }));
+      else if (res.result === "busy") setError(t("family.errBusy"));
       else setError(res.reason === "disabled" ? t("family.resetDisabled") : t("family.errGeneric"));
       onChanged();
     } catch (e) {
@@ -155,6 +164,10 @@ function ProfileCard({
     setError(null);
     try {
       const res = await familyApi.remove(profile.id);
+      if (res.result === "busy") {
+        setError(t("family.errBusy"));
+        return;
+      }
       setNote(res.result === "deleted" ? t("family.deleted") : t("family.deletePending"));
       setConfirming(false);
       resetFamilyNav();
@@ -241,7 +254,9 @@ function AddProfile({ onCreated }: { onCreated: () => void }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Ключ попытки: повтор после обрыва связи — тот же профиль, а не второй.
+  // Ключ попытки: повтор после обрыва связи — тот же профиль, а не второй. Сменили
+  // имя — это уже другая просьба и новый ключ: иначе бот вернул бы профиль со старым
+  // именем, если первая попытка всё-таки дошла.
   const requestId = useRef<string | null>(null);
 
   const submit = async (e: FormEvent) => {
@@ -257,6 +272,11 @@ function AddProfile({ onCreated }: { onCreated: () => void }) {
     setError(null);
     try {
       const res = await familyApi.create({ request_id: requestId.current, label });
+      if (res.result === "busy") {
+        // Бот ничего не записал — повтор тем же ключом безопасен.
+        setError(t("family.errBusy"));
+        return;
+      }
       // Окончательный ответ — следующей попытке нужен новый ключ.
       requestId.current = null;
       if (res.result === "created") {
@@ -292,7 +312,10 @@ function AddProfile({ onCreated }: { onCreated: () => void }) {
       <div className="min-w-0 flex-1">
         <input
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => {
+            setName(e.target.value);
+            requestId.current = null;
+          }}
           maxLength={24}
           placeholder={t("family.namePlaceholder")}
           aria-label={t("family.namePlaceholder")}
@@ -379,6 +402,15 @@ export default function FamilyPage() {
             ) : (
               <p className="text-sm text-fg-muted">
                 {t("family.cantAdd", { reason: t(`family.reason.${reasonKey ?? "not_active"}`) })}
+              </p>
+            )}
+            {/* Правило «удалить и завести заново» — до того, как человек в него упрётся. */}
+            {data.period_limit != null && (
+              <p className="mt-3 text-xs text-fg-subtle">
+                {t("family.periodHint", {
+                  limit: data.period_limit,
+                  created: data.created_in_period ?? 0,
+                })}
               </p>
             )}
           </Card>

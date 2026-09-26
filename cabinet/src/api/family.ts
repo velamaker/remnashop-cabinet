@@ -13,7 +13,7 @@ export interface FamilyProfile {
   id: number;
   label: string;
   status: FamilyProfileStatus;
-  /** plan | owner_expired | owner_frozen | owner_gone | owner_blocked */
+  /** plan | owner_expired | owner_frozen | owner_gone | owner_blocked | panel_missing */
   suspend_reason: string | null;
   expired: boolean;
   expire_at: string | null;
@@ -34,11 +34,15 @@ export interface FamilyResponse {
   /** Можно ли прямо сейчас завести ещё один профиль. */
   available: boolean;
   /** Почему нельзя: disabled | no_subscription | blocked | trial | not_family |
-   *  frozen | reserve | not_active | max_reached. */
+   *  frozen | reserve | not_active | max_reached | period_limit. */
   reason?: string | null;
   plan_name?: string | null;
   terms?: { max_profiles: number; devices_per_profile: number } | null;
   used?: number;
+  /** Сколько профилей заведено за оплаченный период (включая удалённые) и сколько
+   *  можно: места тарифа + одна замена. Нет полей — бот старее этого правила. */
+  created_in_period?: number;
+  period_limit?: number | null;
   profiles: FamilyProfile[];
   reset_devices?: { enabled: boolean; cooldown_hours: number };
 }
@@ -51,12 +55,15 @@ export type FamilyCreateResult =
   | { result: "label_taken" }
   | { result: "bad_label" }
   | { result: "bad_request" }
-  | { result: "not_available"; reason: string };
+  | { result: "not_available"; reason: string }
+  /** Очередь семьи занята (крон сверяет её с панелью) — повторить через минуту. */
+  | { result: "busy" };
 
 export type FamilyResetResult =
   | { result: "reset" }
   | { result: "cooldown"; available_at: string | null }
-  | { result: "not_available"; reason: string };
+  | { result: "not_available"; reason: string }
+  | { result: "busy" };
 
 export const familyApi = {
   get: () => api.get<FamilyResponse>("/family"),
@@ -66,7 +73,8 @@ export const familyApi = {
     api.post<FamilyCreateResult>("/family/profiles", data),
   resetDevices: (id: number) =>
     api.post<FamilyResetResult>(`/family/profiles/${id}/reset-devices`, {}),
-  remove: (id: number) => api.delete<{ result: "deleted" | "pending" }>(`/family/profiles/${id}`),
+  remove: (id: number) =>
+    api.delete<{ result: "deleted" | "pending" | "busy" }>(`/family/profiles/${id}`),
 };
 
 /** Показывать ли вход «Семья»: функция включена и тариф семейный — или профили уже есть. */

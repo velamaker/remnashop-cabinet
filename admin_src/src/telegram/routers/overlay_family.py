@@ -65,6 +65,8 @@ PROMPT_MARK = "👨‍👩‍👧 Новый профиль"
 _REQUEST_NS = uuid_lib.UUID("5f0c6a1e-2b7d-4c61-9d7e-6a3f0b1c8e42")
 
 TITLE = "👨‍👩‍👧 <b>Семья</b>"
+# Очередь семьи занята (крон как раз сверяет её с панелью): не ждём, а просим повторить.
+BUSY_TEXT = "Семья сейчас обновляется — попробуйте через минуту"
 MENU_BUTTON_TEXT = "👨‍👩‍👧 Семья"
 
 
@@ -377,6 +379,7 @@ async def on_family_reset(
         "reset": "Устройства профиля отвязаны — подключитесь заново",
         "not_found": "Профиль не найден",
         "panel_error": "Сервер не ответил — попробуйте позже",
+        "busy": BUSY_TEXT,
     }.get(result.get("result"))
     if result.get("result") == "cooldown":
         answer = f"Сбросить снова можно после {result['available_at'].strftime('%d.%m %H:%M')} (UTC)"
@@ -477,6 +480,7 @@ async def on_family_delete(
         "deleted": "Профиль удалён",
         "pending": "Профиль удаляется — ссылка отключится в ближайшие минуты",
         "not_found": "Профиль не найден",
+        "busy": BUSY_TEXT,
     }.get(result.get("result"), "Готово")
     text, markup = list_view(await _view(fam_session, fam_panel, user.id))
     await _edit(callback, text, markup)
@@ -581,6 +585,7 @@ async def on_family_name(
         "label_taken": "Профиль с таким именем уже есть — пришлите другое имя ответом на вопрос выше.",
         "bad_label": "Имя пустое — пришлите его текстом ответом на вопрос выше.",
         "conflict": "Не получилось — нажмите «Добавить профиль» ещё раз.",
+        "busy": f"{BUSY_TEXT} — пришлите имя ещё раз ответом на вопрос выше.",
     }
     if outcome == "not_available":
         await message.answer(f"Добавить профиль нельзя: {family.reason_ru(result.get('reason'))}.")
