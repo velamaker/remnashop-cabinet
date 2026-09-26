@@ -39,6 +39,7 @@ import AdminTrialDiscountPage from "@/pages/admin/AdminTrialDiscountPage";
 import AdminWinbackPage from "@/pages/admin/AdminWinbackPage";
 import AdminExtraDevicePage from "@/pages/admin/AdminExtraDevicePage";
 import AdminExtraTrafficPage from "@/pages/admin/AdminExtraTrafficPage";
+import AdminFamilyPage from "@/pages/admin/AdminFamilyPage";
 import AdminPaymentReminderPage from "@/pages/admin/AdminPaymentReminderPage";
 import AdminChurnSignalsPage from "@/pages/admin/AdminChurnSignalsPage";
 import AdminRenewalDiscountPage from "@/pages/admin/AdminRenewalDiscountPage";
@@ -325,6 +326,14 @@ export default function App() {
               element={
                 <AdminRoute>
                   <AdminExtraTrafficPage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/family"
+              element={
+                <AdminRoute>
+                  <AdminFamilyPage />
                 </AdminRoute>
               }
             />

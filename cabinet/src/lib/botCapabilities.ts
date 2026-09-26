@@ -108,6 +108,7 @@ export const PAGE_NEEDS_BOT: Readonly<Record<string, BotCap>> = {
   "/admin/extra-traffic": "extra_traffic",
   "/admin/payment-reminder": "payment_reminder",
   "/admin/churn-signals": "churn_signals",
+  "/admin/family": "family_profiles",
 };
 
 /** Что показать на прямом заходе по адресу спрятанной страницы. */

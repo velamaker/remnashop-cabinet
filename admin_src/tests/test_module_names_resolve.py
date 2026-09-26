@@ -58,6 +58,14 @@ MODULES = [
     "overlay_patches.stars_payment",
     # Тревога о падении кронов: сорвись она на NameError — молчали бы все кроны сразу.
     "src.infrastructure.services.overlay_cron_guard",
+    # Семейные профили: сервис стоит в денежном пути (хук оплаты) и в удалении людей,
+    # крон приостанавливает и продлевает чужие подписки, ручки и бот создают профили.
+    "src.infrastructure.services.overlay_family",
+    "src.infrastructure.taskiq.tasks.family",
+    "src.web.endpoints.public.family",
+    "src.web.endpoints.admin.family",
+    "src.telegram.routers.overlay_family",
+    "overlay_patches.family_sync_guard",
 ]
 
 

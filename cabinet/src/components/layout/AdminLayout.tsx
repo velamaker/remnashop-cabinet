@@ -49,7 +49,8 @@ import {
   ShieldCheck,
   MonitorSmartphone,
   BellRing,
-  HeartPulse,} from "lucide-react";
+  HeartPulse,
+  UsersRound,} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
@@ -97,6 +98,7 @@ export const navGroups: { title: string; items: NavItem[] }[] = [
       { to: "/admin/topup", icon: Coins, label: "adm.nav.topup", section: "settings" },
       { to: "/admin/extra-device", icon: MonitorSmartphone, label: "adm.nav.extra_device", section: "settings" },
       { to: "/admin/extra-traffic", icon: Gauge, label: "adm.nav.extra_traffic", section: "settings" },
+      { to: "/admin/family", icon: UsersRound, label: "adm.nav.family", section: "settings" },
       { to: "/admin/payment-reminder", icon: BellRing, label: "adm.nav.payment_reminder", section: "settings" },
       { to: "/admin/reserve", icon: Umbrella, label: "adm.nav.reserve", section: "settings" },
       { to: "/admin/freeze", icon: Snowflake, label: "adm.nav.freeze", section: "settings" },

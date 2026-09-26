@@ -55,6 +55,7 @@ SECTIONS: list[dict[str, Any]] = [
             "extra-device",
             "device-full",
             "extra-traffic",
+            "family",
             "payment-reminder",
             "churn-signals",
             "trial-discount",

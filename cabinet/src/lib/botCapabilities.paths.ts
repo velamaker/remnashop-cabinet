@@ -66,6 +66,11 @@ export const PATH_NEEDS_BOT: Record<string, BotCap> = {
   "POST /api/family/profiles": "family_profiles",
   "POST /api/family/profiles/{}/reset-devices": "family_profiles",
   "DELETE /api/family/profiles/{}": "family_profiles",
+  // Настройки семьи в админке: страницу прячет canPage (PAGE_NEEDS_BOT).
+  "GET /api/admin/family": "family_profiles",
+  "PUT /api/admin/family": "family_profiles",
+  "PUT /api/admin/family/plans/{}": "family_profiles",
+  "DELETE /api/admin/family/plans/{}": "family_profiles",
 };
 
 export const PATH_GRACEFUL: Record<string, string> = {

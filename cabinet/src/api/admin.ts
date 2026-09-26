@@ -1340,6 +1340,52 @@ export const deviceFullAdminApi = {
   update: (data: DeviceFullConfig) => adminApi.put<DeviceFullAdminResponse>("/device-full", data),
 };
 
+// ---------- Семейные профили ----------
+
+export interface FamilyAdminConfig {
+  enabled: boolean;
+  /** Через сколько дней удаляется профиль, приостановленный по тарифу или удалению подписки. */
+  suspend_grace_days: number;
+}
+
+export interface FamilyTerms {
+  max_profiles: number;
+  devices_per_profile: number;
+}
+
+export interface FamilyAdminPlan {
+  id: number;
+  name: string;
+  is_active: boolean;
+  is_trial: boolean;
+  device_limit: number;
+  traffic_limit: number;
+  /** null — тариф обычный. */
+  terms: FamilyTerms | null;
+}
+
+export interface FamilyAdminResponse {
+  config: FamilyAdminConfig;
+  plans: FamilyAdminPlan[];
+  summary: {
+    owners?: number;
+    active?: number;
+    suspended?: number;
+    pending?: number;
+    failing?: number;
+  };
+}
+
+export const familyAdminApi = {
+  get: () => adminApi.get<FamilyAdminResponse>("/family"),
+  update: (data: FamilyAdminConfig) =>
+    adminApi.put<{ config: FamilyAdminConfig }>("/family", data),
+  setTerms: (planId: number, terms: FamilyTerms) =>
+    adminApi.put<{ plan_id: number; terms: FamilyTerms }>(`/family/plans/${planId}`, terms),
+  clearTerms: (planId: number) =>
+    adminApi.delete<{ plan_id: number; terms: null }>(`/family/plans/${planId}`),
+};
+
 // ---------- Докупка трафика ----------
 
 /** Докупленный трафик в карточке пользователя: что действует и что уже кончилось. */
