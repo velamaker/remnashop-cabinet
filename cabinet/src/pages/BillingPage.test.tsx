@@ -191,6 +191,32 @@ describe("BillingPage: ссылка ?plan=&days= только предвыбир
   });
 });
 
+describe("BillingPage: срок по умолчанию на смешанной витрине", () => {
+  // Срок общий для всех карточек. Если 90 дней есть не у всех тарифов, а у своего
+  // (продлеваемого) его нет, витрина открывается на первом сроке, как до выгоды на
+  // кнопках: иначе своя карточка стояла бы без цены и с неактивной оплатой.
+  it("у продлеваемого тарифа нет 90 дней — выбран первый срок", async () => {
+    const mixed = [
+      plan("SOLO1", 1, { type: "RENEW", prices: { 30: "100", 60: "190" } }),
+      plan("DUO2", 2),
+    ];
+    open(offers(mixed, { current_days_left: 29 }));
+    await expand("SOLO1");
+    expect(document.body.textContent).toContain(ru("billing.forDays", { days: 30 }));
+    expect(document.body.textContent).not.toContain(ru("billing.forDays", { days: 90 }));
+  });
+
+  it("у продлеваемого тарифа 90 дней есть — выбраны 90, даже если не у всех", async () => {
+    const mixed = [
+      plan("SOLO1", 1, { type: "RENEW" }),
+      plan("DUO2", 2, { prices: { 30: "200", 60: "380" } }),
+    ];
+    open(offers(mixed, { current_days_left: 29 }));
+    await expand("SOLO1");
+    expect(document.body.textContent).toContain(ru("billing.forDays", { days: 90 }));
+  });
+});
+
 // ── перенос остатка по цене дня ──────────────────────────────────────────────
 
 const carryEntry = (code: string, days: number, bonus: number, lost = 0): PlanChangeCarryEntry => ({

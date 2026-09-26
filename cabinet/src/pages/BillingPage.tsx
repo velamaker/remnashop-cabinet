@@ -355,9 +355,10 @@ export default function BillingPage() {
       const data = await subscriptionApi.offers();
       setOffers(data);
       if (data.gateways.length > 0) setSelectedGateway(data.gateways[0]!.gateway_type);
-      // По умолчанию — 90 дней, если такой срок есть (lib/termSavings: самый ходовой
-      // из длинных, и выгода на нём уже заметна). Ссылки с тарифом и сроком и
-      // «Продлить» из бота выбирают срок сами — ниже, через preselect.
+      // По умолчанию — 90 дней, если он есть у всей витрины или у продлеваемого
+      // тарифа (lib/termSavings: самый ходовой из длинных, и выгода на нём уже
+      // заметна); иначе первый срок. Ссылки с тарифом и сроком и «Продлить» из бота
+      // выбирают срок сами — ниже, через preselect.
       const firstDuration = defaultTermDays(data.plans);
       // `?renew=1` — ссылка «Продлить» из сообщения бота: тариф и срок витрина
       // выбирает сама (см. renewPreselect), боту знать их неоткуда.
