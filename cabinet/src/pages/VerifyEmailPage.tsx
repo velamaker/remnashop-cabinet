@@ -43,11 +43,14 @@ export default function VerifyEmailPage() {
 
   return (
     <div className="app-scroll h-full bg-bg">
-      <div className="bg-grain relative flex min-h-full flex-col overflow-x-hidden">
+      <div className="relative flex min-h-full flex-col overflow-x-hidden">
+        {/* Свечение — утилитами, а не классами витрины: письмо со ссылкой сюда
+            приходит в ЛЮБОЙ установке продукта, а примитивов оформления витрины
+            (panel, aurora, btn-hero…) в опубликованном index.css нет — страница
+            выходила без рамки, кнопки и фона. Сторож: src/showcaseClasses.guard.test.ts. */}
         <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
-          <div className="hairline-grid absolute inset-0" />
           <div
-            className="aurora left-1/2 top-[-15rem] h-[30rem] w-[30rem] -translate-x-1/2"
+            className="absolute left-1/2 top-[-15rem] h-[30rem] w-[30rem] -translate-x-1/2 rounded-full opacity-50 blur-3xl"
             style={{ background: "radial-gradient(circle, var(--accent-glow) 0%, transparent 68%)" }}
           />
         </div>
@@ -64,7 +67,7 @@ export default function VerifyEmailPage() {
         </header>
 
         <main className="relative z-10 mx-auto flex w-full max-w-[26rem] flex-1 flex-col justify-center px-5 pb-12 pt-4 sm:pb-16 sm:pt-6">
-          <div className="panel panel-sheen p-6 text-center sm:p-7">
+          <div className="card-hero p-6 text-center sm:p-7">
             {state === "loading" && (
               <>
                 <Loader2 className="mx-auto h-8 w-8 animate-spin text-accent" />
@@ -74,7 +77,7 @@ export default function VerifyEmailPage() {
             {state === "ok" && (
               <>
                 <CheckCircle2 className="mx-auto h-9 w-9 text-success" />
-                <h1 className="font-display mt-4 text-[1.35rem] leading-tight text-fg">
+                <h1 className="mt-4 text-[1.35rem] font-semibold leading-tight text-fg">
                   {t("verifyEmail.okTitle")}
                 </h1>
                 <p className="mt-2 text-sm leading-relaxed text-fg-muted">
@@ -85,7 +88,7 @@ export default function VerifyEmailPage() {
             {state === "fail" && (
               <>
                 <XCircle className="mx-auto h-9 w-9 text-danger" />
-                <h1 className="font-display mt-4 text-[1.35rem] leading-tight text-fg">
+                <h1 className="mt-4 text-[1.35rem] font-semibold leading-tight text-fg">
                   {t("verifyEmail.failTitle")}
                 </h1>
                 <p className="mt-2 text-sm leading-relaxed text-fg-muted">
@@ -95,7 +98,7 @@ export default function VerifyEmailPage() {
             )}
             <Link
               to="/settings"
-              className="btn-hero mt-6 inline-flex h-11 w-full items-center justify-center rounded-xl text-[15px] font-semibold"
+              className="btn-gradient mt-6 inline-flex h-11 w-full items-center justify-center rounded-xl text-[15px] font-semibold text-white"
             >
               {t("verifyEmail.toSettings")}
             </Link>

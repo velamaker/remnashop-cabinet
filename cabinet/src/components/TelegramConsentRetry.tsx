@@ -75,7 +75,7 @@ export function TelegramConsentRetry({
         type="button"
         onClick={submit}
         disabled={isLoading}
-        className="btn-hero inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl text-[15px] font-semibold disabled:cursor-not-allowed disabled:opacity-60"
+        className="btn-gradient inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl text-[15px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
       >
         {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
         {t("login.viaTelegram")}

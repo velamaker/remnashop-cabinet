@@ -68,7 +68,7 @@ function ReferralUnavailable({
   const Icon = content.icon;
 
   return (
-    <Card className="bg-grain text-center">
+    <Card className="text-center">
       <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-subtle">
         <Icon className="h-6 w-6 text-accent" />
       </div>
@@ -92,7 +92,7 @@ function ReferralCodeCard({ code }: { code: string }) {
   };
 
   return (
-    <Card className="bg-grain">
+    <Card>
       <CardHeader title={t("ref.linkTitle")} subtitle={t("ref.linkSubtitle")} />
       <div className="flex items-center gap-2 rounded-xl bg-bg-subtle p-2">
         <code className="flex-1 truncate px-2 text-xs text-fg-muted">{referralLink}</code>

@@ -62,10 +62,10 @@ export function EmailOptoutPanel({ token }: { token: string }) {
   };
 
   const button =
-    "btn-hero mt-6 inline-flex h-11 w-full items-center justify-center rounded-xl text-[15px] font-semibold disabled:opacity-60";
+    "btn-gradient mt-6 inline-flex h-11 w-full items-center justify-center rounded-xl text-[15px] font-semibold text-white disabled:opacity-60";
 
   return (
-    <div className="panel panel-sheen p-6 text-center sm:p-7">
+    <div className="card-hero p-6 text-center sm:p-7">
       {state === "loading" && (
         <>
           <Loader2 className="mx-auto h-8 w-8 animate-spin text-accent" />
@@ -75,7 +75,7 @@ export function EmailOptoutPanel({ token }: { token: string }) {
       {state === "ask" && (
         <>
           <MailX className="mx-auto h-9 w-9 text-accent" />
-          <h1 className="font-display mt-4 text-[1.35rem] leading-tight text-fg">{t("emailOptout.title")}</h1>
+          <h1 className="mt-4 text-[1.35rem] font-semibold leading-tight text-fg">{t("emailOptout.title")}</h1>
           <p className="mt-2 text-sm leading-relaxed text-fg-muted">{t("emailOptout.intro")}</p>
           <button type="button" className={button} disabled={busy} onClick={() => act(false)}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : t("emailOptout.unsubscribe")}
@@ -85,7 +85,7 @@ export function EmailOptoutPanel({ token }: { token: string }) {
       {state === "done" && (
         <>
           <CheckCircle2 className="mx-auto h-9 w-9 text-success" />
-          <h1 className="font-display mt-4 text-[1.35rem] leading-tight text-fg">{t("emailOptout.doneTitle")}</h1>
+          <h1 className="mt-4 text-[1.35rem] font-semibold leading-tight text-fg">{t("emailOptout.doneTitle")}</h1>
           <p className="mt-2 text-sm leading-relaxed text-fg-muted">{t("emailOptout.doneText")}</p>
           <button type="button" className={button} disabled={busy} onClick={() => act(true)}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : t("emailOptout.resubscribe")}
@@ -95,14 +95,14 @@ export function EmailOptoutPanel({ token }: { token: string }) {
       {state === "resubscribed" && (
         <>
           <CheckCircle2 className="mx-auto h-9 w-9 text-success" />
-          <h1 className="font-display mt-4 text-[1.35rem] leading-tight text-fg">{t("emailOptout.title")}</h1>
+          <h1 className="mt-4 text-[1.35rem] font-semibold leading-tight text-fg">{t("emailOptout.title")}</h1>
           <p className="mt-2 text-sm leading-relaxed text-fg-muted">{t("emailOptout.resubscribedText")}</p>
         </>
       )}
       {(state === "invalid" || state === "failed") && (
         <>
           <XCircle className="mx-auto h-9 w-9 text-danger" />
-          <h1 className="font-display mt-4 text-[1.35rem] leading-tight text-fg">{t("emailOptout.title")}</h1>
+          <h1 className="mt-4 text-[1.35rem] font-semibold leading-tight text-fg">{t("emailOptout.title")}</h1>
           <p className="mt-2 text-sm leading-relaxed text-fg-muted">
             {t(state === "invalid" ? "emailOptout.invalid" : "emailOptout.failed")}
           </p>
@@ -121,11 +121,14 @@ export default function EmailUnsubscribePage() {
 
   return (
     <div className="app-scroll h-full bg-bg">
-      <div className="bg-grain relative flex min-h-full flex-col overflow-x-hidden">
+      <div className="relative flex min-h-full flex-col overflow-x-hidden">
+        {/* Свечение — утилитами, а не классами витрины: письмо со ссылкой сюда
+            приходит в ЛЮБОЙ установке продукта, а примитивов оформления витрины
+            (panel, aurora, btn-hero…) в опубликованном index.css нет — страница
+            выходила без рамки, кнопки и фона. Сторож: src/showcaseClasses.guard.test.ts. */}
         <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
-          <div className="hairline-grid absolute inset-0" />
           <div
-            className="aurora left-1/2 top-[-15rem] h-[30rem] w-[30rem] -translate-x-1/2"
+            className="absolute left-1/2 top-[-15rem] h-[30rem] w-[30rem] -translate-x-1/2 rounded-full opacity-50 blur-3xl"
             style={{ background: "radial-gradient(circle, var(--accent-glow) 0%, transparent 68%)" }}
           />
         </div>

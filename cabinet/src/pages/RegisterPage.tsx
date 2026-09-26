@@ -70,7 +70,7 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="app-scroll bg-grain flex min-h-screen items-center justify-center bg-bg px-4">
+    <div className="app-scroll flex min-h-screen items-center justify-center bg-bg px-4">
       <div className="absolute right-4 top-4 z-30 flex items-center gap-2">
         <LanguageSwitcher />
         <ThemeSwitcher />
