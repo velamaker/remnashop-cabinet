@@ -61,6 +61,11 @@ export const PATH_NEEDS_BOT: Record<string, BotCap> = {
   "GET /api/admin/device-full": "device_full",
   "PUT /api/admin/device-full": "device_full",
   "POST /api/admin/subscriptions/user/{}/extra-traffic/{}/revoke": "extra_traffic",
+  // «Семья»: пункт меню и страницу прячет canFeature (FEATURE_NEEDS_BOT).
+  "GET /api/family": "family_profiles",
+  "POST /api/family/profiles": "family_profiles",
+  "POST /api/family/profiles/{}/reset-devices": "family_profiles",
+  "DELETE /api/family/profiles/{}": "family_profiles",
 };
 
 export const PATH_GRACEFUL: Record<string, string> = {

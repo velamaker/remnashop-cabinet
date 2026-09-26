@@ -40,6 +40,7 @@ CABINET_CAPABILITIES: tuple[str, ...] = (
     "info_i18n",
     "churn_signals",
     "device_full",
+    "family_profiles",
 )
 
 # Заметные изменения ТОЛЬКО в боте — кабинета не касаются, но при «только кабинет»

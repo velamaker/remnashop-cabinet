@@ -93,6 +93,22 @@ except Exception as _gift_exc:  # noqa: BLE001
         await callback.answer()
 
 
+# OVERLAY: раздел «Семья» из главного меню. Импорт защищённый, как у подарков: если
+# раздел вырезали или он не импортируется, меню обязано работать как раньше.
+try:
+    from src.telegram.routers.overlay_family import MENU_BUTTON_TEXT as FAMILY_TEXT
+    from src.telegram.routers.overlay_family import open_family_from_menu
+
+    _FAMILY_AVAILABLE = True
+except Exception as _family_exc:  # noqa: BLE001
+    _FAMILY_AVAILABLE = False
+    FAMILY_TEXT = "👨‍👩‍👧 Семья"
+    logger.warning(f"Overlay family menu button disabled: {_family_exc}")
+
+    async def open_family_from_menu(callback, widget, dialog_manager) -> None:  # type: ignore[misc]
+        await callback.answer()
+
+
 custom_buttons = (
     build_buttons_row(1, text_on_click=on_text_button_click),
     build_buttons_row(2, text_on_click=on_text_button_click),
@@ -153,6 +169,7 @@ async def menu_getter(
     data = await _base_menu_getter(**kwargs)
     await _fix_reset_time(data, _extra_session, _extra_panel, kwargs)
     await _extra_traffic_button(data, _extra_session, _extra_panel, kwargs)
+    await _family_button(data, _extra_session, kwargs)
     cfg = load_menu_config()
     for key, value in cfg.items():
         if isinstance(value, bool):
@@ -331,6 +348,36 @@ async def _extra_traffic_button(data, session, remnawave, kwargs) -> None:
         logger.warning(f"extra_traffic: кнопку в меню не показал: {exc}")
 
 
+# OVERLAY: кнопка «Семья» в главном меню.
+#
+# КОГДА ПОКАЗЫВАЕМ. Функция включена в админке И тариф человека семейный — либо у
+# него уже есть профили (сменил тариф на обычный, а свои ссылки и «Удалить» видеть
+# обязан). Всем остальным кнопки нет: «Семья», упирающаяся в «ваш тариф не
+# семейный», — это реклама, а не помощь.
+#
+# В ПАНЕЛЬ НЕ ХОДИМ: решение принимается по своей базе, одним-двумя запросами.
+async def _family_button(data, session, kwargs) -> None:
+    """Показать кнопку «Семья». Любая ошибка — просто нет кнопки, меню живо."""
+    data.setdefault("family_button", False)
+    data["family_text"] = FAMILY_TEXT
+    if not _FAMILY_AVAILABLE:
+        return
+    try:
+        from src.infrastructure.services import overlay_family as family
+
+        user = kwargs.get("user") or kwargs.get("event_from_user")
+        user_id = getattr(user, "id", None)
+        if user_id is None:
+            return
+        data["family_button"] = await family.menu_visible(session, int(user_id))
+    except Exception as exc:  # noqa: BLE001 — кнопки нет, меню живо
+        logger.warning(f"family: кнопку в меню не показал: {exc}")
+        try:
+            await session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _money(value) -> str:
     """50 вместо 50.00: цену человек читает глазами, а не парсером."""
     text = f"{Decimal(str(value)).normalize():f}"
@@ -494,6 +541,15 @@ menu = Window(
             on_click=open_gift_from_menu,
             when=F["menu_gift"],
             style=_NavColorStyle("gift"),
+        ),
+    ),
+    # OVERLAY: «Семья» — только при включённой функции и семейном тарифе.
+    Row(
+        Button(
+            text=Format("{family_text}"),
+            id="family_open",
+            on_click=open_family_from_menu,
+            when=F["family_button"],
         ),
     ),
     *custom_buttons,

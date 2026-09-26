@@ -180,6 +180,7 @@ def test_no_injected_name_shadows_update_data():
         "menu_getter",            # главное окно бота (правка)
         "devices_getter_overlay", # окно «Устройства» — случай 18.09
         "confirm_getter",         # перенос остатка (правка), объявлен в overlay_patches
+        "on_family_name",         # семья: имя нового профиля ответом на вопрос бота
     ],
 )
 def test_guard_still_sees_known_handlers(name):
