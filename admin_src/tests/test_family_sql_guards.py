@@ -254,3 +254,18 @@ def test_purge_targets_does_not_swallow_database_errors():
     source = inspect.getsource(family.purge_targets)
     assert "to_regclass('family_profiles')" in source
     assert "except Exception" not in source
+
+
+def test_traffic_reset_waits_for_the_issued_period():
+    """Обнулять — за выданный период: оплата не позже обновления строки подписки."""
+    assert "t.updated_at <= s.updated_at" in family.LAST_PURCHASE_SQL
+
+
+def test_reserve_does_not_outlive_a_real_purchase():
+    assert "t.updated_at > r.granted_at" in family.PAUSE_RESERVE_SQL
+
+
+def test_owner_passes_are_fair():
+    for sql in (family.CHANGED_OWNERS_SQL, family.ALL_OWNERS_SQL):
+        assert "ORDER BY bool_or(fp.last_reconciled_at IS NULL) DESC" in sql
+        assert sql.rstrip().endswith("LIMIT :lim")

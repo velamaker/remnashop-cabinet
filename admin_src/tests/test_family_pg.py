@@ -1189,3 +1189,80 @@ async def test_fresh_profile_waits_for_a_reconcile(db):
     """Отметки сверки у только что заведённого профиля нет — крон сверит его сразу."""
     _plan, owner_id, _ids = await _family(db, 1)
     assert (await db.profiles(owner_id))[0].last_reconciled_at is None
+
+
+async def test_cron_waits_until_the_paid_period_is_issued(db):
+    """Счёт уже проведён, а период ещё не выдан (крон попал между шагами базы) — трафик
+    семьи не обнуляется со старым сроком; обнуляется, когда период выдан."""
+    _plan, owner_id, (pid,) = await _family(db, 1)
+    await db.run("UPDATE family_profiles SET last_reconciled_at = now()")
+    await db.run(
+        "INSERT INTO transactions (payment_id, user_id, status, is_test, purchase_type, "
+        "gateway_type, pricing, currency, plan_snapshot, updated_at) "
+        "VALUES (gen_random_uuid(), :u, 'COMPLETED', false, 'RENEW', 'YOOMONEY', "
+        "CAST('{}' AS jsonb), 'RUB', CAST('{\"id\": 7}' AS jsonb), clock_timestamp())",
+        u=owner_id,
+    )
+    await db.reconcile(owner_id)
+    assert db.panel.count("reset") == 0, "трафик обнулён до выдачи оплаченного периода"
+    new_expire = now() + timedelta(days=60)
+    await db.run(
+        "UPDATE subscriptions SET expire_at = :e, updated_at = clock_timestamp() WHERE id = "
+        "(SELECT current_subscription_id FROM users WHERE id = :u)",
+        e=new_expire,
+        u=owner_id,
+    )
+    await db.reconcile(owner_id)
+    assert db.panel.count("reset") == 1
+    assert abs((await db.profiles(owner_id))[0].sub_expire_at - new_expire) < timedelta(seconds=1)
+
+
+async def test_purchase_during_reserve_is_paid_time_for_the_family(db):
+    """Короткий тариф, купленный во время резерва, — оплаченный срок, а не резерв:
+    строка резерва ещё живёт, но семья получает купленное, а не приостановку."""
+    _plan, owner_id, (pid,) = await _family(db, 1)
+    await db.run(
+        "INSERT INTO reserve_grants (user_id, remna_uuid, granted_at, reserve_expire_at, ended) "
+        "VALUES (:u, 'x', now() - interval '1 day', now() + interval '7 days', false)",
+        u=owner_id,
+    )
+    short = now() + timedelta(days=3)
+    await db.run(
+        "INSERT INTO transactions (payment_id, user_id, status, is_test, purchase_type, "
+        "gateway_type, pricing, currency, plan_snapshot, updated_at) "
+        "VALUES (gen_random_uuid(), :u, 'COMPLETED', false, 'CHANGE', 'YOOMONEY', "
+        "CAST('{}' AS jsonb), 'RUB', CAST('{\"id\": 7}' AS jsonb), clock_timestamp())",
+        u=owner_id,
+    )
+    await db.run(
+        "UPDATE subscriptions SET expire_at = :e, updated_at = clock_timestamp() WHERE id = "
+        "(SELECT current_subscription_id FROM users WHERE id = :u)",
+        e=short,
+        u=owner_id,
+    )
+    out = await db.reconcile(owner_id)
+    assert out["synced"] == [pid] and not out["suspended"]
+    after = (await db.profiles(owner_id))[0]
+    assert after.status == "active" and abs(after.sub_expire_at - short) < timedelta(seconds=1)
+
+
+async def test_owners_longest_unchecked_go_first(db):
+    """Хвост больше лимита не должен крутить одних и тех же: первыми — давно не
+    сверявшиеся и ещё ни разу не сверенные."""
+    plan_id = await db.plan()
+    first = await db.owner(plan_id)
+    second = await db.owner(plan_id)
+    assert (await db.create(first, "А"))["result"] == "created"
+    assert (await db.create(second, "Б"))["result"] == "created"
+    await db.run(
+        "UPDATE family_profiles SET last_reconciled_at = now() - interval '1 hour' "
+        "WHERE owner_user_id = :o",
+        o=first,
+    )
+    async with db.session() as s:
+        assert await family.owners_to_reconcile(s, full=True, limit=1) == [second]
+    await db.run(
+        "UPDATE family_profiles SET last_reconciled_at = now() WHERE owner_user_id = :o", o=second
+    )
+    async with db.session() as s:
+        assert await family.owners_to_reconcile(s, full=True, limit=1) == [first]

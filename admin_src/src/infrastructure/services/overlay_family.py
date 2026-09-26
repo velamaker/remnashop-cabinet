@@ -594,10 +594,18 @@ HOOK_DEADLINE_SECONDS = 15.0
 TERMS_SQL = "SELECT max_profiles, devices_per_profile FROM family_plan_terms WHERE plan_id = :pid"
 
 # Пауза и резерв одним запросом — оба меняют судьбу семьи (см. owner_condition).
+# Резерв считается, только пока после его выдачи не было НАСТОЯЩЕЙ покупки: строка
+# резерва живёт до конца окна и после оплаты, а короткий тариф, купленный во время
+# резерва, иначе выглядел бы «сроком резерва» — и семья не получила бы оплаченного.
 PAUSE_RESERVE_SQL = (
     "SELECT EXISTS (SELECT 1 FROM subscription_freezes WHERE user_id = :uid AND active = true), "
-    "(SELECT max(reserve_expire_at) FROM reserve_grants "
-    " WHERE user_id = :uid AND ended = false AND reserve_expire_at > now())"
+    "(SELECT max(r.reserve_expire_at) FROM reserve_grants r "
+    " WHERE r.user_id = :uid AND r.ended = false AND r.reserve_expire_at > now() "
+    " AND NOT EXISTS (SELECT 1 FROM transactions t "
+    "   WHERE t.user_id = r.user_id AND t.status::text = 'COMPLETED' AND t.is_test = false "
+    "   AND (CASE WHEN t.plan_snapshot->>'id' ~ '^-?[0-9]+$' "
+    "        THEN (t.plan_snapshot->>'id')::int ELSE 0 END) > 0 "
+    "   AND t.updated_at > r.granted_at))"
 )
 
 PROFILES_SQL = (
@@ -621,14 +629,20 @@ PROFILE_BY_REQUEST_SQL = (
     "SELECT id, owner_user_id, status, label FROM family_profiles WHERE request_id = :rid"
 )
 
-# Последняя НАСТОЯЩАЯ покупка владельца: синтетические снимки (пополнение, подарок,
-# докупки — id < 0) период не продлевают и трафик не обнуляют. CASE, а не голый ::int:
-# нечисловой id уронил бы всю сверку, а не одну строку.
+# Последняя НАСТОЯЩАЯ и уже ВЫДАННАЯ покупка владельца. Синтетические снимки
+# (пополнение, подарок, докупки — id < 0) период не продлевают и трафик не обнуляют.
+# «Выдана» — строка подписки обновлена не раньше оплаты: база сначала проводит счёт,
+# потом выдаёт период, и крон, попавший между ними, обнулил бы трафик семьи со
+# старым сроком (а при сорвавшейся выдаче — вовсе за неоплаченный период). CASE, а
+# не голый ::int: нечисловой id уронил бы всю сверку, а не одну строку.
 LAST_PURCHASE_SQL = (
     "SELECT max(t.updated_at) FROM transactions t "
+    "JOIN users u ON u.id = t.user_id "
+    "JOIN subscriptions s ON s.id = u.current_subscription_id "
     "WHERE t.user_id = :uid AND t.status::text = 'COMPLETED' AND t.is_test = false "
     "AND (CASE WHEN t.plan_snapshot->>'id' ~ '^-?[0-9]+$' "
-    "     THEN (t.plan_snapshot->>'id')::int ELSE 0 END) > 0"
+    "     THEN (t.plan_snapshot->>'id')::int ELSE 0 END) > 0 "
+    "AND t.updated_at <= s.updated_at"
 )
 
 # Семьи, у которых что-то поменялось после последней сверки: подписка владельца
@@ -636,8 +650,14 @@ LAST_PURCHASE_SQL = (
 # (блокировка, удаление подписки снимает current_subscription_id) и условия тарифа.
 # Раз в час крон сверяет всех (ALL_OWNERS_SQL) — это страховка от того, что сюда
 # не попадёт.
+# Порядок — «дольше всех не сверялись» первыми: при хвосте больше LIMIT крон
+# иначе мог бы крутить одних и тех же, а до остальных не доходить никогда.
+FAIR_ORDER_SQL = (
+    "ORDER BY bool_or(fp.last_reconciled_at IS NULL) DESC, "
+    "min(fp.last_reconciled_at) NULLS FIRST, fp.owner_user_id "
+)
 CHANGED_OWNERS_SQL = (
-    "SELECT DISTINCT fp.owner_user_id FROM family_profiles fp "
+    "SELECT fp.owner_user_id FROM family_profiles fp "
     "JOIN users u ON u.id = fp.owner_user_id "
     "LEFT JOIN subscriptions s ON s.id = u.current_subscription_id "
     "LEFT JOIN family_plan_terms ft ON ft.plan_id = "
@@ -647,11 +667,12 @@ CHANGED_OWNERS_SQL = (
     "  OR s.updated_at > fp.last_reconciled_at "
     "  OR u.updated_at > fp.last_reconciled_at "
     "  OR ft.updated_at > fp.last_reconciled_at) "
-    "LIMIT :lim"
+    "GROUP BY fp.owner_user_id " + FAIR_ORDER_SQL + "LIMIT :lim"
 )
 ALL_OWNERS_SQL = (
-    "SELECT DISTINCT owner_user_id FROM family_profiles "
-    "WHERE status IN ('active', 'suspended') LIMIT :lim"
+    "SELECT fp.owner_user_id FROM family_profiles fp "
+    "WHERE fp.status IN ('active', 'suspended') "
+    "GROUP BY fp.owner_user_id " + FAIR_ORDER_SQL + "LIMIT :lim"
 )
 PENDING_SQL = (
     "SELECT id, owner_user_id, status FROM family_profiles "
