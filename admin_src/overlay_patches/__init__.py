@@ -521,6 +521,26 @@ def install() -> None:
             ),
         )
 
+    # Оплата звёздами: проверки бота (доступ, троттлинг, правила, канал) не гасят
+    # `successful_payment` и `pre_checkout_query`. Открыть ворота и сверить обработчики
+    # оплаты — два модуля базы, поэтому своим списком.
+    stars = (
+        ("оплата звёздами мимо проверок бота", "src.telegram.middlewares", "apply_bypass"),
+        (
+            "оплата звёздами: обработчики не менялись",
+            "src.telegram.routers.extra.payment",
+            "check_handlers",
+        ),
+    )
+
+    for name, target, func in stars:
+        on_import(
+            target,
+            lambda n=name, f=func, t=target: _run(
+                n, lambda: getattr(import_module(".stars_payment", __package__), f)(), t
+            ),
+        )
+
 
 def pending() -> list[str]:
     """Модули, чьи правки ещё не сработали (их пока не импортировали)."""

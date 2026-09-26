@@ -50,6 +50,8 @@ MODULES = [
     # Проверка оплаты ЮKassa: функции уровня модуля правка не показывает
     # expect_names_resolve (он видит только подставленное в класс).
     "overlay_patches.yookassa_api_status",
+    # Приём оплаты звёздами: проверка «платёжный ли апдейт» — функция уровня модуля.
+    "overlay_patches.stars_payment",
 ]
 
 
