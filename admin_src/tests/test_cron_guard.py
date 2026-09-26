@@ -3,6 +3,8 @@
 ЧТО ЗАПИРАЕМ:
   * работало → упало: ровно одно сообщение; падает дальше — тишина;
   * упало → снова работает: одно «снова работает», дальше тишина;
+  * частый крон (чаще раза в час) сообщает о падении, только когда оно подтвердилось:
+    мигание панели — ноль сообщений, два сбоя подряд — одно; частота — из расписания;
   * не дошедшее сообщение повторяется при следующем переходе, а не считается сказанным;
   * сторож не роняет крон ни сбоем отправки, ни сбоем файла состояния;
   * ошибки по одному человеку, пойманные внутри крона, тревогой не считаются;
@@ -160,6 +162,137 @@ async def test_state_file_failure_does_not_crash(owner: Owner, tmp_path: Path, m
     assert await job() is None
     # Состояние не записать — значит не обещать «больше не повторю»: молчим и пишем лог.
     assert owner.messages == []
+
+
+# ── частые кроны: падение должно подтвердиться ───────────────────────────────
+
+
+def frequent(name: str = "often"):
+    """Крон, который ходит раз в 5 минут (как мониторинг нод или «семья»)."""
+    control = {"fail": False}
+
+    @guard.cron_guard(name, "Частый крон", every_minutes=5)
+    async def job() -> str:
+        if control["fail"]:
+            raise RuntimeError("панель мигнула")
+        return "done"
+
+    return job, control
+
+
+async def test_blinking_panel_is_silent(owner: Owner):
+    """Панель мигает: упал → поднялся → упал → поднялся. Раньше это были четыре
+    сообщения владельцу на КАЖДЫЙ панельный крон."""
+    job, control = frequent()
+    for fail in (True, False, True, False):
+        control["fail"] = fail
+        await job()
+    assert owner.messages == []
+    assert state() == {}, "неподтверждённый сбой не оставляет хвоста"
+
+
+async def test_two_failures_in_a_row_send_one_message(owner: Owner):
+    job, control = frequent()
+    control["fail"] = True
+    await job()
+    assert owner.messages == [], "один сбой частого крона — ещё не поломка"
+    await job()
+    await job()
+    assert len(owner.messages) == 1 and "не выполнилась" in owner.messages[0]
+
+    control["fail"] = False
+    await job()
+    assert len(owner.messages) == 2 and "снова работает" in owner.messages[1]
+
+
+async def test_old_first_failure_confirms_on_its_own(owner: Owner):
+    """Первый сбой старше CONFIRM_AFTER — подтверждён и без второго подряд."""
+    job, control = frequent()
+    control["fail"] = True
+    long_ago = (guard._now() - guard.CONFIRM_AFTER - guard.timedelta(minutes=5)).isoformat()
+    guard.STATE_PATH.write_text(json.dumps({"often": {"since": long_ago}}), encoding="utf-8")
+    await job()
+    assert len(owner.messages) == 1
+
+    recent = (guard._now() - guard.timedelta(minutes=5)).isoformat()
+    guard.STATE_PATH.write_text(json.dumps({"often": {"since": recent}}), encoding="utf-8")
+    owner.messages.clear()
+    await job()
+    assert owner.messages == []
+
+
+async def test_rare_cron_reports_first_failure(owner: Owner):
+    """Раз в час и реже — сразу: второго сбоя ждать час или сутки."""
+
+    @guard.cron_guard("hourly_job", "Почасовой", every_minutes=60)
+    async def job() -> None:
+        raise RuntimeError("упала")
+
+    await job()
+    assert len(owner.messages) == 1
+
+
+@pytest.mark.parametrize(
+    "expr, gap",
+    [
+        ("*/5 * * * *", 5),
+        ("*/17 * * * *", 17),       # 0, 17, 34, 51 — самый длинный промежуток 17
+        ("*/20 * * * *", 20),
+        ("37 * * * *", 60),
+        ("17 */2 * * *", 120),
+        ("0 */6 * * *", 360),
+        ("0 9 * * *", 1440),
+        ("0 9 * * 1", 1440),        # по дням недели — сутки и реже
+        ("0,5 * * * *", 55),
+        ("5-10/5 * * * *", 55),
+        ("61 * * * *", None),
+        ("каждый час", None),
+    ],
+)
+def test_cron_gap_minutes(expr: str, gap):
+    assert guard.cron_gap_minutes(expr) == gap
+
+
+def test_frequency_comes_from_task_schedule():
+    """Частоту крона сторож берёт из его расписания — ничего объявлять не нужно.
+    Каждое наше расписание он обязан понять, иначе частый крон молча стал бы «редким»."""
+    from taskiq.decor import AsyncTaskiqDecoratedTask
+
+    gaps: dict[str, int] = {}
+    for module_name in _our_cron_modules():
+        module = importlib.import_module(module_name)
+        for attr, task in vars(module).items():
+            if not isinstance(task, AsyncTaskiqDecoratedTask) or "schedule" not in task.labels:
+                continue
+            if task.original_func.__module__ != module_name:
+                continue
+            expected = guard.schedule_gap_minutes(task.labels["schedule"])
+            assert expected is not None, f"{module_name}:{attr}: расписание не понято"
+            assert guard.task_gap_minutes(task.original_func) == expected
+            gaps[attr] = expected
+
+    assert gaps["run_device_full"] == 20 and gaps["check_node_health"] == 5
+    assert gaps["run_family_tick"] == 5
+    assert gaps["run_autopay"] == 60 and gaps["check_update_and_notify"] == 1440
+    rare = [a for a, g in gaps.items() if g >= guard.RARE_MINUTES]
+    often = [a for a, g in gaps.items() if g < guard.RARE_MINUTES]
+    assert rare and often
+
+
+async def test_real_frequent_cron_needs_confirmation(owner: Owner, monkeypatch):
+    """Настоящий крон «все места заняты» (раз в 20 минут): одиночный сбой — тишина."""
+    from src.infrastructure.taskiq.tasks import device_full as task
+
+    job = task.run_device_full.original_func.__dishka_orig_func__
+
+    def broken():
+        raise RuntimeError("панель мигнула")
+
+    monkeypatch.setattr(task.df, "load_config", broken)
+    await job(session=None, notifier=None, user_dao=None, config=None, sdk=None)
+    assert owner.messages == [] and state()["device_full"]["failures"] == 1
+    await job(session=None, notifier=None, user_dao=None, config=None, sdk=None)
+    assert len(owner.messages) == 1
 
 
 # ── что считается падением ───────────────────────────────────────────────────

@@ -14,8 +14,19 @@
 ЧТО ДЕЛАЕТ. Декоратор `cron_guard(name, title)` ловит падение прогона и сообщает
 владельцу только о ПЕРЕХОДАХ:
   * работало → упало: одно сообщение «не выполнилась» с причиной;
-  * упало → снова работает: одно сообщение «снова работает» и сколько лежала;
+  * упало → снова работает: одно сообщение «снова работает» и сколько лежала —
+    только если о падении владельцу сообщали;
   * падает дальше: молчим, только лог.
+
+ПАДЕНИЕ ДОЛЖНО ПОДТВЕРДИТЬСЯ — у ЧАСТЫХ кронов. Панель мигнула на минуту — и каждый
+крон, ходящий в неё раз в 5–30 минут, давал владельцу пару «не выполнилась / снова
+работает». Поэтому у крона, который ходит чаще раза в час, о падении сообщаем, только
+когда оно подтвердилось: два неудачных прогона подряд или первый сбой старше
+CONFIRM_AFTER. Одиночный сбой, за которым прогон прошёл, остаётся в логе. У РЕДКИХ
+кронов (раз в час и реже) — сразу, с первого сбоя: второго ждать час или сутки.
+Частоту берём из расписания самой задачи (метка schedule у taskiq), так что новый
+крон ничего для этого не объявляет; задачу без расписания считаем редкой. Можно и
+явно: `cron_guard(..., every_minutes=5)`.
 
 Что считать падением, крон решает сам:
   * исключение, вылетевшее из тела задачи, — падение (декоратор его гасит и пишет
@@ -61,7 +72,7 @@ import os
 import tempfile
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterator, Optional, TypeVar
 
@@ -76,6 +87,13 @@ _REASON_LIMIT = 300
 # SQLSTATE «relation does not exist».
 _UNDEFINED_TABLE = "42P01"
 
+# Частый крон (промежуток между запусками меньше RARE_MINUTES) сообщает о падении,
+# только когда оно подтвердилось: CONFIRM_FAILURES неудачных прогонов подряд или
+# первый сбой старше CONFIRM_AFTER.
+RARE_MINUTES = 60
+CONFIRM_FAILURES = 2
+CONFIRM_AFTER = timedelta(minutes=30)
+
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 Sender = Callable[[str], Awaitable[Any]]
 
@@ -84,6 +102,103 @@ def _enabled() -> bool:
     return (os.environ.get("CRON_GUARD_ALERTS") or "true").strip().lower() in (
         "1", "true", "yes", "on", "да",
     )
+
+
+# ── частота крона ────────────────────────────────────────────────────────────
+
+
+def _cron_field(spec: str, low: int, high: int) -> Optional[set[int]]:
+    """Значения поля cron: «*», «*/N», «N», «a-b», «a-b/N» и списки через запятую."""
+    values: set[int] = set()
+    for part in spec.split(","):
+        step = 1
+        if "/" in part:
+            part, raw_step = part.split("/", 1)
+            if not raw_step.isdigit() or int(raw_step) < 1:
+                return None
+            step = int(raw_step)
+        if part == "*":
+            start, end = low, high
+        elif "-" in part:
+            a, b = part.split("-", 1)
+            if not (a.isdigit() and b.isdigit()):
+                return None
+            start, end = int(a), int(b)
+        elif part.isdigit():
+            start = int(part)
+            end = high if step > 1 else start
+        else:
+            return None
+        if not low <= start <= end <= high:
+            return None
+        values.update(range(start, end + 1, step))
+    return values or None
+
+
+def cron_gap_minutes(expr: str) -> Optional[int]:
+    """Самый длинный промежуток между запусками по cron-выражению, в минутах.
+
+    Считаем по минутам и часам суток; расписание с днями/месяцами/днями недели — раз в
+    сутки или реже (1440). Непонятное выражение — None: такой крон считаем редким,
+    то есть о падении сообщаем сразу, как было до подтверждения.
+    """
+    fields = str(expr or "").split()
+    if len(fields) != 5:
+        return None
+    minutes = _cron_field(fields[0], 0, 59)
+    hours = _cron_field(fields[1], 0, 23)
+    if minutes is None or hours is None:
+        return None
+    if any(f != "*" for f in fields[2:]):
+        return 24 * 60
+    times = sorted(h * 60 + m for h in hours for m in minutes)
+    if len(times) == 1:
+        return 24 * 60
+    gaps = [b - a for a, b in zip(times, times[1:])] + [times[0] + 24 * 60 - times[-1]]
+    return max(gaps)
+
+
+def schedule_gap_minutes(schedule: Any) -> Optional[int]:
+    """Промежуток для метки schedule задачи taskiq (список {"cron": …}). Несколько
+    расписаний — берём самый длинный промежуток среди них (не точно, но в сторону
+    «сообщить сразу»); запись без cron или непонятная — None."""
+    if not isinstance(schedule, (list, tuple)) or not schedule:
+        return None
+    gaps = []
+    for item in schedule:
+        gap = cron_gap_minutes(item.get("cron")) if isinstance(item, dict) else None
+        if gap is None:
+            return None
+        gaps.append(gap)
+    return max(gaps)
+
+
+_gap_cache: dict[str, Optional[int]] = {}
+
+
+def task_gap_minutes(func: Callable[..., Any]) -> Optional[int]:
+    """Частота задачи по её расписанию в брокере. Имя задачи taskiq — «модуль:функция»,
+    и `@inject` с `functools.wraps` его не меняют (заперто test_cron_guard). Саму
+    переданную ей функцию taskiq переименовывает в «…__taskiq_original» — снимаем."""
+    name = str(getattr(func, "__name__", "")).removesuffix("__taskiq_original")
+    key = f"{getattr(func, '__module__', '')}:{name}"
+    if key not in _gap_cache:
+        gap: Optional[int] = None
+        try:
+            from src.infrastructure.taskiq.broker import broker
+
+            task = broker.find_task(key)
+            if task is not None:
+                gap = schedule_gap_minutes(task.labels.get("schedule"))
+        except Exception as exc:  # noqa: BLE001 — не знаем частоту, значит «редкий»
+            logger.debug(f"cron_guard: расписание {key} не прочитано: {exc}")
+        _gap_cache[key] = gap
+    return _gap_cache[key]
+
+
+def _needs_confirmation(func: Callable[..., Any], every_minutes: Optional[int]) -> bool:
+    gap = every_minutes if every_minutes is not None else task_gap_minutes(func)
+    return gap is not None and gap < RARE_MINUTES
 
 
 # ── исход одного прогона ─────────────────────────────────────────────────────
@@ -204,6 +319,19 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _confirmed(entry: dict[str, Any], now: datetime) -> bool:
+    """Падение подтвердилось: столько-то неудачных прогонов подряд или первый сбой давно."""
+    if int(entry.get("failures") or 0) >= CONFIRM_FAILURES:
+        return True
+    try:
+        since = datetime.fromisoformat(str(entry.get("since")))
+    except (TypeError, ValueError):
+        return False
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)
+    return now - since >= CONFIRM_AFTER
+
+
 def _fmt_duration(seconds: float) -> str:
     minutes = max(1, int(seconds // 60))
     if minutes < 60:
@@ -271,6 +399,7 @@ async def record(
     *,
     failed: bool,
     reason: str = "",
+    confirm: bool = False,
     send: Optional[Sender] = None,
     path: Optional[Path] = None,
     lock_path: Optional[Path] = None,
@@ -280,6 +409,9 @@ async def record(
     Возвращает, что сделали: "down" / "up" — сообщение ушло, None — сообщать нечего
     или не вышло. Не бросает: ни сбой отправки, ни сбой файла не должны ронять крон.
 
+    `confirm` — падение частого крона сообщаем, только когда оно подтвердилось
+    (_confirmed): одиночный сбой при мигнувшей панели — не повод будить владельца.
+
     «Сообщили» отмечаем ДО отправки и откатываем, если не дошло: иначе два прогона
     одного крона, упавшие одновременно, прислали бы две тревоги, а не дошедшая
     тревога считалась бы сказанной, и владелец так и не узнал бы о поломке.
@@ -288,6 +420,7 @@ async def record(
     path = path or STATE_PATH
     lock_path = lock_path or LOCK_PATH
     now = _now()
+    confirmed = True
 
     try:
         if not failed:
@@ -303,7 +436,8 @@ async def record(
                 entry["failures"] = int(entry.get("failures") or 0) + 1
                 entry["error"] = reason
                 entry["last_failed_at"] = now.isoformat()
-                notify = not entry.get("alerted")
+                confirmed = not confirm or _confirmed(entry, now)
+                notify = not entry.get("alerted") and confirmed
                 if notify:
                     entry["alerted"] = True
                 state[name] = entry
@@ -314,9 +448,9 @@ async def record(
                     return None
                 state.pop(name)
                 if not entry.get("alerted"):
-                    # О падении владелец так и не узнал (тревога не дошла) — и
-                    # «снова работает» ему ни о чём не скажет.
-                    logger.info(f"cron_guard: «{title}» снова работает (о падении сообщить не удалось)")
+                    # О падении владелец не узнал (сбой не подтвердился или тревога не
+                    # дошла) — и «снова работает» ему ни о чём не скажет.
+                    logger.info(f"cron_guard: «{title}» снова работает (о падении владельцу не сообщали)")
                     return None
                 text = _up_text(title, entry, now)
     except Exception as exc:  # noqa: BLE001 — сторож не роняет крон
@@ -324,7 +458,13 @@ async def record(
         return None
 
     if text is None:
-        logger.warning(f"cron_guard: «{title}» — прогон снова упал, владельцу уже сообщали: {reason}")
+        if confirmed:
+            logger.warning(f"cron_guard: «{title}» — прогон снова упал, владельцу уже сообщали: {reason}")
+        else:
+            logger.warning(
+                f"cron_guard: «{title}» — сбой прогона (подряд: {entry['failures']}), "
+                f"ждём подтверждения, прежде чем писать владельцу: {reason}"
+            )
         return None
 
     try:
@@ -352,7 +492,7 @@ async def record(
 # ── декоратор ────────────────────────────────────────────────────────────────
 
 
-def cron_guard(name: str, title: str) -> Callable[[F], F]:
+def cron_guard(name: str, title: str, *, every_minutes: Optional[int] = None) -> Callable[[F], F]:
     """Сторож крона. Ставится ПОД `@inject` — прямо на функцию задачи:
 
         @broker.task(schedule=[...], retry_on_error=False)
@@ -366,7 +506,8 @@ def cron_guard(name: str, title: str) -> Callable[[F], F]:
     параметром контейнера, который обёртка должна была бы честно повторить.
 
     `name` — ключ в файле состояния, не менять без нужды (сбросит «уже сообщали»);
-    `title` — как задачу называть владельцу.
+    `title` — как задачу называть владельцу; `every_minutes` — как часто крон ходит,
+    если не хочется брать это из расписания задачи (по умолчанию берём оттуда).
     """
 
     def decorate(func: F) -> F:
@@ -391,7 +532,8 @@ def cron_guard(name: str, title: str) -> Callable[[F], F]:
             if run.skipped and not run.failed:
                 return result
             if _enabled():
-                await record(name, title, failed=run.failed, reason=run.reason)
+                confirm = run.failed and _needs_confirmation(func, every_minutes)
+                await record(name, title, failed=run.failed, reason=run.reason, confirm=confirm)
             return result
 
         # Метка для сторожа в тестах: каждый наш крон обязан стоять под cron_guard.
