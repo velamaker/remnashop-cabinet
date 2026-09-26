@@ -153,3 +153,25 @@ describe("докупки скрыты, пока бот не прислал то�
     expect(canFeature(alien, "extra_traffic")).toBe(false);
   });
 });
+
+// Семья выдаёт человеку НОВЫЕ подписки (профили) — со старым ботом пункт «Семья» и
+// страница настроек упёрлись бы в 404. Поэтому и вход, и страница — только по токену.
+describe("семейные профили скрыты, пока бот не прислал токен", () => {
+  it("токен в манифесте, вход и страница — под ним", () => {
+    expect(BOT_CAPABILITIES.family_profiles.since).toBe("1.6.0");
+    expect(FEATURE_NEEDS_BOT.family_profiles).toBe("family_profiles");
+    expect(PAGE_NEEDS_BOT["/admin/family"]).toBe("family_profiles");
+    expect(pageBotCap("/admin/family")).toBe("family_profiles");
+  });
+
+  it("старый бот — раздела нет; бот с токеном — есть; «Бедолага» — нет", () => {
+    const old = { ...base, bot_capabilities: ["extra_device"] } as Appearance;
+    const fresh = { ...base, bot_capabilities: ["family_profiles"] } as Appearance;
+    expect(canFeature(old, "family_profiles")).toBe(false);
+    expect(pageBotReady(old, "/admin/family")).toBe(false);
+    expect(canFeature(fresh, "family_profiles")).toBe(true);
+    expect(pageBotReady(fresh, "/admin/family")).toBe(true);
+    const alien = { ...base, features: { family_profiles: false } } as unknown as Appearance;
+    expect(canFeature(alien, "family_profiles")).toBe(false);
+  });
+});
