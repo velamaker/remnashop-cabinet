@@ -162,7 +162,7 @@ jobs:
       # -S error — только настоящие ошибки (синтаксис, неверные конструкции): стиль
       # скрипта, который владелец запускает на проде, CI не блокирует.
       - name: shellcheck
-        run: shellcheck -S error update.sh install.sh site-install.sh scripts/thanks.sh scripts/tests/update-sh.sh scripts/db-backup.sh scripts/db-restore-verify.sh scripts/tests/db-backup.sh
+        run: shellcheck -S error update.sh install.sh site-install.sh scripts/thanks.sh scripts/tests/update-sh.sh scripts/_env.sh scripts/db-backup.sh scripts/db-restore-verify.sh scripts/tests/db-backup.sh
 
       # Сценарии «обновить и бота / только кабинет», флаги, сервер кабинета, режим api,
       # перезапуск тарбол-ветки. docker, git и curl подменены — ничего не собирается.
@@ -171,7 +171,8 @@ jobs:
         run: bash scripts/tests/update-sh.sh
 
       # Ежедневный бэкап: копия в закрытый Telegram-канал уходит только зашифрованной,
-      # токен не попадает в аргументы процесса, сбой отправки бэкап не роняет.
+      # токен и прокси не попадают в аргументы процесса, сбой отправки бэкап не роняет,
+      # проверка восстановления читает пароль из .env так же, как бэкап.
       - name: Бэкап — сценарии
         run: bash scripts/tests/db-backup.sh
 

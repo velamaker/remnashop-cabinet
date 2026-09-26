@@ -16,28 +16,17 @@ MIN_BYTES="${MIN_BYTES:-1024}"
 #
 # Настройки берём из окружения, а чего там нет — из .env установки: крон этот файл не
 # читает, и без этого включённое в .env шифрование или отправка наружу молча не работали
-# бы. Только перечисленные ключи и только если они не заданы явно.
-ENV_FILE="${ENV_FILE:-$(dirname "$(readlink -f "$0")")/../.env}"
-env_default() {
-    local key="$1" val
-    [ -n "${!key:-}" ] && return 0
-    [ -r "$ENV_FILE" ] || return 0
-    val="$(grep -E "^${key}=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")" || true
-    [ -n "$val" ] && printf -v "$key" '%s' "$val"
-    return 0
-}
-for _k in BACKUP_PASSPHRASE BACKUP_PASSPHRASE_FILE BACKUP_OFFSITE_RCLONE_REMOTE \
-          BACKUP_OFFSITE_RSYNC BACKUP_OFFSITE_TELEGRAM_CHAT_ID BOT_TOKEN BOT_OWNER_ID BOT_PROXY_URL; do
+# бы. Только перечисленные ключи и только если они не заданы явно. Чтение .env и пароля
+# — общие с проверкой восстановления (scripts/_env.sh): расшифровать должно тем же.
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/../.env}"
+# shellcheck source=scripts/_env.sh
+. "$SCRIPT_DIR/_env.sh" || { echo "$(date -Is) FAIL: нет $SCRIPT_DIR/_env.sh (скрипт скопирован без соседа?)" >&2; exit 1; }
+resolve_backup_passphrase
+for _k in BACKUP_OFFSITE_RCLONE_REMOTE BACKUP_OFFSITE_RSYNC BACKUP_OFFSITE_TELEGRAM_CHAT_ID \
+          BOT_TOKEN BOT_OWNER_ID BOT_PROXY_URL; do
     env_default "$_k"
 done
-BACKUP_PASSPHRASE="${BACKUP_PASSPHRASE:-}"
-if [ -z "$BACKUP_PASSPHRASE" ] && [ -n "${BACKUP_PASSPHRASE_FILE:-}" ] && [ -f "${BACKUP_PASSPHRASE_FILE}" ]; then
-    BACKUP_PASSPHRASE="$(cat "$BACKUP_PASSPHRASE_FILE")"
-fi
-# openssl читает пароль из ОКРУЖЕНИЯ процесса (-pass env:…). Прочитанный из файла или
-# .env пароль был обычной переменной оболочки — openssl его не видел, и зашифрованный
-# бэкап падал целиком. Экспортируем только его: токен бота дочерним процессам не нужен.
-export BACKUP_PASSPHRASE
 
 mkdir -p "$BACKUP_DIR"
 TS="$(date +%F-%H%M%S)"
@@ -86,11 +75,15 @@ echo "$(date -Is) OK: $OUT (${SIZE} B)$([ -n "$BACKUP_PASSPHRASE" ] && echo ' [e
 # Telegram — независимо от двух первых: ничего заводить не нужно, лимит файла у бота
 # 50 МБ, а дамп небольшого магазина весит сотни килобайт. Туда уходит ТОЛЬКО
 # зашифрованный дамп: в открытом виде в нём хэши паролей и платежи, а чат Telegram —
-# чужой сервер. Токен передаём curl через stdin, чтобы он не светился в списке процессов.
+# чужой сервер. Токен и прокси (в адресе прокси бывают логин и пароль) передаём curl
+# конфигом через stdin, чтобы они не светились в списке процессов.
 TG_MAX_BYTES="${TG_MAX_BYTES:-49000000}"
+# Значение в кавычках конфига curl: обратная косая и кавычка внутри экранируются.
+curl_cfg_quote() { local v="${1//\\/\\\\}"; printf '"%s"' "${v//\"/\\\"}"; }
 # «owner» — владельцу бота в личный чат (BOT_OWNER_ID): свой id искать не нужно.
 if [ "${BACKUP_OFFSITE_TELEGRAM_CHAT_ID:-}" = owner ]; then
-    BACKUP_OFFSITE_TELEGRAM_CHAT_ID="${BOT_OWNER_ID%%,*}"
+    _owner="${BOT_OWNER_ID:-}"
+    BACKUP_OFFSITE_TELEGRAM_CHAT_ID="${_owner%%,*}"
     [ -n "$BACKUP_OFFSITE_TELEGRAM_CHAT_ID" ] || echo "$(date -Is) WARN: offsite telegram «owner» — нет BOT_OWNER_ID" >&2
 fi
 if [ -n "${BACKUP_OFFSITE_TELEGRAM_CHAT_ID:-}" ]; then
@@ -103,12 +96,16 @@ if [ -n "${BACKUP_OFFSITE_TELEGRAM_CHAT_ID:-}" ]; then
     else
         SUM="$(cat "${OUT}.sha256" 2>/dev/null || true)"
         CAPTION="Бэкап базы $(date +%F\ %H:%M), ${SIZE} B, sha256 ${SUM:0:16}…"
-        PROXY_ARGS=()
-        [ -n "${BOT_PROXY_URL:-}" ] && PROXY_ARGS=(--proxy "$BOT_PROXY_URL")
-        if printf 'url = "https://api.telegram.org/bot%s/sendDocument"\n' "$BOT_TOKEN" \
-            | curl -fsS --max-time 120 "${PROXY_ARGS[@]}" -K - \
-                -F "chat_id=${BACKUP_OFFSITE_TELEGRAM_CHAT_ID}" \
-                -F "caption=${CAPTION}" \
+        # --form-string для текстовых полей: у -F значение, начатое с @ или <, curl
+        # читает как имя файла («@канал» в chat_id ушёл бы чтением файла «канал»).
+        if {
+            printf 'url = %s\n' "$(curl_cfg_quote "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument")"
+            if [ -n "${BOT_PROXY_URL:-}" ]; then
+                printf 'proxy = %s\n' "$(curl_cfg_quote "$BOT_PROXY_URL")"
+            fi
+        } | curl -fsS --max-time 120 -K - \
+                --form-string "chat_id=${BACKUP_OFFSITE_TELEGRAM_CHAT_ID}" \
+                --form-string "caption=${CAPTION}" \
                 -F "document=@${OUT}" >/dev/null 2>&1; then
             echo "$(date -Is) OK: offsite telegram → ${BACKUP_OFFSITE_TELEGRAM_CHAT_ID}"
         else

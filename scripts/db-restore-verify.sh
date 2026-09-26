@@ -17,18 +17,15 @@ DB_NAME="${DB_NAME:-remnashop}"
 DB_USER="${DB_USER:-remnashop}"
 # Пароль шифрования — из окружения, а если его там нет, из .env установки: учение
 # идёт из крона, который .env не читает, и зашифрованный бэкап без этого не открылся бы.
-ENV_FILE="${ENV_FILE:-$(dirname "$(readlink -f "$0")")/../.env}"
-if [ -z "${BACKUP_PASSPHRASE:-}" ] && [ -z "${BACKUP_PASSPHRASE_FILE:-}" ] && [ -r "$ENV_FILE" ]; then
-    BACKUP_PASSPHRASE="$(grep -E '^BACKUP_PASSPHRASE=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//')" || true
-fi
-BACKUP_PASSPHRASE="${BACKUP_PASSPHRASE:-}"
-if [ -z "$BACKUP_PASSPHRASE" ] && [ -n "${BACKUP_PASSPHRASE_FILE:-}" ] && [ -f "${BACKUP_PASSPHRASE_FILE}" ]; then
-    BACKUP_PASSPHRASE="$(cat "$BACKUP_PASSPHRASE_FILE")"
-fi
-# openssl читает пароль из ОКРУЖЕНИЯ процесса (-pass env:…). Прочитанный из файла или
-# .env пароль был обычной переменной оболочки — openssl его не видел, и зашифрованный
-# бэкап падал целиком. Экспортируем только его: токен бота дочерним процессам не нужен.
-export BACKUP_PASSPHRASE
+# Читаем ТЕМ ЖЕ кодом, что и бэкап (scripts/_env.sh): тот же порядок, те же ключи
+# (BACKUP_PASSPHRASE, BACKUP_PASSPHRASE_FILE), те же кавычки. Раньше здесь была своя
+# копия, которая не снимала одинарные кавычки и не знала BACKUP_PASSPHRASE_FILE из
+# .env, — и учение объявляло невосстановимым бэкап, который открывался.
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/../.env}"
+# shellcheck source=scripts/_env.sh
+. "$SCRIPT_DIR/_env.sh" || { echo "$(date -Is) RESTORE-DRILL FAIL: нет $SCRIPT_DIR/_env.sh" >&2; exit 1; }
+resolve_backup_passphrase
 MIN_ROWS="${MIN_ROWS:-1}"        # минимум строк в users для «успеха»
 CHECK_TABLE="${CHECK_TABLE:-users}"
 # Опциональный шаг «restore→migrate»: после восстановления прогнать overlay-alembic на
