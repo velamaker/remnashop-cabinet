@@ -57,6 +57,11 @@ async def run_pass(
             out = await family.reconcile_owner(
                 session, sdk, owner_id, actor="cron", config=config, now=now
             )
+        except family.FamilyBusy:
+            # Семью прямо сейчас меняет человек или хук оплаты — сверим следующим
+            # проходом; ждать очередь крону незачем.
+            summary["busy"] = summary.get("busy", 0) + 1
+            continue
         except Exception as exc:  # noqa: BLE001 — одна семья не мешает остальным
             await session.rollback()
             summary["errors"] += 1

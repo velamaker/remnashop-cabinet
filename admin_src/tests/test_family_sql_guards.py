@@ -53,27 +53,61 @@ class Capture:
         return SimpleNamespace(uuid=uuid_lib.uuid4())
 
 
-def test_state_is_read_under_the_owner_row_lock():
-    """Без замка строки владельца две вкладки завели бы два профиля при лимите один."""
-    assert "FOR UPDATE OF u" in family.OWNER_LOCK_SQL
-    assert "LEFT JOIN subscriptions" in family.OWNER_LOCK_SQL
+def test_family_never_locks_the_owner_row():
+    """Семья стоит в СВОЕЙ очереди, а не на строке users: база при покупке пишет в
+    эту строку после панели, и замок семьи на ней ронял оплату по таймауту."""
     assert "FOR UPDATE" not in family.OWNER_READ_SQL
+    assert "LEFT JOIN subscriptions" in family.OWNER_READ_SQL
+    source = inspect.getsource(family)
+    assert "FOR UPDATE OF u" not in source
+
+
+def test_family_queue_is_an_advisory_lock_with_a_timeout():
+    assert "pg_advisory_xact_lock(:ns, :owner)" in family.FAMILY_LOCK_SQL
+    assert "pg_try_advisory_xact_lock(:ns, :owner)" in family.FAMILY_TRY_LOCK_SQL
+    source = inspect.getsource(family.family_lock)
+    # Ожидание очереди и всех записей семейной транзакции ограничено.
+    assert "SET LOCAL lock_timeout" in source
+    assert family.LOCK_WAIT_MS <= 10_000
 
 
 @pytest.mark.parametrize(
-    "func", ["create_profile", "delete_profile", "reset_profile_devices", "reconcile_owner", "_adopt", "_mark_failed"]
+    "func",
+    [
+        "create_profile",
+        "delete_profile",
+        "reset_profile_devices",
+        "reconcile_owner",
+        "_adopt",
+        "_mark_failed",
+        "_delete_now",
+    ],
 )
-def test_every_change_takes_the_owner_lock_first(func):
+def test_every_change_stands_in_the_family_queue(func):
     source = inspect.getsource(getattr(family, func))
-    assert "load_owner(session" in source and "lock=True" in source, func
+    assert "family_lock(session" in source, func
 
 
-def test_request_id_is_checked_again_under_the_lock():
-    """Двойной клик успевает дойти до замка дважды — второй обязан увидеть первого."""
+def test_request_id_is_checked_again_in_the_queue():
+    """Двойной клик успевает дойти до очереди дважды — второй обязан увидеть первого."""
     source = inspect.getsource(family.create_profile)
-    lock = source.index("load_owner(session, owner_id, lock=True)")
+    lock = source.index("family_lock(session, owner_id)")
     assert source.index("profile_by_request", lock) > lock
     assert "ON CONFLICT (request_id) DO NOTHING" in source
+
+
+def test_payment_hook_never_waits_and_has_a_deadline():
+    source = inspect.getsource(family.after_purchase)
+    assert "wait_ms=0" in source
+    assert "asyncio.wait_for(" in source and "HOOK_DEADLINE_SECONDS" in source
+    assert family.HOOK_DEADLINE_SECONDS <= 20
+
+
+def test_reconcile_commits_after_every_profile():
+    """Одно действие в панели — одна запись и commit: откат соседа его не сотрёт."""
+    source = inspect.getsource(family.reconcile_owner)
+    loop = source[source.index("while True:"):]
+    assert loop.index("_apply_decision(") < loop.index("await session.commit()", loop.index("_apply_decision("))
 
 
 def test_creating_row_is_committed_before_the_panel_call():
@@ -201,3 +235,22 @@ async def test_renewal_does_not_switch_on_a_profile_disabled_by_hand(status, sen
     await family._apply_sync(_NoDb(), sdk, _row(status), TARGET, reset=True, now=TARGET.expire_at)
     sent = sdk.bodies[0].model_dump(exclude_unset=True)
     assert ("status" in sent) is sends_active
+
+
+def test_purge_takes_the_family_queue_then_the_owner_row_then_lists_targets():
+    """Первым делом замки, в одном порядке с остальными; список семьи — уже под ними:
+    профиль, заведённый между списком и удалением, остался бы в панели сиротой."""
+    purge = importlib.import_module("src.infrastructure.services.overlay_user_purge")
+    source = inspect.getsource(purge.purge_user)
+    queue = source.index("family.family_lock(session, user_id")
+    row = source.index("FOR UPDATE")
+    targets = source.index("family.purge_targets(")
+    assert queue < row < targets
+
+
+def test_purge_targets_does_not_swallow_database_errors():
+    """«Таблицы нет» проверяется явно; любой другой сбой базы прерывает удаление, а
+    не превращается в «семьи нет» с работающими профилями."""
+    source = inspect.getsource(family.purge_targets)
+    assert "to_regclass('family_profiles')" in source
+    assert "except Exception" not in source

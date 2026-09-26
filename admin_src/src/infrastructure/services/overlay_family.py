@@ -454,6 +454,12 @@ def plan_decisions(
             and p.suspended_at + grace <= now
         )
 
+    def still_on(p: ProfileRow) -> bool:
+        # Мы профиль выключили (намерение записано), а панель говорит «работает»:
+        # выключение не дошло, или профиль включили руками. Выключаем снова —
+        # приостановленный профиль не должен давать доступ.
+        return (p.sub_status or "").upper() in ("ACTIVE", "LIMITED")
+
     def stay_suspended(p: ProfileRow, reason: str) -> Decision:
         if p.status == "active":
             return Decision(p.id, "suspend", reason=reason)
@@ -461,6 +467,8 @@ def plan_decisions(
             return Decision(p.id, "relabel", reason=reason)
         if expired_grace(p, reason):
             return Decision(p.id, "delete", reason=reason)
+        if still_on(p):
+            return Decision(p.id, "suspend", reason=reason)
         return Decision(p.id, "noop", reason=reason)
 
     for p in live:
@@ -481,6 +489,8 @@ def plan_decisions(
                     out.append(Decision(p.id, "noop"))
             elif p.suspend_reason and expired_grace(p, p.suspend_reason):
                 out.append(Decision(p.id, "delete", reason=p.suspend_reason))
+            elif still_on(p):
+                out.append(Decision(p.id, "suspend", reason=p.suspend_reason or "owner_expired"))
             else:
                 out.append(Decision(p.id, "noop", reason=p.suspend_reason))
         return out
@@ -533,17 +543,34 @@ def family_snapshot(owner: OwnerState, device_limit: int, traffic_gb: int, strat
 
 # ── SQL ─────────────────────────────────────────────────────────────────────
 
-# Замок — на строке владельца в users, как у докупки устройства и переноса остатка:
-# «создать профиль», «продлить», «сменить тариф» одного человека идут по очереди.
-# LEFT JOIN — владелец без подписки не должен проваливать запрос.
-OWNER_LOCK_SQL = (
+# Состояние владельца — БЕЗ замка строки users. Раньше семья запирала `users … FOR
+# UPDATE` и держала замок, пока ходила в панель; база же при покупке (CHANGE/NEW)
+# сначала меняет панель, а потом пишет в эту самую строку. Медленная панель и пять
+# профилей — и оплата владельца упиралась в statement_timeout, падала PurchaseError,
+# а панель уже была изменена. Очередь семьи держит свой замок (family_lock ниже),
+# чужих строк семья не запирает вовсе. LEFT JOIN — владелец без подписки не должен
+# проваливать запрос.
+OWNER_READ_SQL = (
     "SELECT u.id, u.telegram_id, u.is_blocked, u.language::text, "
     "s.id, s.status::text, s.is_trial, s.expire_at, s.plan_snapshot, s.updated_at "
     "FROM users u LEFT JOIN subscriptions s ON s.id = u.current_subscription_id "
-    "WHERE u.id = :uid FOR UPDATE OF u"
+    "WHERE u.id = :uid"
 )
-# Без замка — только показать (витрина кабинета, кнопка в меню бота).
-OWNER_READ_SQL = OWNER_LOCK_SQL.replace(" FOR UPDATE OF u", "")
+
+# Очередь семьи одного владельца: рекомендательный замок транзакции с парой ключей
+# (пространство семьи, id владельца). Его берут ТОЛЬКО семейные операции — создание,
+# удаление, сброс устройств, сверка, удаление владельца, — поэтому ожидание здесь
+# никогда не задерживает оплату, докупку или вебхук базы. Пространство «пара int4»
+# у Postgres отдельное от одиночного bigint-ключа миграций (overlay_app).
+FAMILY_LOCK_NS = 0x46414D49  # «FAMI»
+FAMILY_LOCK_SQL = "SELECT pg_advisory_xact_lock(:ns, :owner)"
+FAMILY_TRY_LOCK_SQL = "SELECT pg_try_advisory_xact_lock(:ns, :owner)"
+# Сколько ждём очередь семьи. Дольше — «занято, повторите»: ждать дольше значит
+# держать веб-запрос человека, пока крон ходит в медленную панель.
+LOCK_WAIT_MS = 5_000
+# Хук оплаты не ждёт очередь вовсе и укладывается в общий дедлайн: не успел —
+# доведёт крон (оплата позже последней сверки профиля = «обнулить трафик»).
+HOOK_DEADLINE_SECONDS = 15.0
 
 TERMS_SQL = "SELECT max_profiles, devices_per_profile FROM family_plan_terms WHERE plan_id = :pid"
 
@@ -659,14 +686,65 @@ def _plan_dict(raw: Any) -> dict:
     return {}
 
 
-async def load_owner(session: "AsyncSession", owner_id: int, *, lock: bool = True) -> OwnerState:
-    """Замок строки владельца + всё его состояние сырым SQL.
+class FamilyBusy(RuntimeError):
+    """Очередь семьи занята дольше LOCK_WAIT_MS (крон или соседняя вкладка в панели)."""
+
+
+def _lock_not_available(exc: BaseException) -> bool:
+    """SQLSTATE 55P03 (lock_timeout) — ищем в обёртках SQLAlchemy и asyncpg."""
+    seen: set[int] = set()
+    stack: list[Any] = [exc]
+    while stack:
+        err = stack.pop()
+        if err is None or id(err) in seen or len(seen) > 20:
+            continue
+        seen.add(id(err))
+        if type(err).__name__ == "LockNotAvailableError":
+            return True
+        if "55P03" in (getattr(err, "sqlstate", None), getattr(err, "pgcode", None)):
+            return True
+        stack.extend(
+            (getattr(err, "orig", None), getattr(err, "__cause__", None), getattr(err, "__context__", None))
+        )
+    return False
+
+
+async def family_lock(
+    session: "AsyncSession", owner_id: int, *, wait_ms: Optional[int] = None
+) -> None:
+    """Встать в очередь семьи владельца до конца транзакции. Занято — FamilyBusy.
+
+    `wait_ms=0` — не ждать вовсе (хук оплаты). `lock_timeout` остаётся на всю
+    семейную транзакцию: ни одна наша запись не повиснет на чужом замке строки
+    дольше того же срока. Замок отпускает commit или rollback.
+    """
+    params = {"ns": FAMILY_LOCK_NS, "owner": int(owner_id)}
+    if wait_ms is None:
+        wait_ms = LOCK_WAIT_MS
+    timeout_ms = int(wait_ms) if wait_ms > 0 else LOCK_WAIT_MS
+    await session.execute(text(f"SET LOCAL lock_timeout = '{timeout_ms}ms'"))
+    if wait_ms <= 0:
+        got = (await session.execute(text(FAMILY_TRY_LOCK_SQL), params)).scalar()
+        if not got:
+            await session.rollback()
+            raise FamilyBusy(f"семья владельца {owner_id} сейчас обновляется")
+        return
+    try:
+        await session.execute(text(FAMILY_LOCK_SQL), params)
+    except Exception as exc:  # noqa: BLE001 — узнаём по SQLSTATE, остальное — наверх
+        if not _lock_not_available(exc):
+            raise
+        await session.rollback()
+        raise FamilyBusy(f"семья владельца {owner_id} сейчас обновляется") from exc
+
+
+async def load_owner(session: "AsyncSession", owner_id: int) -> OwnerState:
+    """Всё состояние владельца сырым SQL — без замка его строки (см. OWNER_READ_SQL).
 
     Сырым, а не через ORM: сессия живёт с `expire_on_commit=False`, и объект из
-    identity map под замком оказался бы устаревшим снимком.
+    identity map оказался бы устаревшим снимком.
     """
-    sql = OWNER_LOCK_SQL if lock else OWNER_READ_SQL
-    row = (await session.execute(text(sql), {"uid": owner_id})).first()
+    row = (await session.execute(text(OWNER_READ_SQL), {"uid": owner_id})).first()
     if row is None:
         return OwnerState(user_id=owner_id, exists=False)
     plan = _plan_dict(row[8])
@@ -1066,12 +1144,14 @@ async def create_profile(
 ) -> dict:
     """Завести профиль. Порядок шагов — ответ на «панель упала посередине».
 
-    1. Под замком владельца: права, лимит, имя; теневой аккаунт и строка `creating`
-       — и COMMIT. Дальше любой сбой оставляет след, по которому крон доведёт дело.
-    2. Панель: `create_user` с именем `rs_fam_<id>`. Нет ответа — спрашиваем панель
-       по имени: создала → идём дальше, точно нет → `failed` и теневой удалён,
-       не знаем → строка остаётся `creating`, её доведёт крон.
-    3. Под замком владельца: подписка профиля и `active`.
+    1. В очереди семьи: права, лимит, имя; теневой аккаунт и строка `creating` —
+       и COMMIT (очередь отпущена). Дальше любой сбой оставляет след, по которому
+       крон доведёт дело.
+    2. Панель — без замков: `create_user` с именем `rs_fam_<id>`. Нет ответа —
+       спрашиваем панель по имени: создала → идём дальше, точно нет → `failed` и
+       теневой удалён, не знаем → строка остаётся `creating`, её доведёт крон.
+    3. В очереди семьи: подписка профиля и `active`.
+    Очередь занята дольше LOCK_WAIT_MS — «busy»: человек нажмёт ещё раз.
     """
     config = config or load_config()
     now = now or now_utc()
@@ -1089,8 +1169,12 @@ async def create_profile(
         await session.rollback()
         return {"result": "bad_label"}
 
-    owner = await load_owner(session, owner_id, lock=True)
-    # Под замком ищем ещё раз: двойной клик успевает дойти до этой точки дважды.
+    try:
+        await family_lock(session, owner_id)
+    except FamilyBusy:
+        return {"result": "busy"}
+    owner = await load_owner(session, owner_id)
+    # В очереди ищем ещё раз: двойной клик успевает дойти до этой точки дважды.
     saved = await profile_by_request(session, rid)
     if saved is not None:
         await session.rollback()
@@ -1149,17 +1233,26 @@ async def create_profile(
             await session.commit()
             return {"result": "pending", "profile_id": profile_id}
         if created is None:
-            await _mark_failed(session, owner_id, profile_id, f"{type(exc).__name__}: {exc}", actor)
+            try:
+                await _mark_failed(
+                    session, owner_id, profile_id, f"{type(exc).__name__}: {exc}", actor
+                )
+            except FamilyBusy:
+                return {"result": "pending", "profile_id": profile_id}
             return {"result": "failed", "profile_id": profile_id}
-    return await _adopt(
-        session,
-        sdk,
-        owner_id=owner_id,
-        profile_id=profile_id,
-        panel_user=created,
-        subscription_dao=subscription_dao,
-        actor=actor,
-    )
+    try:
+        return await _adopt(
+            session,
+            sdk,
+            owner_id=owner_id,
+            profile_id=profile_id,
+            panel_user=created,
+            subscription_dao=subscription_dao,
+            actor=actor,
+        )
+    except FamilyBusy:
+        # Профиль в панели есть, запись доведёт крон по имени — ссылка появится.
+        return {"result": "pending", "profile_id": profile_id}
 
 
 async def _mark_failed(
@@ -1169,8 +1262,9 @@ async def _mark_failed(
 
     Сначала отвязываем теневой аккаунт от строки: FK с каскадом унёс бы и её, а она
     нужна, чтобы повтор с тем же `request_id` получил честное «не вышло».
+    Очередь занята — строка остаётся `creating`, её доведёт крон.
     """
-    await load_owner(session, owner_id, lock=True)
+    await family_lock(session, owner_id)
     shadow_id = (
         await session.execute(
             text(
@@ -1210,7 +1304,8 @@ async def _adopt(
     """Пользователь панели есть — завести профилю подписку и перевести в `active`."""
     from src.application.dto import RemnaSubscriptionDto, SubscriptionDto
 
-    owner = await load_owner(session, owner_id, lock=True)
+    await family_lock(session, owner_id)
+    owner = await load_owner(session, owner_id)
     p = await load_profile(session, profile_id)
     panel_uuid = str(getattr(panel_user, "uuid", "")).lower()
     if (
@@ -1295,7 +1390,10 @@ async def delete_profile(
     `deleting` фиксируется ОТДЕЛЬНЫМ commit до похода в панель: сбой панели оставляет
     строку в этом состоянии, и крон повторит — ссылка не переживёт удаление.
     """
-    await load_owner(session, owner_id, lock=True)
+    try:
+        await family_lock(session, owner_id)
+    except FamilyBusy:
+        return {"result": "busy"}
     row = (
         await session.execute(
             text(
@@ -1311,12 +1409,19 @@ async def delete_profile(
         return {"result": "not_found"}
     await _event(session, owner_id, int(profile_id), "delete_requested", actor, {"label": row[1]})
     await session.commit()
-    done = await _delete_now(session, sdk, int(profile_id), actor)
+    try:
+        done = await _delete_now(session, sdk, int(profile_id), actor)
+    except FamilyBusy:
+        done = False  # строка уже `deleting` — крон удалит в ближайшие минуты
     return {"result": "deleted" if done else "pending"}
 
 
 async def _delete_now(session: "AsyncSession", sdk: Any, profile_id: int, actor: str) -> bool:
-    """Шаги 2–3 удаления. True — профиля больше нет ни в панели, ни у нас."""
+    """Шаги 2–3 удаления. True — профиля больше нет ни в панели, ни у нас.
+
+    Панель — в очереди семьи этого владельца: удаление не должно разминуться со
+    сверкой, которая как раз включает этот профиль. Чужих строк очередь не держит.
+    """
     owner_id = (
         await session.execute(
             text("SELECT owner_user_id FROM family_profiles WHERE id = :id"), {"id": profile_id}
@@ -1325,7 +1430,7 @@ async def _delete_now(session: "AsyncSession", sdk: Any, profile_id: int, actor:
     if owner_id is None:
         await session.rollback()
         return True
-    await load_owner(session, int(owner_id), lock=True)
+    await family_lock(session, int(owner_id))
     p = await load_profile(session, profile_id)
     if p is None or p.status != "deleting":
         await session.rollback()
@@ -1375,7 +1480,10 @@ async def reset_profile_devices(
     from remnapy.models import DeleteUserAllHwidDeviceRequestDto
 
     now = now or now_utc()
-    await load_owner(session, owner_id, lock=True)
+    try:
+        await family_lock(session, owner_id)
+    except FamilyBusy:
+        return {"result": "busy"}
     p = await load_profile(session, int(profile_id))
     if p is None or p.owner_user_id != owner_id or p.status in ("failed", "deleting"):
         await session.rollback()
@@ -1437,89 +1545,182 @@ async def reconcile_owner(
     actor: str = "cron",
     config: Optional[dict] = None,
     now: Optional[datetime] = None,
+    wait_ms: Optional[int] = None,
 ) -> dict:
     """Привести все профили владельца к желаемому. Повтор безопасен.
 
-    Панель — под замком владельца: иначе продление и смена тарифа, пришедшие
-    одновременно, разошлись бы по профилям в разном порядке. Сбой панели на одном
-    профиле не мешает остальным: он получает `fail_count+1` и не получает отметку
-    сверки — следующий проход возьмёт его снова. Удаление по истечении отсрочки
-    идёт после commit, своим шагом с тем же замком.
+    ПО ОДНОМУ ПРОФИЛЮ ЗА ШАГ. Каждый шаг: встать в очередь семьи → прочитать
+    владельца и профили заново → решить → одно действие в панели → записать итог →
+    COMMIT (очередь отпущена). Так:
+      * между шагами очередь свободна: вкладка человека и хук оплаты не ждут, пока
+        крон пройдёт всю семью через медленную панель;
+      * сделанное в панели сразу записано: сбой на следующем профиле уже не откатит
+        запись о предыдущем (иначе выключенный профиль остался бы «активным» у нас,
+        а следующая сверка приняла бы его за выключенный руками и не включила);
+      * решение каждого шага принято по свежему состоянию, а не по снимку начала.
+    Сбой панели на профиле — `fail_count+1` без отметки сверки: следующий проход
+    возьмёт его снова. Очередь занята на первом шаге — FamilyBusy наверх; на
+    следующих — остаток доделает следующий проход.
     """
     config = config or load_config()
     now = now or now_utc()
-    owner = await load_owner(session, owner_id, lock=True)
-    profiles = await load_profiles(session, owner_id)
-    out: dict[str, list] = {
+    grace = int(config.get("suspend_grace_days") or DEFAULT_CONFIG["suspend_grace_days"])
+    out: dict[str, Any] = {
         "synced": [], "resumed": [], "suspended": [], "deleted": [], "gone": [], "errors": [],
+        "busy": False,
     }
-    if not any(p.status in ("active", "suspended") for p in profiles):
-        await session.rollback()
-        return out
-    purchase_at = None if reset_traffic else await last_purchase_at(session, owner_id)
-    decisions = plan_decisions(
-        owner,
-        profiles,
-        now,
-        int(config.get("suspend_grace_days") or DEFAULT_CONFIG["suspend_grace_days"]),
-        reset_traffic=reset_traffic,
-        purchase_at=purchase_at,
-    )
-    by_id = {p.id: p for p in profiles}
+    handled: set[int] = set()
     to_delete: list[int] = []
-    for d in decisions:
-        p = by_id[d.profile_id]
+    first = True
+    while True:
         try:
+            await family_lock(session, owner_id, wait_ms=wait_ms)
+        except FamilyBusy:
+            if first:
+                raise
+            out["busy"] = True
+            break
+        first = False
+        owner = await load_owner(session, owner_id)
+        profiles = await load_profiles(session, owner_id)
+        if not any(p.status in ("active", "suspended") for p in profiles):
+            await session.rollback()
+            break
+        purchase_at = None if reset_traffic else await last_purchase_at(session, owner_id)
+        decisions = plan_decisions(
+            owner, profiles, now, grace, reset_traffic=reset_traffic, purchase_at=purchase_at
+        )
+        by_id = {p.id: p for p in profiles}
+        step: Optional[Decision] = None
+        for d in decisions:
+            if d.profile_id in handled:
+                continue
             if d.action == "noop":
+                handled.add(d.profile_id)
                 await session.execute(
                     text("UPDATE family_profiles SET last_reconciled_at = now() WHERE id = :id"),
-                    {"id": p.id},
+                    {"id": d.profile_id},
                 )
             elif d.action == "relabel":
-                await _profile_ok(
-                    session, p.id, suspend_reason=d.reason, suspended_at=_NOW
-                )
-            elif d.action == "sync":
-                await _apply_sync(session, sdk, p, d.target, reset=d.reset, now=now)
-                if d.reset:
-                    await _event(session, owner_id, p.id, "renewed", actor, {"expire_at": d.target.expire_at})
-                out["synced"].append(p.id)
-            elif d.action == "resume":
-                await _apply_sync(session, sdk, p, d.target, reset=d.reset, now=now, resume=True)
-                await _event(session, owner_id, p.id, "resumed", actor, {"was": p.suspend_reason})
-                out["resumed"].append(p.id)
-            elif d.action == "suspend":
-                await panel_set_enabled(sdk, p.remna_uuid, False)
-                await _store_status(session, p, "DISABLED")
-                await _profile_ok(
-                    session, p.id, status="suspended", suspend_reason=d.reason, suspended_at=_NOW
-                )
-                await _event(session, owner_id, p.id, "suspended", actor, {"reason": d.reason})
-                out["suspended"].append(p.id)
-            elif d.action in ("delete", "gone"):
-                await _mark_deleting(session, p.id)
-                await _event(
-                    session, owner_id, p.id, "panel_gone" if d.action == "gone" else "expired_grace",
-                    actor, {"label": p.label, "reason": d.reason},
-                )
-                to_delete.append(p.id)
-                out["gone" if d.action == "gone" else "deleted"].append(p.id)
-        except PanelGone as exc:
-            # Пользователя панели нет: профиль доживать нечем — удаляем у себя.
-            await _mark_deleting(session, p.id)
-            await _event(session, owner_id, p.id, "panel_gone", actor, {"error": str(exc)[:200]})
-            to_delete.append(p.id)
-            out["gone"].append(p.id)
+                handled.add(d.profile_id)
+                await _profile_ok(session, d.profile_id, suspend_reason=d.reason, suspended_at=_NOW)
+            elif step is None:
+                step = d
+        if step is None:
+            await session.commit()
+            break
+        handled.add(step.profile_id)
+        p = by_id[step.profile_id]
+        try:
+            kind = await _apply_decision(session, sdk, owner_id, p, step, actor=actor, now=now)
+        except FamilyBusy:
+            # Выключение записало намерение и отпустило очередь, а вернуться в неё не
+            # вышло: доделает следующий проход (намерение «приостановлен» уже у нас).
+            out["busy"] = True
+            break
         except (PanelError, ValueError) as exc:
             # ValueError — битый uuid в зеркале: это тоже «не свели», а не повод
             # бросить остальных членов семьи.
             await _profile_fail(session, p.id, str(exc))
             out["errors"].append({"profile_id": p.id, "error": str(exc)})
             logger.warning(f"family: профиль #{p.id} владельца {owner_id} не сведён: {exc}")
-    await session.commit()
+        else:
+            if kind in ("deleted", "gone"):
+                to_delete.append(p.id)
+            if kind:
+                out[kind].append(p.id)
+        await session.commit()
     for profile_id in to_delete:
-        await _delete_now(session, sdk, profile_id, actor)
+        try:
+            await _delete_now(session, sdk, profile_id, actor)
+        except FamilyBusy:
+            break  # строка уже `deleting` — доведёт крон
     return out
+
+
+async def _apply_decision(
+    session: "AsyncSession",
+    sdk: Any,
+    owner_id: int,
+    p: ProfileRow,
+    d: Decision,
+    *,
+    actor: str,
+    now: datetime,
+) -> Optional[str]:
+    """Одно действие по одному профилю: панель, затем запись. Без commit."""
+    if d.action == "sync":
+        await _apply_sync(session, sdk, p, d.target, reset=d.reset, now=now)
+        if d.reset:
+            await _event(session, owner_id, p.id, "renewed", actor, {"expire_at": d.target.expire_at})
+        return "synced"
+    if d.action == "resume":
+        await _apply_sync(session, sdk, p, d.target, reset=d.reset, now=now, resume=True)
+        await _event(session, owner_id, p.id, "resumed", actor, {"was": p.suspend_reason})
+        return "resumed"
+    if d.action == "suspend":
+        return "suspended" if await _suspend(session, sdk, owner_id, p, d.reason, actor) else None
+    if d.action in ("delete", "gone"):
+        await _mark_deleting(session, p.id)
+        await _event(
+            session, owner_id, p.id, "panel_gone" if d.action == "gone" else "expired_grace",
+            actor, {"label": p.label, "reason": d.reason},
+        )
+        return "gone" if d.action == "gone" else "deleted"
+    return None
+
+
+async def _suspend(
+    session: "AsyncSession", sdk: Any, owner_id: int, p: ProfileRow, reason: Optional[str], actor: str
+) -> bool:
+    """Выключить профиль: СНАЧАЛА намерение (и commit), потом панель.
+
+    Обратный порядок терял выключение: панель профиль выключила, а запись о нём
+    откатилась вместе со сбоем на следующем шаге. Профиль оставался «активным» у нас
+    и выключенным в панели — следующая сверка принимала его за выключенный руками и
+    не включала уже оплаченной семье. С намерением впереди любой сбой после него
+    оставляет «приостановлен» у нас, а сверка доводит панель до того же (still_on) —
+    или включает профиль штатно, когда владелец снова платит.
+
+    Отметку сверки намерение сбрасывает: не дошедшее выключение крон повторит
+    ближайшим проходом, а не через час. Повторное выключение уже приостановленного
+    не сдвигает отсрочку — иначе профиль не удалился бы никогда.
+    """
+    fields: dict[str, Any] = {"status": "suspended", "suspend_reason": reason}
+    fresh_reason = p.status != "suspended" or p.suspend_reason != reason
+    if fresh_reason:
+        fields["suspended_at"] = _NOW
+    sets = ["updated_at = now()", "last_reconciled_at = NULL"]
+    params: dict[str, Any] = {"id": p.id}
+    for key, value in fields.items():
+        if value is _NOW:
+            sets.append(f"{key} = now()")
+        else:
+            sets.append(f"{key} = :{key}")
+            params[key] = value
+    await session.execute(text(f"UPDATE family_profiles SET {', '.join(sets)} WHERE id = :id"), params)
+    if fresh_reason:
+        await _event(session, owner_id, p.id, "suspended", actor, {"reason": reason})
+    await session.commit()
+
+    # Намерение записано и очередь отпущена — встаём в неё снова и выключаем.
+    await family_lock(session, owner_id)
+    current = await load_profile(session, p.id)
+    if current is None or current.status != "suspended":
+        await session.rollback()  # пока очередь была свободна, профиль поменяли
+        return False
+    if current.remna_uuid is None:
+        raise PanelGone("у профиля нет пользователя панели")
+    await panel_set_enabled(sdk, current.remna_uuid, False)
+    await _store_status(session, current, "DISABLED")
+    await session.execute(
+        text(
+            "UPDATE family_profiles SET last_reconciled_at = now(), fail_count = 0, "
+            "last_error = NULL WHERE id = :id"
+        ),
+        {"id": p.id},
+    )
+    return True
 
 
 async def _mark_deleting(session: "AsyncSession", profile_id: int) -> None:
@@ -1570,6 +1771,11 @@ async def _apply_sync(
 async def after_purchase(session: "AsyncSession", sdk: Any, owner_id: int) -> Optional[dict]:
     """Хук оплаты: владелец купил период — семья получает тот же срок и новый трафик.
 
+    Оплата не ждёт семью НИКОГДА:
+      * очередь семьи берётся без ожидания — занята (крон как раз сверяет) → выходим,
+        крон увидит оплату позже последней сверки профиля и обнулит трафик сам;
+      * вся работа — в общем дедлайне HOOK_DEADLINE_SECONDS: медленная панель не
+        держит ответ шлюзу, недоделанное доводит крон тем же правилом.
     Дешёвая проверка «есть ли вообще семья» — первой: хук стоит на КАЖДОЙ оплате, а
     семьи у единиц. Панели нет — ничего не делаем, крон догонит за пять минут.
     """
@@ -1587,7 +1793,21 @@ async def after_purchase(session: "AsyncSession", sdk: Any, owner_id: int) -> Op
     await session.rollback()
     if not has:
         return None
-    return await reconcile_owner(session, sdk, owner_id, reset_traffic=True, actor="payment")
+    try:
+        return await asyncio.wait_for(
+            reconcile_owner(session, sdk, owner_id, reset_traffic=True, actor="payment", wait_ms=0),
+            timeout=HOOK_DEADLINE_SECONDS,
+        )
+    except FamilyBusy:
+        logger.info(f"family: семья владельца {owner_id} сверяется кроном — хук оплаты уступил")
+        return {"busy": True}
+    except asyncio.TimeoutError:
+        logger.warning(f"family: хук оплаты не уложился в {HOOK_DEADLINE_SECONDS} с — остальное доведёт крон")
+        try:
+            await session.rollback()
+        except Exception:  # noqa: BLE001 — сессия после отмены могла сломаться
+            pass
+        return {"timeout": True}
 
 
 async def owners_to_reconcile(session: "AsyncSession", *, full: bool, limit: int = 500) -> list[int]:
@@ -1700,26 +1920,30 @@ def orphans_text(names: Sequence[str]) -> str:
 async def purge_targets(session: "AsyncSession", sdk: Any, owner_id: int) -> tuple[list[str], list[int]]:
     """Что снести вместе с человеком: пользователей панели его семьи и теневые аккаунты.
 
-    Таблицы может ещё не быть (свежая установка до миграции) — тогда семьи нет. Имя
+    Зовётся в очереди семьи этого владельца (см. overlay_user_purge): иначе профиль,
+    заведённый между этим списком и удалением, остался бы в панели сиротой.
+
+    Таблицы может ещё не быть (свежая установка до миграции) — тогда семьи нет; это
+    проверяется ЯВНО, а не глотанием любой ошибки: сбой базы обязан прервать удаление
+    человека, а не превратиться в «семьи нет» и оставить его профили работать. Имя
     без известного uuid (профиль застрял в «создаю») спрашиваем у панели; панель не
     ответила — PanelError, и удаление человека прерывается целиком, ничего не меняя.
     """
-    try:
-        async with session.begin_nested():
-            rows = (
-                await session.execute(
-                    text(
-                        "SELECT fp.profile_user_id, fp.panel_username, fp.panel_uuid::text, "
-                        "  s.user_remna_id::text "
-                        "FROM family_profiles fp "
-                        "LEFT JOIN subscriptions s ON s.user_id = fp.profile_user_id "
-                        "WHERE fp.owner_user_id = :u AND fp.status <> 'failed'"
-                    ),
-                    {"u": owner_id},
-                )
-            ).all()
-    except Exception:  # noqa: BLE001 — нет таблицы → нет и семьи
+    exists = (await session.execute(text("SELECT to_regclass('family_profiles')"))).scalar()
+    if exists is None:
         return [], []
+    rows = (
+        await session.execute(
+            text(
+                "SELECT fp.profile_user_id, fp.panel_username, fp.panel_uuid::text, "
+                "  s.user_remna_id::text "
+                "FROM family_profiles fp "
+                "LEFT JOIN subscriptions s ON s.user_id = fp.profile_user_id "
+                "WHERE fp.owner_user_id = :u AND fp.status <> 'failed'"
+            ),
+            {"u": owner_id},
+        )
+    ).all()
     uuids: set[str] = set()
     shadows: set[int] = set()
     lookups: set[str] = set()
@@ -1782,7 +2006,7 @@ async def family_view(
     """Всё, что видит владелец семьи: право, условия, профили с цифрами панели."""
     config = config or load_config()
     now = now or now_utc()
-    owner = await load_owner(session, owner_id, lock=False)
+    owner = await load_owner(session, owner_id)
     profiles = await load_profiles(session, owner_id)
     await session.rollback()
     visible = [p for p in profiles if p.status in ("creating", "active", "suspended", "deleting")]
@@ -1842,7 +2066,7 @@ async def menu_visible(session: "AsyncSession", owner_id: int, now: Optional[dat
     """
     if not load_config().get("enabled"):
         return False
-    owner = await load_owner(session, owner_id, lock=False)
+    owner = await load_owner(session, owner_id)
     if owner.terms is not None and not owner.is_trial:
         return True
     has = (
@@ -1890,6 +2114,7 @@ __all__ = [
     "DEFAULT_CONFIG",
     "FAMILY_PLAN_ID",
     "Decision",
+    "FamilyBusy",
     "OwnerState",
     "PanelError",
     "PanelGone",
@@ -1901,6 +2126,7 @@ __all__ = [
     "create_eligibility",
     "create_profile",
     "delete_profile",
+    "family_lock",
     "family_view",
     "load_config",
     "menu_visible",

@@ -72,6 +72,9 @@ class Panel:
         self.fail_lookup = False
         self.fail_delete = False
         self.fail_update = False
+        # «Медленная панель»: вызовы update/disable ждут, пока тест не откроет ворота.
+        self.gate: asyncio.Event | None = None
+        self.entered = asyncio.Event()
         self.users = _Users(self)
         self.hwid = _Hwid(self)
         self.ip_control = _Connections()
@@ -134,9 +137,15 @@ class _Users:
     async def get_user_by_uuid(self, uuid):
         return self._get(uuid)
 
+    async def _slow(self) -> None:
+        self.p.entered.set()
+        if self.p.gate is not None:
+            await self.p.gate.wait()
+
     async def update_user(self, body):
         fields = sorted(body.model_dump(exclude_unset=True).keys())
         self.p.calls.append(("update", str(body.uuid), fields, body.expire_at))
+        await self._slow()
         if self.p.fail_update:
             raise RuntimeError("panel is down")
         user = self._get(body.uuid)
@@ -161,6 +170,7 @@ class _Users:
         from remnapy.enums.users import UserStatus
 
         self.p.calls.append(("disable", str(uuid)))
+        await self._slow()
         user = self._get(uuid)
         user.status = UserStatus.DISABLED
         return user
@@ -752,6 +762,145 @@ async def test_change_to_regular_plan_suspends_all_and_back_resumes(db):
     for p in await db.profiles(owner_id):
         assert p.status == "active" and p.suspend_reason is None
         assert db.panel.store[p.sub_remna_id].status.value == "ACTIVE"
+
+
+async def _hold_family_lock(db: Db, owner_id: int):
+    """Чужая транзакция держит очередь семьи — как крон посреди медленной панели."""
+    from sqlalchemy import text as sa_text
+
+    session = db.session()
+    await session.execute(
+        sa_text("SELECT pg_advisory_xact_lock(:ns, :o)"),
+        {"ns": family.FAMILY_LOCK_NS, "o": owner_id},
+    )
+    return session
+
+
+async def _renew_owner(db: Db, owner_id: int, new_expire: datetime) -> None:
+    """Оплата продления так, как её проводит база: сначала счёт, потом подписка."""
+    await db.run(
+        "INSERT INTO transactions (payment_id, user_id, status, is_test, purchase_type, "
+        "gateway_type, pricing, currency, plan_snapshot) "
+        "VALUES (gen_random_uuid(), :u, 'COMPLETED', false, 'RENEW', 'YOOMONEY', "
+        "CAST('{}' AS jsonb), 'RUB', CAST('{\"id\": 7}' AS jsonb))",
+        u=owner_id,
+    )
+    await db.run(
+        "UPDATE subscriptions SET expire_at = :e, updated_at = clock_timestamp() WHERE id = "
+        "(SELECT current_subscription_id FROM users WHERE id = :u)",
+        e=new_expire,
+        u=owner_id,
+    )
+
+
+async def test_payment_does_not_wait_for_the_family(db):
+    """Крон сверяет семью (очередь занята) — хук оплаты уступает сразу, а продление
+    с обнулением трафика доводит следующий проход крона: оплата позже сверки."""
+    _plan, owner_id, _ids = await _family(db, 2)
+    new_expire = now() + timedelta(days=60)
+    await _renew_owner(db, owner_id, new_expire)
+    holder = await _hold_family_lock(db, owner_id)
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    try:
+        async with db.session() as s:
+            out = await family.after_purchase(s, db.panel, owner_id)
+    finally:
+        await holder.rollback()
+        await holder.close()
+    assert out == {"busy": True}
+    assert loop.time() - started < 2, "оплата ждала очередь семьи"
+    assert db.panel.count("update") == 0
+
+    async with db.session() as s:
+        await family.reconcile_owner(s, db.panel, owner_id)
+    for p in await db.profiles(owner_id):
+        assert abs(p.sub_expire_at - new_expire) < timedelta(seconds=1)
+        assert ("reset", p.sub_remna_id) in db.panel.calls, "крон не догнал сброс трафика"
+
+
+async def test_payment_hook_has_a_deadline(db, monkeypatch):
+    """Панель зависла — хук оплаты отпускает оплату по дедлайну, а не по таймауту базы."""
+    _plan, owner_id, _ids = await _family(db, 1)
+    await _renew_owner(db, owner_id, now() + timedelta(days=60))
+    monkeypatch.setattr(family, "HOOK_DEADLINE_SECONDS", 0.5)
+    db.panel.gate = asyncio.Event()  # никогда не откроется
+    async with db.session() as s:
+        out = await asyncio.wait_for(family.after_purchase(s, db.panel, owner_id), 5)
+    assert out == {"timeout": True}
+
+
+async def test_owner_row_is_free_while_the_family_talks_to_the_panel(db):
+    """Пока сверка ждёт медленную панель, строка владельца свободна: покупка базы
+    (CHANGE/NEW пишет в users после панели) не упирается в семью."""
+    from sqlalchemy import text as sa_text
+
+    _plan, owner_id, _ids = await _family(db, 2)
+    await db.run("UPDATE family_plan_terms SET devices_per_profile = 3, updated_at = now()")
+    db.panel.gate = asyncio.Event()
+    db.panel.entered.clear()
+    task = asyncio.create_task(db.reconcile(owner_id))
+    await asyncio.wait_for(db.panel.entered.wait(), 5)
+    try:
+        async with db.session() as s:
+            await s.execute(sa_text("SET LOCAL lock_timeout = '1s'"))
+            await s.execute(
+                sa_text("UPDATE users SET updated_at = now() WHERE id = :u"), {"u": owner_id}
+            )
+            await s.commit()
+    finally:
+        db.panel.gate.set()
+        out = await asyncio.wait_for(task, 10)
+    assert len(out["synced"]) == 2
+
+
+async def test_each_profile_is_committed_right_after_the_panel(db):
+    """Сбой базы на втором профиле не откатывает запись о первом: выключенный в
+    панели профиль у нас тоже записан выключенным и включится вместе с семьёй."""
+    _plan, owner_id, _ids = await _family(db, 2)
+    real = family._store_status
+    calls = {"n": 0}
+
+    async def flaky_store(session, p, status):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("база моргнула")
+        await real(session, p, status)
+
+    await db.run("UPDATE users SET is_blocked = true, updated_at = now() WHERE id = :u", u=owner_id)
+    family._store_status = flaky_store
+    try:
+        with pytest.raises(RuntimeError):
+            await db.reconcile(owner_id)
+    finally:
+        family._store_status = real
+    rows = await db.profiles(owner_id)
+    first = next(p for p in rows if p.status == "suspended")
+    assert first.suspend_reason == "owner_blocked" and first.sub_status == "DISABLED"
+
+    # Владельца разблокировали — оба профиля снова работают, включая записанный первым.
+    await db.run("UPDATE users SET is_blocked = false, updated_at = now() WHERE id = :u", u=owner_id)
+    await db.reconcile(owner_id)
+    assert {p.status for p in await db.profiles(owner_id)} == {"active"}
+    assert all(u.status.value == "ACTIVE" for u in db.panel.store.values())
+
+
+async def test_busy_family_answers_busy_instead_of_waiting(db, monkeypatch):
+    """Вкладка человека не висит, пока крон в панели: «занято, повторите»."""
+    _plan, owner_id, (pid,) = await _family(db, 1)
+    monkeypatch.setattr(family, "LOCK_WAIT_MS", 300)
+    holder = await _hold_family_lock(db, owner_id)
+    try:
+        assert (await db.create(owner_id, "Папа"))["result"] == "busy"
+        async with db.session() as s:
+            deleted = await family.delete_profile(s, db.panel, owner_id=owner_id, profile_id=pid, actor="t")
+        async with db.session() as s:
+            reset = await family.reset_profile_devices(s, db.panel, owner_id=owner_id, profile_id=pid, actor="t")
+    finally:
+        await holder.rollback()
+        await holder.close()
+    assert deleted == {"result": "busy"} and reset == {"result": "busy"}
+    assert db.panel.count("create") == 1 and db.panel.count("delete") == 0
 
 
 async def test_unfreeze_sets_the_term_before_enabling(db):

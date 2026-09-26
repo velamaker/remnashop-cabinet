@@ -62,6 +62,11 @@ class PanelUnavailable(RuntimeError):
     """Панель не отдала аккаунт — удаление прерываем, ничего не меняя."""
 
 
+# Сколько ждём очередь семьи удаляемого человека (крон может как раз сверять её
+# через медленную панель). Дольше — «повторите через минуту», ничего не меняя.
+PURGE_LOCK_WAIT_MS = 15_000
+
+
 # Личные данные: вычищаются в обоих случаях, и при обезличивании тоже.
 # `user_oauth_providers` здесь не для порядка: там лежит внешняя личность
 # (кто этот человек у Google/Telegram), и она обязана исчезнуть вместе с ним.
@@ -194,9 +199,19 @@ async def purge_user(
     обезличенной ради денежной отчётности. Вызывающий обязан сам решить, что
     этому админу можно удалять этого человека.
     """
+    # 0) Замки — ПЕРВЫМ делом и в одном порядке с остальными: очередь семьи этого
+    #    человека (профиль не заведётся и не включится, пока мы его удаляем), затем
+    #    его строка users (докупки и перенос остатка запирают её же). Семейные
+    #    операции строку users не запирают вовсе — встречной очереди здесь нет.
+    try:
+        await family.family_lock(session, user_id, wait_ms=PURGE_LOCK_WAIT_MS)
+    except family.FamilyBusy as exc:
+        raise PanelUnavailable(
+            "семейные профили человека сейчас обновляются — повторите через минуту"
+        ) from exc
     who = (
         await session.execute(
-            text("SELECT telegram_id, email FROM users WHERE id = :u"), {"u": user_id}
+            text("SELECT telegram_id, email FROM users WHERE id = :u FOR UPDATE"), {"u": user_id}
         )
     ).first()
     telegram_id = int(who[0]) if who and who[0] is not None else None

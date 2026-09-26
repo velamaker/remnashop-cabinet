@@ -333,3 +333,15 @@ def test_config_is_off_by_default_and_normalized(tmp_path: Path, monkeypatch):
     assert json.loads((tmp_path / "family.json").read_text("utf-8"))["enabled"] is True
     (tmp_path / "family.json").write_text("{битый", "utf-8")
     assert family.load_config()["enabled"] is False
+
+
+def test_suspended_profile_that_is_still_on_is_switched_off_again():
+    """Намерение «приостановлен» записано, а панель говорит «работает» (выключение не
+    дошло или профиль включили руками) — выключаем снова, отсрочку не сдвигаем."""
+    on = profile(1, status="suspended", reason="owner_frozen", suspended_at=NOW, sub_status="ACTIVE")
+    assert actions(family.plan_decisions(owner(frozen=True), [on], NOW, 30)) == {1: ("suspend", "owner_frozen")}
+    off = profile(1, status="suspended", reason="owner_frozen", suspended_at=NOW)
+    assert actions(family.plan_decisions(owner(frozen=True), [off], NOW, 30)) == {1: ("noop", "owner_frozen")}
+    gone = owner(expire_at=NOW - timedelta(hours=1), sub_status="EXPIRED")
+    on_expired = profile(2, status="suspended", reason="owner_expired", suspended_at=NOW, sub_status="LIMITED")
+    assert actions(family.plan_decisions(gone, [on_expired], NOW, 30)) == {2: ("suspend", "owner_expired")}
