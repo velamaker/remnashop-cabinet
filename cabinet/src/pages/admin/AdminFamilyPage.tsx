@@ -51,6 +51,7 @@ function PlanRow({
   const [error, setError] = useState<string | null>(null);
 
   const valid = inRange(profiles) && inRange(devices);
+  const title = plan.deleted ? t("adm.family.deleted_plan", { id: plan.id }) : plan.name;
 
   const save = async () => {
     if (!valid) {
@@ -70,7 +71,7 @@ function PlanRow({
   };
 
   const clear = async () => {
-    if (!window.confirm(t("adm.family.confirm_regular", { plan: plan.name, days: graceDays }))) return;
+    if (!window.confirm(t("adm.family.confirm_regular", { plan: title, days: graceDays }))) return;
     setBusy(true);
     setError(null);
     try {
@@ -87,8 +88,10 @@ function PlanRow({
     <li className="flex flex-col gap-3 border-t border-border-subtle py-3 first:border-t-0 sm:flex-row sm:items-end">
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-fg">
-          {plan.name}
-          {!plan.is_active && <span className="ml-2 text-xs text-fg-muted">({t("adm.family.inactive")})</span>}
+          {title}
+          {!plan.deleted && !plan.is_active && (
+            <span className="ml-2 text-xs text-fg-muted">({t("adm.family.inactive")})</span>
+          )}
         </p>
         <p className="mt-0.5 text-xs text-fg-muted">
           {plan.terms
@@ -99,9 +102,15 @@ function PlanRow({
             : t("adm.family.regular")}
         </p>
         {plan.is_trial && <p className="mt-0.5 text-xs text-fg-muted">{t("adm.family.trial_note")}</p>}
+        {plan.deleted && <p className="mt-0.5 text-xs text-fg-muted">{t("adm.family.deleted_note")}</p>}
         {error && <p className="mt-1 text-xs text-danger">{error}</p>}
       </div>
-      {!plan.is_trial && (
+      {plan.deleted && plan.terms && (
+        <button onClick={clear} disabled={busy} className={BUTTON}>
+          {t("adm.family.make_regular")}
+        </button>
+      )}
+      {!plan.is_trial && !plan.deleted && (
         <div className="flex flex-wrap items-end gap-2">
           <label className="w-24">
             <span className="mb-1 block text-xs text-fg-muted">{t("adm.family.max_profiles")}</span>
@@ -238,7 +247,7 @@ export function AdminFamilyPage() {
           <p className="mt-3 text-sm text-fg-muted">{t("adm.family.plans_empty")}</p>
         ) : (
           <ul className="mt-2">
-            {data.plans.map((plan) => (
+            {data.plans.filter((plan) => !(plan.deleted && !plan.terms)).map((plan) => (
               <PlanRow
                 key={plan.id}
                 plan={plan}

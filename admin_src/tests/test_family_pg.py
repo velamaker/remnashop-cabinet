@@ -1464,3 +1464,28 @@ async def test_profile_name_never_reaches_html_of_admins_or_the_subscription_pag
     for text_ in (name, description):
         assert not set("<>&") & set(text_), text_
     assert name == f"Семья #{owner_id} · профиль {p.id}"
+
+
+async def test_deleting_the_plan_does_not_take_the_family_mid_period(db):
+    """Тариф удалили из каталога — оплатившие владельцы доживают срок с семьёй (как
+    база оставляет им снимок тарифа), а условия видны в админке и снимаются там."""
+    admin = importlib.import_module("src.web.endpoints.admin.family")
+    plan_id, owner_id, (pid,) = await _family(db, 1)
+    await db.run("DELETE FROM plans WHERE id = :p", p=plan_id)
+    assert await db.scalar("SELECT count(*) FROM family_plan_terms WHERE plan_id = :p", p=plan_id) == 1
+    await db.run("UPDATE family_profiles SET last_reconciled_at = NULL")
+    out = await db.reconcile(owner_id)
+    assert not out["suspended"] and (await db.profiles(owner_id))[0].status == "active"
+
+    raw = admin.get_family_admin.__dishka_orig_func__
+    async with db.session() as s:
+        data = await raw(_admin=SimpleNamespace(role=5), session=s)
+    deleted = [p for p in data["plans"] if p["id"] == plan_id]
+    assert deleted and deleted[0]["deleted"] is True and deleted[0]["terms"] is not None
+
+    # «Сделать обычным» для удалённого тарифа — и семья приостанавливается штатно.
+    raw_delete = admin.delete_family_terms.__dishka_orig_func__
+    async with db.session() as s:
+        await raw_delete(plan_id=plan_id, _admin=SimpleNamespace(role=5), session=s)
+    out = await db.reconcile(owner_id)
+    assert out["suspended"] == [pid]

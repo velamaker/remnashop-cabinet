@@ -105,4 +105,33 @@ describe("AdminFamilyPage", () => {
     expect((button as HTMLButtonElement).disabled).toBe(true);
     expect(setTermsMock).not.toHaveBeenCalled();
   });
+
+  it("условия удалённого тарифа видны и снимаются, но не редактируются", async () => {
+    getMock.mockResolvedValue({
+      config: { enabled: true, suspend_grace_days: 30 },
+      plans: [
+        {
+          id: 9,
+          name: "",
+          deleted: true,
+          is_active: false,
+          is_trial: false,
+          device_limit: 0,
+          traffic_limit: 0,
+          terms: { max_profiles: 2, devices_per_profile: 2 },
+        },
+      ],
+      summary: {},
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    clearTermsMock.mockResolvedValue({ plan_id: 9, terms: null });
+    renderPage();
+    expect(await screen.findByText(ru("adm.family.deleted_plan", { id: 9 }))).toBeTruthy();
+    expect(document.body.textContent).toContain(ru("adm.family.deleted_note"));
+    expect(screen.queryByLabelText(ru("adm.family.max_profiles"))).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: ru("adm.family.make_regular") }));
+    await waitFor(() => expect(clearTermsMock).toHaveBeenCalledWith(9));
+    // Снятые условия удалённого тарифа — строке больше незачем висеть в списке.
+    await waitFor(() => expect(screen.queryByText(ru("adm.family.deleted_plan", { id: 9 }))).toBeNull());
+  });
 });

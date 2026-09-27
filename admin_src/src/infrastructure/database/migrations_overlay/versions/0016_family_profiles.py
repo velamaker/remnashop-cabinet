@@ -37,6 +37,14 @@ Create Date: 2026-09-26
 этой отметки: «сверил» и «обнулил» — разные события, и отметка сверки для этого не
 годится (её сбрасывают и выключение, и только что заведённый профиль).
 
+`family_plan_terms.plan_id` — БЕЗ внешнего ключа на plans, и это намеренно. Тариф из
+каталога удаляют, а подписчики доживают оплаченный срок по снимку тарифа (так делает
+база). С каскадом удаление тарифа снимало бы семейные условия, и оплатившие владельцы
+теряли бы семью посреди периода. Без ключа условия удалённого тарифа живут, пока их не
+снимут в админке («Сделать обычным» — удалённый тариф там виден). Номера тарифов не
+переиспользуются (последовательность), так что к новому тарифу чужие условия не
+прилипнут.
+
 FK на users(id) обязательны: scripts/merge-duplicate.py переносит строки двойника по
 FK, а удаление владельца должно уносить и его профили. `profile_user_id` — nullable:
 у неудачной попытки теневой аккаунт уже удалён, а строка остаётся, чтобы повтор с тем
@@ -59,7 +67,7 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE TABLE IF NOT EXISTS family_plan_terms (
-            plan_id             INTEGER      PRIMARY KEY REFERENCES plans(id) ON DELETE CASCADE,
+            plan_id             INTEGER      PRIMARY KEY,
             max_profiles        INTEGER      NOT NULL CHECK (max_profiles BETWEEN 1 AND 10),
             devices_per_profile INTEGER      NOT NULL CHECK (devices_per_profile BETWEEN 1 AND 10),
             updated_at          TIMESTAMPTZ  NOT NULL DEFAULT now()

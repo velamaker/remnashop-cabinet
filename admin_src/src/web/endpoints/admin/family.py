@@ -1,7 +1,9 @@
 """Админ: семейные профили — тумблер, отсрочка удаления и семейные тарифы (overlay).
 
 Страница «Семейные профили»: выключатель функции, сколько дней живёт приостановленный
-профиль, и список тарифов с их условиями «N профилей × D устройств на профиль».
+профиль, и список тарифов с их условиями «N профилей × D устройств на профиль». Условия
+тарифа, удалённого из каталога, тоже в списке: его подписчики живут по ним до конца
+оплаченного срока, и снять их («Сделать обычным») можно только здесь.
 Тариф без условий — обычный; снять условия — сделать тариф обычным (профили его
 владельцев приостановятся и через отсрочку удалятся).
 
@@ -38,12 +40,14 @@ class FamilyTermsRequest(BaseModel):
     devices_per_profile: int
 
 
+# FULL JOIN: условия УДАЛЁННОГО из каталога тарифа тоже видны (строки plans нет) —
+# его подписчики живут по ним до конца срока, и снять их можно только отсюда.
 PLANS_SQL = """
-SELECT p.id, p.name, p.is_active, p.is_trial, p.device_limit, p.traffic_limit,
-       t.max_profiles, t.devices_per_profile
+SELECT COALESCE(p.id, t.plan_id), p.name, p.is_active, p.is_trial, p.device_limit,
+       p.traffic_limit, t.max_profiles, t.devices_per_profile, p.id IS NULL AS deleted
 FROM plans p
-LEFT JOIN family_plan_terms t ON t.plan_id = p.id
-ORDER BY p.order_index, p.id
+FULL OUTER JOIN family_plan_terms t ON t.plan_id = p.id
+ORDER BY p.order_index NULLS LAST, COALESCE(p.id, t.plan_id)
 """
 
 # Сводка — по живым профилям: сколько семей, сколько работает, сколько стоит.
@@ -79,7 +83,8 @@ async def get_family_admin(
             plans.append(
                 {
                     "id": int(row[0]),
-                    "name": row[1],
+                    "name": row[1] or "",
+                    "deleted": bool(row[8]),
                     "is_active": bool(row[2]),
                     "is_trial": bool(row[3]),
                     "device_limit": int(row[4] or 0),

@@ -2646,6 +2646,8 @@ const ru: Dict = {
   "family.errBusy": "Семья сейчас обновляется — попробуйте через минуту.",
   "family.periodHint": "За оплаченный период можно завести до {limit} профилей, включая замену удалённого (заведено: {created}). Счётчик обнуляется при продлении.",
   "adm.family.period_note": "За оплаченный период владелец может завести профилей на один больше, чем мест в тарифе: одна замена удалённого. Новый профиль — это свежий трафик и пустой список устройств, поэтому «удалить и завести заново» ограничено; счётчик обнуляется при продлении.",
+  "adm.family.deleted_plan": "Удалённый тариф #{id}",
+  "adm.family.deleted_note": "Тариф удалён из каталога, но его подписчики пользуются семьёй до конца оплаченного срока. Снимите условия, если семья им больше не положена.",
 };
 
 const en: Dict = {
@@ -5267,6 +5269,8 @@ const en: Dict = {
   "family.errBusy": "The family is being updated right now — please try again in a minute.",
   "family.periodHint": "Up to {limit} profiles can be created per paid period, including replacing a deleted one (created: {created}). The counter resets on renewal.",
   "adm.family.period_note": "Per paid period an owner can create one profile more than the plan has seats: one replacement of a deleted one. A new profile means fresh traffic and an empty device list, so “delete and recreate” is limited; the counter resets on renewal.",
+  "adm.family.deleted_plan": "Deleted plan #{id}",
+  "adm.family.deleted_note": "The plan was removed from the catalog, but its subscribers keep the family until their paid term ends. Remove the terms if they should no longer have it.",
 };
 
 const tr: Dict = {

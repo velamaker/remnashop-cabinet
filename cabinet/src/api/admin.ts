@@ -1356,6 +1356,9 @@ export interface FamilyTerms {
 export interface FamilyAdminPlan {
   id: number;
   name: string;
+  /** Тариф удалён из каталога, а его семейные условия живут: подписчики доживают
+   *  оплаченный срок. Снять условия можно только здесь. */
+  deleted?: boolean;
   is_active: boolean;
   is_trial: boolean;
   device_limit: number;
