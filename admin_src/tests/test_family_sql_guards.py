@@ -126,17 +126,23 @@ def test_pause_is_read_as_open_only():
     assert "active = true" in family.PAUSE_SQL
 
 
-def test_reserve_is_judged_by_history_not_by_the_term():
-    """Любая выдача резерва (и закрытая) против последнего приобретения периода —
-    сравнение сроков обманывали пауза и бесплатные дни поверх резерва."""
+def test_reserve_counts_only_while_its_window_is_open():
+    """Семья «истекла» только на ОТКРЫТОМ резерве без приобретения после него;
+    закрытый резерв не влияет, остаток резерва не вычитается."""
     sql = family.OWNER_TIMELINE_SQL
-    assert "max(r.granted_at) FROM reserve_grants r WHERE r.user_id = :uid)" in sql
-    assert "ended" not in sql, "закрытая выдача резерва тоже считается"
+    assert "r.ended = false AND r.reserve_expire_at > now()" in sql
     assert "t.status::text = 'COMPLETED' AND t.is_test = false" in sql
     assert "ELSE 0 END) > 0" in sql
     assert "p.reward_type::text = 'SUBSCRIPTION'" in sql
-    # Остаток резерва — только за продления и подарки на текущую строку подписки.
-    assert "kind = 'RENEW'" in sql and "e.at >= (SELECT created_at FROM cur)" in sql
+    assert "reserve_left" not in sql and "EPOCH" not in sql
+
+
+def test_gifts_to_others_are_not_own_purchases():
+    """Подарок другому человеку — оплачен владельцем, но период не его: ни резерв не
+    закрывает, ни трафик семье не обнуляет. Исключение — как в переносе остатка."""
+    for sql in (family.OWNER_TIMELINE_SQL, family.PERIOD_START_SQL):
+        assert "NOT EXISTS (SELECT 1 FROM gift_payments gp WHERE gp.payment_id = t.payment_id)" in sql
+        assert "COALESCE(t.gateway_display_name, '') <> 'Баланс · подарок'" in sql
 
 
 def test_traffic_reset_follows_only_real_plan_purchases():

@@ -165,9 +165,9 @@ RESERVED = NOW - timedelta(days=2)
 
 
 def test_reserve_gives_the_family_nothing():
-    """Резерв двигает срок строки вперёд и оставляет ACTIVE — семья не получает ни дня."""
+    """Открытый резерв без приобретения после него — семья не получает ни дня."""
     on_reserve = owner(
-        expire_at=NOW + timedelta(days=5), last_acquired_at=BOUGHT, last_reserve_at=RESERVED
+        expire_at=NOW + timedelta(days=5), last_acquired_at=BOUGHT, open_reserve_at=RESERVED
     )
     assert family.owner_condition(on_reserve, NOW) == "expired"
     old = profile(1, sub_expire_at=NOW - timedelta(days=1), sub_status="EXPIRED")
@@ -175,37 +175,33 @@ def test_reserve_gives_the_family_nothing():
     assert actions(d) == {1: ("noop", None)}
 
 
-@pytest.mark.parametrize(
-    "expire",
-    [
-        # Пауза во время резерва и её снятие: срок ушёл за конец окна резерва.
-        NOW + timedelta(days=12),
-        # Дни по промокоду или за приглашение поверх (уже закрытого) резерва.
-        NOW + timedelta(days=40),
-    ],
-)
-def test_time_grown_out_of_a_reserve_is_not_paid(expire):
-    """Срок владельца ушёл дальше окна резерва, но приобретения после резерва не
-    было — семья по-прежнему ничего не получает, завести профиль нельзя."""
-    state = owner(expire_at=expire, last_acquired_at=BOUGHT, last_reserve_at=RESERVED)
+def test_time_grown_on_an_open_reserve_is_not_paid():
+    """Пауза, «+N дней», дни за приглашение на открытом резерве уводят срок за конец
+    окна, но приобретением не являются — семья не получает ничего."""
+    state = owner(expire_at=NOW + timedelta(days=40), last_acquired_at=BOUGHT, open_reserve_at=RESERVED)
     assert family.owner_condition(state, NOW) == "expired"
     assert family.create_eligibility(state, {"enabled": True}, 0, NOW) == "reserve"
     alive = profile(1, sub_expire_at=NOW + timedelta(days=3))
     assert actions(family.plan_decisions(state, [alive], NOW, 30)) == {1: ("suspend", "owner_expired")}
 
 
-def test_purchase_after_a_reserve_is_paid_but_without_the_reserve_left():
-    """Продлили поверх открытого резерва: период считается от конца резерва, и остаток
-    резерва сидит внутри срока владельца. Семье — срок без этого остатка."""
-    left = timedelta(days=5)
+def test_closed_reserve_does_not_matter():
+    """Окно резерва кончилось — резерв на семью не влияет: срок владельца (например,
+    ручное «+дни» админом) семья получает целиком."""
+    state = owner(expire_at=NOW + timedelta(days=10), last_acquired_at=BOUGHT, open_reserve_at=None)
+    assert family.owner_condition(state, NOW) == "ok"
+
+
+def test_purchase_on_an_open_reserve_gives_the_whole_owner_term():
+    """Купил поверх открытого резерва — семья идёт за сроком владельца целиком, остаток
+    резерва не вычитается (осознанное упрощение, как у самого владельца)."""
     paid = owner(
         expire_at=NOW + timedelta(days=35),
         last_acquired_at=NOW - timedelta(hours=1),
-        last_reserve_at=RESERVED,
-        reserve_left=left,
+        open_reserve_at=RESERVED,
     )
     assert family.owner_condition(paid, NOW) == "ok"
-    assert family.target_for(paid).expire_at == NOW + timedelta(days=30)
+    assert family.target_for(paid).expire_at == NOW + timedelta(days=35)
 
 
 def test_change_to_regular_plan_suspends_all_and_back_resumes():
@@ -325,7 +321,7 @@ def test_needs_sync_ignores_subsecond_drift_and_squad_order():
         ({"is_trial": True}, 0, {}, "trial"),
         ({"terms": None}, 0, {}, "not_family"),
         ({"frozen": True}, 0, {}, "frozen"),
-        ({"last_acquired_at": NOW - timedelta(days=40), "last_reserve_at": NOW - timedelta(days=1)}, 0, {}, "reserve"),
+        ({"last_acquired_at": NOW - timedelta(days=40), "open_reserve_at": NOW - timedelta(days=1)}, 0, {}, "reserve"),
         ({"sub_status": "EXPIRED"}, 0, {}, "not_active"),
         ({"expire_at": NOW - timedelta(minutes=1)}, 0, {}, "not_active"),
         ({}, 2, {}, "max_reached"),

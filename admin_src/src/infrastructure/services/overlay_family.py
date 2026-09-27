@@ -187,14 +187,12 @@ class OwnerState:
     plan: Optional[dict] = None
     sub_updated_at: Optional[datetime] = None
     frozen: bool = False
-    # Последняя выдача бесплатного резерва (открытая или уже закрытая).
-    last_reserve_at: Optional[datetime] = None
-    # Последнее «приобретение» периода: настоящая покупка, подарок/промокод на тариф
-    # или новая строка подписки (смена тарифа, новая подписка, выдача админом).
+    # Выдача бесплатного резерва, окно которой ещё не кончилось (None — открытого нет).
+    open_reserve_at: Optional[datetime] = None
+    # Последнее «приобретение» периода: настоящая покупка (не подарок другому),
+    # подарок/промокод на тариф или новая строка подписки (смена тарифа, новая
+    # подписка, выдача админом).
     last_acquired_at: Optional[datetime] = None
-    # Сколько дней резерва осталось внутри срока, когда период продлили поверх
-    # открытого резерва (продление считает от конца резерва, а не от оплаты).
-    reserve_left: timedelta = timedelta(0)
     terms: Optional[Terms] = None
 
     @property
@@ -209,26 +207,19 @@ class OwnerState:
     def on_reserve(self) -> bool:
         """Живёт на бесплатном резерве, а не на оплаченном сроке.
 
-        Судим не по сроку, а по ИСТОРИИ: была выдача резерва после последнего
-        приобретения периода — значит, всё, что сейчас есть у владельца сверх
-        оплаченного, выросло из резерва. Сравнение сроков обманывалось: пауза и её
-        снятие, дни по промокоду или за приглашение поверх резерва уводили срок за
-        конец окна, и семья получала полный доступ на остаток бесплатного резерва.
+        Правило (решение 27.09): резерв ОТКРЫТ (его окно ещё не кончилось) и после его
+        выдачи владелец ничего не приобрёл. Судим по истории, а не по сроку: пауза,
+        промокод «+N дней» и дни за приглашение, наложенные на открытый резерв, уводят
+        срок за конец окна, но оплаченным его не делают.
+
+        Закрытый резерв на семью не влияет вовсе, и остаток резерва из срока не
+        вычитается: после приобретения семья идёт за сроком владельца целиком — как и
+        сам владелец, которому база продлевает от конца резерва. Осознанное упрощение:
+        точный учёт остатка ошибался на каждом втором продлении в одном окне.
         """
-        if self.last_reserve_at is None:
+        if self.open_reserve_at is None:
             return False
-        return self.last_acquired_at is None or self.last_reserve_at > self.last_acquired_at
-
-    @property
-    def paid_expire_at(self) -> Optional[datetime]:
-        """Срок, который семья получает от владельца: его срок без остатка резерва.
-
-        Продление поверх открытого резерва считает новый период от КОНЦА резерва —
-        владельцу остаток резерва достаётся сверху, а семье не должен.
-        """
-        if self.expire_at is None:
-            return None
-        return self.expire_at - self.reserve_left
+        return self.last_acquired_at is None or self.open_reserve_at > self.last_acquired_at
 
     @property
     def remna_name(self) -> str:
@@ -368,8 +359,7 @@ def owner_condition(owner: OwnerState, now: datetime) -> str:
         return "owner_frozen"
     if owner.on_reserve:
         return "expired"
-    paid = owner.paid_expire_at
-    if paid is None or paid <= now or status == "EXPIRED":
+    if owner.expire_at is None or owner.expire_at <= now or status == "EXPIRED":
         return "expired"
     if owner.is_trial or owner.terms is None:
         return "plan"
@@ -412,8 +402,7 @@ def create_eligibility(
     # LIMITED — у владельца кончился СВОЙ трафик; у профиля он свой, семью это не
     # останавливает. Истёкший, отключённый и удалённый — нет.
     status = (owner.sub_status or "").upper()
-    paid = owner.paid_expire_at
-    if status not in ("ACTIVE", "LIMITED") or paid is None or paid <= now:
+    if status not in ("ACTIVE", "LIMITED") or owner.expire_at is None or owner.expire_at <= now:
         return "not_active"
     if live_count >= owner.terms.max_profiles:
         return "max_reached"
@@ -430,7 +419,7 @@ def target_for(owner: OwnerState) -> Target:
     докупленный владельцем трафик, а он оплачен им для себя. Устройства — условие
     семейного тарифа и НИКОГДА не 0: в панели 0 — это безлимит устройств.
     """
-    if owner.paid_expire_at is None or owner.terms is None:
+    if owner.expire_at is None or owner.terms is None:
         raise ValueError("у владельца нет срока или тариф не семейный")
     plan = owner.plan or {}
     squads = tuple(sorted(str(s).lower() for s in (plan.get("internal_squads") or []) if s))
@@ -443,7 +432,7 @@ def target_for(owner: OwnerState) -> Target:
         if tag == "IMPORTED" or not _tag_ok(tag):
             tag = None
     return Target(
-        expire_at=owner.paid_expire_at,
+        expire_at=owner.expire_at,
         device_limit=max(1, int(owner.terms.devices_per_profile)),
         traffic_limit_gb=max(0, _as_int(plan.get("traffic_limit")) or 0),
         strategy=str(plan.get("traffic_limit_strategy") or "NO_RESET").upper(),
@@ -646,36 +635,37 @@ PAUSE_SQL = (
     "SELECT EXISTS (SELECT 1 FROM subscription_freezes WHERE user_id = :uid AND active = true)"
 )
 
-# История владельца для «оплаченного горизонта» семьи (см. OwnerState.on_reserve):
-#   1) последняя выдача резерва — любая, открытая или закрытая;
-#   2) последнее приобретение периода: настоящая покупка (как в LAST_PURCHASE_SQL),
-#      активация промокода/подарка на тариф или создание текущей строки подписки;
-#   3) остаток резерва, вшитый в срок: продления (RENEW) и подарки на текущую строку,
-#      сделанные при открытом резерве, считают новый период от конца резерва.
-# Дни по промокоду «+N дней», за приглашение и пауза приобретением НЕ считаются:
-# это сдвиги срока, а не оплаченный период.
+# Настоящая покупка владельца ДЛЯ СЕБЯ: счёт проведён, не тестовый, снимок — тариф
+# (id > 0; пополнение, докупки и подарок через шлюз идут синтетическим снимком). Подарок
+# ДРУГОМУ человеку — не приобретение: он оплачен владельцем, но период получает
+# получатель. Исключение — как в LAYERS_SQL переноса остатка: счёт подарка через шлюз
+# помечен строкой gift_payments, подарок с баланса подписан «Баланс · подарок».
+OWN_PURCHASE_WHERE = (
+    "t.status::text = 'COMPLETED' AND t.is_test = false "
+    "AND (CASE WHEN t.plan_snapshot->>'id' ~ '^-?[0-9]+$' "
+    "     THEN (t.plan_snapshot->>'id')::int ELSE 0 END) > 0 "
+    "AND NOT EXISTS (SELECT 1 FROM gift_payments gp WHERE gp.payment_id = t.payment_id) "
+    "AND COALESCE(t.gateway_display_name, '') <> 'Баланс · подарок' "
+)
+
+# История владельца для резерва (см. OwnerState.on_reserve):
+#   1) выдача резерва, окно которой ещё не кончилось;
+#   2) последнее приобретение периода: своя покупка, активация промокода/подарка на
+#      тариф или создание текущей строки подписки.
+# Пауза, промокод «+N дней», дни за приглашение и ручное «+дни» — не приобретения.
 OWNER_TIMELINE_SQL = (
-    "WITH cur AS ("
-    "  SELECT s.created_at, s.updated_at FROM users u "
-    "  JOIN subscriptions s ON s.id = u.current_subscription_id WHERE u.id = :uid), "
-    "buys AS ("
-    "  SELECT t.updated_at AS at, t.purchase_type::text AS kind FROM transactions t "
-    "  WHERE t.user_id = :uid AND t.status::text = 'COMPLETED' AND t.is_test = false "
-    "  AND (CASE WHEN t.plan_snapshot->>'id' ~ '^-?[0-9]+$' "
-    "       THEN (t.plan_snapshot->>'id')::int ELSE 0 END) > 0), "
-    "gifts AS ("
-    "  SELECT a.activated_at AS at FROM promocode_activations a "
-    "  JOIN promocodes p ON p.id = a.promocode_id "
-    "  WHERE a.user_id = :uid AND p.reward_type::text = 'SUBSCRIPTION') "
     "SELECT "
-    "  (SELECT max(r.granted_at) FROM reserve_grants r WHERE r.user_id = :uid), "
-    "  GREATEST((SELECT max(at) FROM buys), (SELECT max(at) FROM gifts), "
-    "           (SELECT created_at FROM cur)), "
-    "  (SELECT COALESCE(sum(EXTRACT(EPOCH FROM r.reserve_expire_at - e.at)), 0) "
-    "     FROM (SELECT at FROM buys WHERE kind = 'RENEW' UNION ALL SELECT at FROM gifts) e "
-    "     JOIN reserve_grants r ON r.user_id = :uid "
-    "       AND r.granted_at <= e.at AND r.reserve_expire_at > e.at "
-    "     WHERE e.at >= (SELECT created_at FROM cur))"
+    "  (SELECT max(r.granted_at) FROM reserve_grants r "
+    "   WHERE r.user_id = :uid AND r.ended = false AND r.reserve_expire_at > now()), "
+    "  GREATEST("
+    "    (SELECT max(t.updated_at) FROM transactions t WHERE t.user_id = :uid AND "
+    + OWN_PURCHASE_WHERE
+    + "), "
+    "    (SELECT max(a.activated_at) FROM promocode_activations a "
+    "     JOIN promocodes p ON p.id = a.promocode_id "
+    "     WHERE a.user_id = :uid AND p.reward_type::text = 'SUBSCRIPTION'), "
+    "    (SELECT s.created_at FROM users u "
+    "     JOIN subscriptions s ON s.id = u.current_subscription_id WHERE u.id = :uid))"
 )
 
 PROFILES_SQL = (
@@ -737,8 +727,8 @@ PENDING_SQL = (
 HAS_ANY_SQL = "SELECT EXISTS (SELECT 1 FROM family_profiles)"
 
 # Начало текущего периода владельца — то, с чем база обнуляет трафик ему самому:
-#   * последняя НАСТОЯЩАЯ и уже ВЫДАННАЯ покупка. Синтетические снимки (пополнение,
-#     подарок другому, докупки — id < 0) период не продлевают. «Выдана» — строка
+#   * последняя СВОЯ и уже ВЫДАННАЯ покупка (OWN_PURCHASE_WHERE: без пополнений,
+#     докупок и подарков другому человеку). «Выдана» — строка
 #     подписки обновлена не раньше оплаты: база сначала проводит счёт, потом выдаёт
 #     период, и крон, попавший между ними, обнулил бы трафик со старым сроком;
 #   * активация подарка или промокода на тариф (награда SUBSCRIPTION) — база обнуляет
@@ -751,9 +741,7 @@ HAS_ANY_SQL = "SELECT EXISTS (SELECT 1 FROM family_profiles)"
 PERIOD_START_SQL = (
     "SELECT GREATEST(s.created_at, ("
     "  SELECT max(t.updated_at) FROM transactions t "
-    "  WHERE t.user_id = u.id AND t.status::text = 'COMPLETED' AND t.is_test = false "
-    "  AND (CASE WHEN t.plan_snapshot->>'id' ~ '^-?[0-9]+$' "
-    "       THEN (t.plan_snapshot->>'id')::int ELSE 0 END) > 0 "
+    "  WHERE t.user_id = u.id AND " + OWN_PURCHASE_WHERE + " "
     "  AND t.updated_at <= s.updated_at), ("
     "  SELECT max(a.activated_at) FROM promocode_activations a "
     "  JOIN promocodes p ON p.id = a.promocode_id "
@@ -897,9 +885,8 @@ async def load_owner(session: "AsyncSession", owner_id: int) -> OwnerState:
         plan=plan,
         sub_updated_at=row[9],
         frozen=frozen,
-        last_reserve_at=timeline[0] if timeline else None,
+        open_reserve_at=timeline[0] if timeline else None,
         last_acquired_at=timeline[1] if timeline else None,
-        reserve_left=timedelta(seconds=float(timeline[2] or 0)) if timeline else timedelta(0),
         terms=terms,
     )
 
