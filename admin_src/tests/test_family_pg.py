@@ -1292,3 +1292,91 @@ async def test_delete_and_recreate_is_limited_per_paid_period(db):
     # Продление начинает новый период — завести снова можно.
     await _renew_owner(db, owner_id, now() + timedelta(days=60))
     assert (await db.create(owner_id, "Ещё одна"))["result"] == "created"
+
+
+# ── резерв владельца ────────────────────────────────────────────────────────
+
+
+async def _history(db: Db, owner_id: int, *, bought_days_ago: int = 40) -> None:
+    """Владелец давно купил период: строка подписки и оплата — в прошлом."""
+    await db.run(
+        "UPDATE subscriptions SET created_at = now() - interval '60 days' WHERE id = "
+        "(SELECT current_subscription_id FROM users WHERE id = :u)",
+        u=owner_id,
+    )
+    await _pay(db, owner_id, at_sql=f"now() - interval '{int(bought_days_ago)} days'")
+
+
+async def _pay(db: Db, owner_id: int, *, at_sql: str, kind: str = "RENEW") -> None:
+    await db.run(
+        "INSERT INTO transactions (payment_id, user_id, status, is_test, purchase_type, "
+        "gateway_type, pricing, currency, plan_snapshot, updated_at) "
+        f"VALUES (gen_random_uuid(), :u, 'COMPLETED', false, '{kind}', 'YOOMONEY', "
+        f"CAST('{{}}' AS jsonb), 'RUB', CAST('{{\"id\": 7}}' AS jsonb), {at_sql})",
+        u=owner_id,
+    )
+
+
+async def _reserve(db: Db, owner_id: int, *, granted_sql: str, until_sql: str, ended: bool) -> None:
+    await db.run(
+        "INSERT INTO reserve_grants (user_id, remna_uuid, granted_at, reserve_expire_at, ended) "
+        f"VALUES (:u, 'x', {granted_sql}, {until_sql}, :ended)",
+        u=owner_id,
+        ended=ended,
+    )
+
+
+async def _owner_expire(db: Db, owner_id: int, expire: datetime) -> None:
+    await db.run(
+        "UPDATE subscriptions SET expire_at = :e, updated_at = clock_timestamp() WHERE id = "
+        "(SELECT current_subscription_id FROM users WHERE id = :u)",
+        e=expire,
+        u=owner_id,
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        # Пауза во время открытого резерва и её снятие: срок ушёл за конец окна.
+        {"granted": "now() - interval '2 days'", "until": "now() + interval '5 days'", "ended": False, "days": 12},
+        # Дни по промокоду или за приглашение поверх уже закрытого резерва.
+        {"granted": "now() - interval '10 days'", "until": "now() - interval '3 days'", "ended": True, "days": 40},
+    ],
+)
+async def test_time_grown_out_of_a_reserve_gives_the_family_nothing(db, case):
+    """Срок владельца вырос из бесплатного резерва (пауза, дни по промокоду или за
+    приглашение) — семья не получает ни полного набора серверов, ни трафика."""
+    _plan, owner_id, (pid,) = await _family(db, 1)
+    await _history(db, owner_id)
+    await _reserve(db, owner_id, granted_sql=case["granted"], until_sql=case["until"], ended=case["ended"])
+    await _owner_expire(db, owner_id, now() + timedelta(days=case["days"]))
+    out = await db.reconcile(owner_id)
+    assert out["suspended"] == [pid] and not out["synced"]
+    after = (await db.profiles(owner_id))[0]
+    assert after.suspend_reason == "owner_expired"
+    assert db.panel.store[after.sub_remna_id].status.value == "DISABLED"
+    async with db.session() as s:
+        view = await family.family_view(s, None, owner_id, with_panel=False)
+    assert view["reason"] == "reserve" and view["available"] is False
+
+
+async def test_renewal_over_an_open_reserve_gives_only_the_paid_period(db):
+    """Продление поверх открытого резерва: владелец получает период от конца резерва,
+    семья — ровно купленный период от момента оплаты."""
+    _plan, owner_id, (pid,) = await _family(db, 1)
+    await _history(db, owner_id)
+    await _reserve(
+        db, owner_id, granted_sql="now() - interval '2 days'", until_sql="now() + interval '5 days'", ended=False
+    )
+    await _pay(db, owner_id, at_sql="now() - interval '1 hour'")
+    until = await db.scalar("SELECT reserve_expire_at FROM reserve_grants WHERE user_id = :u", u=owner_id)
+    paid_at = await db.scalar(
+        "SELECT max(updated_at) FROM transactions WHERE user_id = :u", u=owner_id
+    )
+    await _owner_expire(db, owner_id, until + timedelta(days=30))
+    async with db.session() as s:
+        out = await family.after_purchase(s, db.panel, owner_id)
+    assert out["synced"] == [pid]
+    after = (await db.profiles(owner_id))[0]
+    assert abs(after.sub_expire_at - (paid_at + timedelta(days=30))) < timedelta(seconds=1)

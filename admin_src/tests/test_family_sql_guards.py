@@ -122,10 +122,21 @@ def test_deleting_is_committed_before_the_panel_call():
     assert source.index("await session.commit()") < source.index("_delete_now(")
 
 
-def test_reserve_and_pause_are_read_as_open_only():
-    assert "active = true" in family.PAUSE_RESERVE_SQL
-    assert "ended = false" in family.PAUSE_RESERVE_SQL
-    assert "reserve_expire_at > now()" in family.PAUSE_RESERVE_SQL
+def test_pause_is_read_as_open_only():
+    assert "active = true" in family.PAUSE_SQL
+
+
+def test_reserve_is_judged_by_history_not_by_the_term():
+    """Любая выдача резерва (и закрытая) против последнего приобретения периода —
+    сравнение сроков обманывали пауза и бесплатные дни поверх резерва."""
+    sql = family.OWNER_TIMELINE_SQL
+    assert "max(r.granted_at) FROM reserve_grants r WHERE r.user_id = :uid)" in sql
+    assert "ended" not in sql, "закрытая выдача резерва тоже считается"
+    assert "t.status::text = 'COMPLETED' AND t.is_test = false" in sql
+    assert "ELSE 0 END) > 0" in sql
+    assert "p.reward_type::text = 'SUBSCRIPTION'" in sql
+    # Остаток резерва — только за продления и подарки на текущую строку подписки.
+    assert "kind = 'RENEW'" in sql and "e.at >= (SELECT created_at FROM cur)" in sql
 
 
 def test_traffic_reset_follows_only_real_plan_purchases():
@@ -261,8 +272,6 @@ def test_traffic_reset_waits_for_the_issued_period():
     assert "t.updated_at <= s.updated_at" in family.LAST_PURCHASE_SQL
 
 
-def test_reserve_does_not_outlive_a_real_purchase():
-    assert "t.updated_at > r.granted_at" in family.PAUSE_RESERVE_SQL
 
 
 def test_owner_passes_are_fair():
