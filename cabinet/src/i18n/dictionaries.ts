@@ -2648,6 +2648,7 @@ const ru: Dict = {
   "adm.family.period_note": "За оплаченный период владелец может завести профилей на один больше, чем мест в тарифе: одна замена удалённого. Новый профиль — это свежий трафик и пустой список устройств, поэтому «удалить и завести заново» ограничено; счётчик обнуляется при продлении.",
   "adm.family.deleted_plan": "Удалённый тариф #{id}",
   "adm.family.deleted_note": "Тариф удалён из каталога, но его подписчики пользуются семьёй до конца оплаченного срока. Снимите условия, если семья им больше не положена.",
+  "family.reason.disabled": "Новые профили сейчас не заводятся.",
 };
 
 const en: Dict = {
@@ -5271,6 +5272,7 @@ const en: Dict = {
   "adm.family.period_note": "Per paid period an owner can create one profile more than the plan has seats: one replacement of a deleted one. A new profile means fresh traffic and an empty device list, so “delete and recreate” is limited; the counter resets on renewal.",
   "adm.family.deleted_plan": "Deleted plan #{id}",
   "adm.family.deleted_note": "The plan was removed from the catalog, but its subscribers keep the family until their paid term ends. Remove the terms if they should no longer have it.",
+  "family.reason.disabled": "New profiles can't be created right now.",
 };
 
 const tr: Dict = {
@@ -6011,6 +6013,7 @@ const tr: Dict = {
   "family.suspend.panel_missing": "profil abonelik sunucusunda bulunamadı — bulunmazsa bir ay içinde silinecek",
   "family.errBusy": "Aile şu anda güncelleniyor — bir dakika sonra tekrar deneyin.",
   "family.periodHint": "Ödenmiş dönem başına, silinenin yerine yenisi dahil en fazla {limit} profil oluşturulabilir (oluşturulan: {created}). Sayaç yenilemede sıfırlanır.",
+  "family.reason.disabled": "Şu anda yeni profil oluşturulamıyor.",
 };
 
 const kk: Dict = {
@@ -6751,6 +6754,7 @@ const kk: Dict = {
   "family.suspend.panel_missing": "профиль жазылым серверінде табылмады — табылмаса, бір айдан кейін жойылады",
   "family.errBusy": "Отбасы қазір жаңартылып жатыр — бір минуттан кейін қайталап көріңіз.",
   "family.periodHint": "Бір төленген кезеңде жойылғанның орнына жаңасын қоса алғанда {limit} профильге дейін жасауға болады (жасалды: {created}). Санауыш ұзартқанда нөлденеді.",
+  "family.reason.disabled": "Жаңа профильдер қазір жасалмайды.",
 };
 
 const ky: Dict = {
@@ -7491,6 +7495,7 @@ const ky: Dict = {
   "family.suspend.panel_missing": "профиль жазылуу серверинен табылган жок — табылбаса, бир айдан кийин өчүрүлөт",
   "family.errBusy": "Үй-бүлө азыр жаңыланып жатат — бир мүнөттөн кийин кайталап көрүңүз.",
   "family.periodHint": "Бир төлөнгөн мезгилде өчүрүлгөндүн ордуна жаңысын кошкондо {limit} профилге чейин түзүүгө болот (түзүлдү: {created}). Эсептегич узартканда нөлдөнөт.",
+  "family.reason.disabled": "Жаңы профилдер азыр түзүлбөйт.",
 };
 
 const uz: Dict = {
@@ -8231,6 +8236,7 @@ const uz: Dict = {
   "family.suspend.panel_missing": "profil obuna serverida topilmadi — topilmasa, bir oydan keyin o'chiriladi",
   "family.errBusy": "Oila hozir yangilanmoqda — bir daqiqadan so'ng qayta urinib ko'ring.",
   "family.periodHint": "Har bir to'langan davrda o'chirilganning o'rniga yangisini qo'shganda {limit} tagacha profil yaratish mumkin (yaratildi: {created}). Hisoblagich uzaytirilganda nolga tushadi.",
+  "family.reason.disabled": "Hozircha yangi profillar yaratilmaydi.",
 };
 
 const tg: Dict = {
@@ -8971,6 +8977,7 @@ const tg: Dict = {
   "family.suspend.panel_missing": "профил дар сервери обуна ёфт нашуд — агар ёфт нашавад, пас аз як моҳ нест карда мешавад",
   "family.errBusy": "Оила ҳоло нав карда мешавад — пас аз як дақиқа боз кӯшиш кунед.",
   "family.periodHint": "Дар як давраи пардохтшуда то {limit} профил, аз ҷумла ивази профили несткардашуда, сохтан мумкин аст (сохта шуд: {created}). Ҳисобкунак ҳангоми дароз кардан сифр мешавад.",
+  "family.reason.disabled": "Ҳоло профилҳои нав сохта намешаванд.",
 };
 
 const hy: Dict = {
@@ -9711,6 +9718,7 @@ const hy: Dict = {
   "family.suspend.panel_missing": "պրոֆիլը չի գտնվել բաժանորդագրությունների սերվերում․ եթե չգտնվի, կջնջվի մեկ ամսից",
   "family.errBusy": "Ընտանիքը հիմա թարմացվում է․ փորձեք կրկին մեկ րոպեից։",
   "family.periodHint": "Յուրաքանչյուր վճարված ժամանակահատվածում կարելի է ստեղծել մինչև {limit} պրոֆիլ՝ ներառյալ ջնջվածի փոխարինումը (ստեղծված է՝ {created})։ Հաշվիչը զրոյանում է երկարացնելիս։",
+  "family.reason.disabled": "Նոր պրոֆիլներ այժմ չեն ստեղծվում։",
 };
 
 const az: Dict = {
@@ -10451,6 +10459,7 @@ const az: Dict = {
   "family.suspend.panel_missing": "profil abunəlik serverində tapılmadı — tapılmasa, bir aydan sonra silinəcək",
   "family.errBusy": "Ailə hazırda yenilənir — bir dəqiqədən sonra yenidən cəhd edin.",
   "family.periodHint": "Hər ödənilmiş dövrdə silinənin əvəzinə yenisi daxil olmaqla {limit} profilə qədər yaratmaq olar (yaradılıb: {created}). Sayğac uzadılanda sıfırlanır.",
+  "family.reason.disabled": "Hazırda yeni profillər yaradılmır.",
 };
 
 const be: Dict = {
@@ -11191,6 +11200,7 @@ const be: Dict = {
   "family.suspend.panel_missing": "профіль не знойдзены на серверы падпісак — выдаліцца праз месяц, калі не знойдзецца",
   "family.errBusy": "Сям'я зараз абнаўляецца — паспрабуйце праз хвіліну.",
   "family.periodHint": "За аплачаны перыяд можна завесці да {limit} профіляў, уключаючы замену выдаленага (заведзена: {created}). Лічыльнік абнуляецца пры падаўжэнні.",
+  "family.reason.disabled": "Новыя профілі зараз не заводзяцца.",
 };
 
 const ro: Dict = {
@@ -11931,6 +11941,7 @@ const ro: Dict = {
   "family.suspend.panel_missing": "profilul nu a fost găsit pe serverul de abonamente — va fi șters peste o lună dacă nu apare",
   "family.errBusy": "Familia se actualizează chiar acum — încearcă din nou peste un minut.",
   "family.periodHint": "Pe o perioadă plătită poți crea până la {limit} profiluri, inclusiv înlocuirea unuia șters (create: {created}). Contorul se resetează la prelungire.",
+  "family.reason.disabled": "Momentan nu se pot crea profiluri noi.",
 };
 
 const es: Dict = {
@@ -12691,6 +12702,7 @@ const es: Dict = {
   "family.suspend.panel_missing": "el perfil no se encontró en el servidor de suscripciones: se eliminará en un mes si no aparece",
   "family.errBusy": "La familia se está actualizando ahora mismo: inténtalo de nuevo en un minuto.",
   "family.periodHint": "En cada período pagado puedes crear hasta {limit} perfiles, incluido el reemplazo de uno eliminado (creados: {created}). El contador se reinicia al renovar.",
+  "family.reason.disabled": "Ahora no se pueden crear perfiles nuevos.",
 };
 
 export const DICTIONARIES: Record<Lang, Dict> = {

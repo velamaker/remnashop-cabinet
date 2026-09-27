@@ -152,11 +152,31 @@ async def test_menu_survives_any_failure(menu, monkeypatch):
     assert data["family_button"] is False
 
 
-async def test_menu_visible_is_off_while_the_feature_is_off(monkeypatch, tmp_path):
+class _Exists:
+    """База, которая отвечает только на «есть ли живые профили»."""
+
+    def __init__(self, has: bool):
+        self.has = has
+        self.queries = 0
+
+    async def execute(self, statement, params=None):
+        self.queries += 1
+        assert "EXISTS" in str(statement), "при выключенной функции — только EXISTS"
+        return SimpleNamespace(scalar=lambda: self.has)
+
+
+@pytest.mark.parametrize("has, visible", [(True, True), (False, False)])
+async def test_menu_while_the_feature_is_off_follows_live_profiles(monkeypatch, tmp_path, has, visible):
+    """Функцию выключили: у кого профили остались — вход виден (ссылка и «Удалить»),
+    у кого нет — не виден. Одно правило для бота и кабинета."""
     monkeypatch.setattr(family, "CONFIG_PATH", tmp_path / "family.json")
+    db = _Exists(has)
+    assert await family.menu_visible(db, 7) is visible
+    assert db.queries == 1
 
-    class NoDb:
-        async def execute(self, *a, **kw):
-            raise AssertionError("выключенная функция не ходит в базу")
 
-    assert await family.menu_visible(NoDb(), 7) is False
+def test_list_when_the_feature_is_off_is_neutral():
+    text, markup = bot.list_view(view(enabled=False, available=False, reason="disabled"))
+    assert "Новые профили сейчас не заводятся." in text
+    assert "➕ Добавить профиль" not in buttons(markup)
+    assert "подписка" not in text.split("Новые профили")[1]

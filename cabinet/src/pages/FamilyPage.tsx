@@ -395,25 +395,32 @@ export default function FamilyPage() {
             )}
           </div>
 
-          <Card>
-            <CardHeader title={t("family.addTitle")} />
-            {data.available ? (
-              <AddProfile onCreated={() => void reload()} />
-            ) : (
-              <p className="text-sm text-fg-muted">
-                {t("family.cantAdd", { reason: t(`family.reason.${reasonKey ?? "not_active"}`) })}
-              </p>
-            )}
-            {/* Правило «удалить и завести заново» — до того, как человек в него упрётся. */}
-            {data.period_limit != null && (
-              <p className="mt-3 text-xs text-fg-subtle">
-                {t("family.periodHint", {
-                  limit: data.period_limit,
-                  created: data.created_in_period ?? 0,
-                })}
-              </p>
-            )}
-          </Card>
+          {/* Функцию выключили, а профили остались: их видно и можно удалить, но
+              новых не заводим — без формы и без правила замен, одной нейтральной
+              строкой (а не «подписка не активна», которая была бы неправдой). */}
+          {!data.enabled ? (
+            <p className="text-sm text-fg-muted">{t("family.reason.disabled")}</p>
+          ) : (
+            <Card>
+              <CardHeader title={t("family.addTitle")} />
+              {data.available ? (
+                <AddProfile onCreated={() => void reload()} />
+              ) : (
+                <p className="text-sm text-fg-muted">
+                  {t("family.cantAdd", { reason: t(`family.reason.${reasonKey ?? "not_active"}`) })}
+                </p>
+              )}
+              {/* Правило «удалить и завести заново» — до того, как человек в него упрётся. */}
+              {data.period_limit != null && (
+                <p className="mt-3 text-xs text-fg-subtle">
+                  {t("family.periodHint", {
+                    limit: data.period_limit,
+                    created: data.created_in_period ?? 0,
+                  })}
+                </p>
+              )}
+            </Card>
+          )}
 
           {profiles.length === 0 ? (
             <p className="py-4 text-center text-sm text-fg-subtle">{t("family.empty")}</p>

@@ -142,7 +142,11 @@ def list_view(view: dict) -> tuple[str, InlineKeyboardMarkup]:
         )
     if view.get("available"):
         rows.append([InlineKeyboardButton(text="➕ Добавить профиль", callback_data=f"{_PREFIX}:add")])
-    elif view.get("reason") and view.get("reason") != "disabled":
+    elif view.get("reason") == "disabled":
+        # Функцию выключили, а профили остались: их видно и можно удалить, новых нет.
+        lines.append("")
+        lines.append("Новые профили сейчас не заводятся.")
+    elif view.get("reason"):
         lines.append("")
         lines.append(f"Добавить профиль сейчас нельзя: {family.reason_ru(view['reason'])}.")
     rows += _menu_row()

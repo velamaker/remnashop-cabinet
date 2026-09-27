@@ -194,6 +194,20 @@ describe("FamilyPage", () => {
     expect(screen.queryByRole("button", { name: ru("family.add") })).toBeNull();
   });
 
+  it("функцию выключили, профили остались — видны и удаляются, новых не заводим", async () => {
+    getMock.mockResolvedValue(
+      answer({ enabled: false, available: false, reason: "disabled", period_limit: 3, created_in_period: 1 }),
+    );
+    renderPage();
+    expect(await screen.findByText("Мама")).toBeTruthy();
+    expect(document.body.textContent).toContain(ru("family.reason.disabled"));
+    expect(document.body.textContent).not.toContain(ru("family.addTitle"));
+    expect(document.body.textContent).not.toContain(ru("family.reason.not_active"));
+    expect(document.body.textContent).not.toContain(ru("family.periodHint", { limit: 3, created: 1 }));
+    expect(screen.getByRole("button", { name: ru("family.delete") })).toBeTruthy();
+    expect(document.body.textContent).toContain("https://sub.example/mama");
+  });
+
   it("бот не умеет семью — страница говорит, что раздела нет, и не ходит в API", async () => {
     canFamily = false;
     renderPage();

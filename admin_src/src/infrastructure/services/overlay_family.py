@@ -2381,32 +2381,36 @@ async def family_view(
 
 
 async def menu_visible(session: "AsyncSession", owner_id: int, now: Optional[datetime] = None) -> bool:
-    """Показывать ли вход «Семья» (кнопка бота, пункт кабинета).
+    """Показывать ли вход «Семья» (кнопка бота, пункт кабинета). Правило одно:
 
-    Функция включена И (тариф семейный ИЛИ профили уже есть — у человека, сменившего
-    тариф, должна оставаться возможность увидеть и удалить своих).
+      * у владельца есть живые профили — вход виден ВСЕГДА, даже при выключенной
+        функции и обычном тарифе: свою ссылку достать и профиль удалить человек
+        обязан мочь (новые профили при выключенной функции не заводятся);
+      * живых профилей нет — вход виден, только когда функция включена и тариф
+        семейный: «Семья», упирающаяся в «не положено», — реклама, а не помощь.
+    Первым — дешёвый EXISTS по индексу ix_fp_owner_live.
     """
-    if not load_config().get("enabled"):
-        return False
-    owner = await load_owner(session, owner_id)
-    if owner.terms is not None and not owner.is_trial:
-        return True
     has = (
         await session.execute(
             text(
                 "SELECT EXISTS (SELECT 1 FROM family_profiles "
-                "WHERE owner_user_id = :uid AND status IN ('creating', 'active', 'suspended'))"
+                "WHERE owner_user_id = :uid AND status IN ('active', 'suspended'))"
             ),
             {"uid": owner_id},
         )
     ).scalar()
-    return bool(has)
+    if has:
+        return True
+    if not load_config().get("enabled"):
+        return False
+    owner = await load_owner(session, owner_id)
+    return owner.terms is not None and not owner.is_trial
 
 
 # ── тексты ──────────────────────────────────────────────────────────────────
 
 _REASON_RU = {
-    "disabled": "функция выключена",
+    "disabled": "новые профили сейчас не заводятся",
     "no_subscription": "нет подписки",
     "blocked": "аккаунт заблокирован",
     "trial": "на пробной подписке семьи нет",

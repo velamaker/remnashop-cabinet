@@ -77,7 +77,9 @@ export const familyApi = {
     api.delete<{ result: "deleted" | "pending" | "busy" }>(`/family/profiles/${id}`),
 };
 
-/** Показывать ли вход «Семья»: функция включена и тариф семейный — или профили уже есть. */
+/** Показывать ли вход «Семья» — то же правило, что у бота (menu_visible): профили есть —
+ *  виден всегда (даже при выключенной функции: ссылка и «Удалить»); профилей нет —
+ *  только при включённой функции и семейном тарифе. */
 export function familyVisible(data: FamilyResponse | null | undefined): boolean {
   if (!data) return false;
   if ((data.profiles ?? []).length > 0) return true;
