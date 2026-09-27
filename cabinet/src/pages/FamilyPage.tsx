@@ -439,7 +439,11 @@ export default function FamilyPage() {
           )}
 
           {profiles.length === 0 ? (
-            <p className="py-4 text-center text-sm text-fg-subtle">{t("family.empty")}</p>
+            // «Добавьте первый» — только когда добавить можно; иначе страница спорила
+            // бы сама с собой строкой выше («добавить нельзя»).
+            <p className="py-4 text-center text-sm text-fg-subtle">
+              {data.available ? t("family.empty") : t("family.emptyNoAdd")}
+            </p>
           ) : (
             <div className="flex flex-col gap-3">
               {profiles.map((p) => (

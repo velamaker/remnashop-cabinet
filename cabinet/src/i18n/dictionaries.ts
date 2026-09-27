@@ -2651,6 +2651,7 @@ const ru: Dict = {
   "family.reason.disabled": "Новые профили сейчас не заводятся.",
   "family.errPanel": "Сервер подписок не ответил — попробуйте позже.",
   "family.errNotFound": "Этого профиля уже нет — список обновлён.",
+  "family.emptyNoAdd": "Профилей пока нет.",
 };
 
 const en: Dict = {
@@ -5277,6 +5278,7 @@ const en: Dict = {
   "family.reason.disabled": "New profiles can't be created right now.",
   "family.errPanel": "The subscription server didn't respond — please try again later.",
   "family.errNotFound": "This profile no longer exists — the list has been refreshed.",
+  "family.emptyNoAdd": "No profiles yet.",
 };
 
 const tr: Dict = {
@@ -6020,6 +6022,7 @@ const tr: Dict = {
   "family.reason.disabled": "Şu anda yeni profil oluşturulamıyor.",
   "family.errPanel": "Abonelik sunucusu yanıt vermedi — daha sonra tekrar deneyin.",
   "family.errNotFound": "Bu profil artık yok — liste güncellendi.",
+  "family.emptyNoAdd": "Henüz profil yok.",
 };
 
 const kk: Dict = {
@@ -6763,6 +6766,7 @@ const kk: Dict = {
   "family.reason.disabled": "Жаңа профильдер қазір жасалмайды.",
   "family.errPanel": "Жазылым сервері жауап бермеді — кейінірек қайталап көріңіз.",
   "family.errNotFound": "Бұл профиль енді жоқ — тізім жаңартылды.",
+  "family.emptyNoAdd": "Әзірге профильдер жоқ.",
 };
 
 const ky: Dict = {
@@ -7506,6 +7510,7 @@ const ky: Dict = {
   "family.reason.disabled": "Жаңы профилдер азыр түзүлбөйт.",
   "family.errPanel": "Жазылуу сервери жооп берген жок — кийинчерээк кайталап көрүңүз.",
   "family.errNotFound": "Бул профиль мындан ары жок — тизме жаңыланды.",
+  "family.emptyNoAdd": "Азырынча профилдер жок.",
 };
 
 const uz: Dict = {
@@ -8249,6 +8254,7 @@ const uz: Dict = {
   "family.reason.disabled": "Hozircha yangi profillar yaratilmaydi.",
   "family.errPanel": "Obuna serveri javob bermadi — keyinroq qayta urinib ko'ring.",
   "family.errNotFound": "Bu profil endi yo'q — ro'yxat yangilandi.",
+  "family.emptyNoAdd": "Hozircha profillar yo'q.",
 };
 
 const tg: Dict = {
@@ -8992,6 +8998,7 @@ const tg: Dict = {
   "family.reason.disabled": "Ҳоло профилҳои нав сохта намешаванд.",
   "family.errPanel": "Сервери обуна ҷавоб надод — баъдтар боз кӯшиш кунед.",
   "family.errNotFound": "Ин профил дигар нест — рӯйхат нав карда шуд.",
+  "family.emptyNoAdd": "Ҳоло профилҳо нестанд.",
 };
 
 const hy: Dict = {
@@ -9735,6 +9742,7 @@ const hy: Dict = {
   "family.reason.disabled": "Նոր պրոֆիլներ այժմ չեն ստեղծվում։",
   "family.errPanel": "Բաժանորդագրությունների սերվերը չպատասխանեց․ փորձեք ավելի ուշ։",
   "family.errNotFound": "Այս պրոֆիլն այլևս չկա․ ցանկը թարմացվեց։",
+  "family.emptyNoAdd": "Դեռ պրոֆիլներ չկան։",
 };
 
 const az: Dict = {
@@ -10478,6 +10486,7 @@ const az: Dict = {
   "family.reason.disabled": "Hazırda yeni profillər yaradılmır.",
   "family.errPanel": "Abunəlik serveri cavab vermədi — sonra yenidən cəhd edin.",
   "family.errNotFound": "Bu profil artıq yoxdur — siyahı yeniləndi.",
+  "family.emptyNoAdd": "Hələ profil yoxdur.",
 };
 
 const be: Dict = {
@@ -11221,6 +11230,7 @@ const be: Dict = {
   "family.reason.disabled": "Новыя профілі зараз не заводзяцца.",
   "family.errPanel": "Сервер падпісак не адказаў — паспрабуйце пазней.",
   "family.errNotFound": "Гэтага профілю ўжо няма — спіс абноўлены.",
+  "family.emptyNoAdd": "Профіляў пакуль няма.",
 };
 
 const ro: Dict = {
@@ -11964,6 +11974,7 @@ const ro: Dict = {
   "family.reason.disabled": "Momentan nu se pot crea profiluri noi.",
   "family.errPanel": "Serverul de abonamente nu a răspuns — încearcă mai târziu.",
   "family.errNotFound": "Acest profil nu mai există — lista a fost actualizată.",
+  "family.emptyNoAdd": "Încă nu există profiluri.",
 };
 
 const es: Dict = {
@@ -12727,6 +12738,7 @@ const es: Dict = {
   "family.reason.disabled": "Ahora no se pueden crear perfiles nuevos.",
   "family.errPanel": "El servidor de suscripciones no respondió: inténtalo más tarde.",
   "family.errNotFound": "Este perfil ya no existe: la lista se ha actualizado.",
+  "family.emptyNoAdd": "Aún no hay perfiles.",
 };
 
 export const DICTIONARIES: Record<Lang, Dict> = {

@@ -152,6 +152,13 @@ describe("FamilyPage", () => {
     expect(document.body.textContent).toContain(ru("family.periodHint", { limit: 4, created: 2 }));
   });
 
+  it("добавить нельзя и профилей нет — пустое состояние не зовёт «добавьте первый»", async () => {
+    getMock.mockResolvedValue(answer({ available: false, reason: "not_family", profiles: [] }));
+    renderPage();
+    expect(await screen.findByText(ru("family.emptyNoAdd"))).toBeTruthy();
+    expect(document.body.textContent).not.toContain(ru("family.empty"));
+  });
+
   it("лимит за период — причина словами", async () => {
     getMock.mockResolvedValue(answer({ available: false, reason: "period_limit" }));
     renderPage();
