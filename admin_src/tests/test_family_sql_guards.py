@@ -278,3 +278,19 @@ def test_owner_passes_are_fair():
     for sql in (family.CHANGED_OWNERS_SQL, family.ALL_OWNERS_SQL):
         assert "ORDER BY bool_or(fp.last_reconciled_at IS NULL) DESC" in sql
         assert sql.rstrip().endswith("LIMIT :lim")
+
+
+def test_on_off_goes_through_patch_status_not_actions():
+    """`actions/enable|disable` на панели 3.4.4 отвечают «уже включён/выключен» (A030 /
+    A029) — повтор после сбоя падал бы навсегда. Статус — только в теле PATCH."""
+    source = inspect.getsource(family)
+    assert "enable_user(" not in source and "disable_user(" not in source
+    disable = inspect.getsource(family.panel_disable)
+    assert "status=UserStatus.DISABLED" in disable
+
+
+def test_traffic_reset_is_the_last_step_and_marked_right_after():
+    source = inspect.getsource(family._apply_sync)
+    reset = source.index("panel_reset_traffic(")
+    assert source.index("panel_sync(") < source.index("_profile_ok(") < reset
+    assert source.index("traffic_reset_at = now()", reset) > reset

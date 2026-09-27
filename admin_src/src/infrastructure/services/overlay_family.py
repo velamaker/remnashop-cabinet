@@ -1083,8 +1083,10 @@ async def panel_sync(sdk: Any, remna_uuid: str, target: Target, *, status_active
     Только поля, которые семья наследует от владельца: имя, описание, телеграм,
     почту и метку не шлём — `model_dump(exclude_unset=True)` remnapy не добавит их
     сам. Молчаливое «принял, но не применил» оставило бы семью со старым сроком.
-    `status_active` — вернуть ACTIVE истёкшему профилю при продлении (как база
-    возвращает его владельцу); отключённый руками профиль этим не включаем.
+    `status_active` — ACTIVE в том же теле: включить приостановленный профиль и
+    вернуть истёкший при продлении (как база возвращает его владельцу). Одним PATCH
+    срок и включение приходят вместе — включённый профиль не успеет «истечь» со
+    старым сроком, а повтор безопасен: PATCH со статусом не отвечает «уже включён».
     """
     from remnapy.enums import TrafficLimitStrategy
     from remnapy.models import UpdateUserRequestDto
@@ -1118,23 +1120,33 @@ async def panel_sync(sdk: Any, remna_uuid: str, target: Target, *, status_active
     got_expire = getattr(updated, "expire_at", None)
     if not isinstance(got_expire, datetime) or abs(got_expire - target.expire_at) > EXPIRE_TOLERANCE:
         raise PanelError(f"панель вернула срок {got_expire}, ожидали {target.expire_at}")
+    if status_active and _status_text(getattr(updated, "status", None)) == "DISABLED":
+        raise PanelError("панель оставила профиль выключенным")
     return updated
 
 
-async def panel_set_enabled(sdk: Any, remna_uuid: str, enabled: bool) -> Any:
+async def panel_disable(sdk: Any, remna_uuid: str) -> Any:
+    """Выключить профиль статусом в теле PATCH — идемпотентно.
+
+    Отдельное действие `actions/disable` на уже выключенном пользователе панель 3.4.4
+    отвечает ошибкой (A029 «уже выключен»), а `actions/enable` — A030 «уже включён»:
+    повтор после сбоя падал бы навсегда. PATCH со статусом повтор принимает молча.
+    """
+    from remnapy.enums.users import UserStatus
+    from remnapy.models import UpdateUserRequestDto
+
     _need(sdk)
     try:
-        if enabled:
-            resp = await sdk.users.enable_user(_uuid(remna_uuid))
-        else:
-            resp = await sdk.users.disable_user(_uuid(remna_uuid))
+        resp = await sdk.users.update_user(
+            UpdateUserRequestDto(uuid=_uuid(remna_uuid), status=UserStatus.DISABLED)
+        )
     except Exception as exc:  # noqa: BLE001
         if _is_not_found(exc):
             raise PanelGone(str(exc)) from exc
         raise PanelError(f"{type(exc).__name__}: {exc}") from exc
     got = _status_text(getattr(resp, "status", None))
-    if got and (got == "DISABLED") != (not enabled):
-        raise PanelError(f"панель вернула статус {got}")
+    if got != "DISABLED":
+        raise PanelError(f"панель вернула статус {got or '—'}, ожидали DISABLED")
     return resp
 
 
@@ -1239,10 +1251,15 @@ _NOW = _Now()
 
 
 async def _profile_fail(session: "AsyncSession", profile_id: int, error: str) -> None:
+    """Неудача: счётчик +1 и «сверить ближайшим проходом» (отметка сверки — пустая).
+
+    Без сброса отметки недоделанное после частичного успеха (сброс трафика после
+    удавшегося включения) ждало бы часового прохода.
+    """
     await session.execute(
         text(
             "UPDATE family_profiles SET fail_count = fail_count + 1, last_error = :e, "
-            "updated_at = now() WHERE id = :id"
+            "last_reconciled_at = NULL, updated_at = now() WHERE id = :id"
         ),
         {"e": error[:300], "id": profile_id},
     )
@@ -1967,7 +1984,7 @@ async def _suspend(
         return False
     if current.remna_uuid is None:
         raise PanelGone("у профиля нет пользователя панели")
-    await panel_set_enabled(sdk, current.remna_uuid, False)
+    await panel_disable(sdk, current.remna_uuid)
     await _store_status(session, current, "DISABLED")
     await session.execute(
         text(
@@ -1996,34 +2013,35 @@ async def _apply_sync(
     now: datetime,
     resume: bool = False,
 ) -> None:
-    """Срок и лимиты в панель, потом (если надо) сброс трафика, потом включение.
+    """Срок, лимиты и (если надо) включение ОДНИМ PATCH, затем сброс трафика.
 
-    Порядок «сначала срок, потом включить» — тот же, что у снятия паузы
-    (taskiq/tasks/freeze.py): включённый пользователь со старым сроком успел бы
-    получить статус «истёк» раньше, чем мы поправим дату.
+    Срок и статус ACTIVE в одном теле — это и есть «сначала срок, потом включить» из
+    снятия паузы (taskiq/tasks/freeze.py), только без окна между ними; и повтор
+    безопасен: PATCH со статусом не отвечает «уже включён», как `actions/enable`.
+
+    Сброс трафика — ПОСЛЕДНИМ шагом, и его отметка пишется сразу после него. Раньше
+    сброс шёл до включения, а отметка — после: включение падало, отметки не было, и
+    каждый проход крона обнулял трафик заново. Теперь сорвавшийся сброс просто
+    повторится, а удавшийся — не повторится никогда.
     """
     if p.remna_uuid is None:
         raise PanelGone("у профиля нет пользователя панели")
-    # ACTIVE шлём, как база владельцу при продлении: истёкшему — да, отключённому
-    # руками в панели — нет (его включает только тот, кто выключил).
+    # ACTIVE шлём при включении и, как база владельцу при продлении, истёкшему; но не
+    # отключённому руками в панели (его включает только тот, кто выключил).
     status = (p.sub_status or "").upper()
-    status_active = not resume and status != "DISABLED" and (reset or status == "EXPIRED")
+    status_active = resume or (status != "DISABLED" and (reset or status == "EXPIRED"))
     await panel_sync(sdk, p.remna_uuid, target, status_active=status_active)
-    if reset:
-        await panel_reset_traffic(sdk, p.remna_uuid)
-    new_status = None
-    if resume:
-        await panel_set_enabled(sdk, p.remna_uuid, True)
-        new_status = "ACTIVE"
-    elif status_active:
-        new_status = "ACTIVE"
-    await _store_target(session, p, target, status=new_status)
+    await _store_target(session, p, target, status="ACTIVE" if status_active else None)
     fields: dict[str, Any] = {"device_limit": target.device_limit}
-    if reset:
-        fields["traffic_reset_at"] = _NOW
     if resume:
         fields.update(status="active", suspend_reason=None, suspended_at=None)
     await _profile_ok(session, p.id, **fields)
+    if reset:
+        await panel_reset_traffic(sdk, p.remna_uuid)
+        await session.execute(
+            text("UPDATE family_profiles SET traffic_reset_at = now() WHERE id = :id"),
+            {"id": p.id},
+        )
 
 
 async def after_purchase(session: "AsyncSession", sdk: Any, owner_id: int) -> Optional[dict]:

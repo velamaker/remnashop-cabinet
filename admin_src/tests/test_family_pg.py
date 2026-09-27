@@ -168,11 +168,15 @@ class _Users:
             setattr(user, name, value)
         return user
 
+    # Действия включения/выключения — как у панели 3.4.4: повтор на уже включённом
+    # или выключенном пользователе отвечает ошибкой (A030 / A029).
     async def enable_user(self, uuid):
         from remnapy.enums.users import UserStatus
 
         self.p.calls.append(("enable", str(uuid)))
         user = self._get(uuid)
+        if user.status == UserStatus.ACTIVE:
+            raise ConflictError("A030: User already enabled")
         user.status = UserStatus.ACTIVE
         return user
 
@@ -182,6 +186,8 @@ class _Users:
         self.p.calls.append(("disable", str(uuid)))
         await self._slow()
         user = self._get(uuid)
+        if user.status == UserStatus.DISABLED:
+            raise ConflictError("A029: User already disabled")
         user.status = UserStatus.DISABLED
         return user
 
@@ -764,7 +770,7 @@ async def test_change_to_regular_plan_suspends_all_and_back_resumes(db):
     assert sorted(out["suspended"]) == sorted(ids)
     for p in await db.profiles(owner_id):
         assert p.status == "suspended" and p.suspend_reason == "plan"
-        assert ("disable", p.sub_remna_id) in db.panel.calls
+        assert db.panel.store[p.sub_remna_id].status.value == "DISABLED"
 
     await db.run(snapshot_sql, p=family_plan, u=owner_id)
     out = await db.reconcile(owner_id)
@@ -1021,10 +1027,11 @@ async def test_unfreeze_sets_the_term_before_enabling(db):
     out = await db.reconcile(owner_id)
     assert out["resumed"] == [pid]
     p = (await db.profiles(owner_id))[0]
-    kinds = [c[0] for c in db.panel.calls if len(c) > 1 and c[1] == p.sub_remna_id]
-    assert kinds.index("update") < kinds.index("enable"), f"сначала срок, потом включить: {kinds}"
-    update = next(c for c in db.panel.calls if c[0] == "update")
-    assert abs(update[3] - new_expire) < timedelta(seconds=1)
+    # Срок и включение — одним PATCH: окна «включён со старым сроком» нет вовсе.
+    updates = [c for c in db.panel.calls if c[0] == "update" and c[1] == p.sub_remna_id]
+    assert len(updates) == 1 and "status" in updates[0][2] and "expire_at" in updates[0][2]
+    assert abs(updates[0][3] - new_expire) < timedelta(seconds=1)
+    assert db.panel.count("enable") == 0
 
 
 async def test_cron_pass_picks_up_a_changed_owner(db):
@@ -1380,3 +1387,60 @@ async def test_renewal_over_an_open_reserve_gives_only_the_paid_period(db):
     assert out["synced"] == [pid]
     after = (await db.profiles(owner_id))[0]
     assert abs(after.sub_expire_at - (paid_at + timedelta(days=30))) < timedelta(seconds=1)
+
+
+# ── включение и выключение как у панели 3.4.4 ───────────────────────────────
+
+
+async def test_resume_of_a_profile_already_on_in_the_panel(db):
+    """Выключение не дошло (панель осталась ACTIVE), владелец снова платит — профиль
+    включается. Отдельное «включить» панель 3.4.4 отвергла бы (A030) навсегда."""
+    from remnapy.enums.users import UserStatus
+
+    _plan, owner_id, (pid,) = await _family(db, 1)
+    p = (await db.profiles(owner_id))[0]
+    await db.run(
+        "UPDATE family_profiles SET status = 'suspended', suspend_reason = 'owner_blocked', "
+        "suspended_at = now() WHERE id = :i",
+        i=pid,
+    )
+    assert db.panel.store[p.sub_remna_id].status == UserStatus.ACTIVE
+    out = await db.reconcile(owner_id)
+    assert out["resumed"] == [pid] and not out["errors"]
+    assert (await db.profiles(owner_id))[0].status == "active"
+    assert db.panel.count("enable") == 0
+
+
+async def test_suspend_of_a_profile_already_off_in_the_panel(db):
+    """Профиль выключен в панели (руками или прошлым проходом), а у нас ещё «активен» —
+    выключение проходит без ошибки «уже выключен» (A029)."""
+    from remnapy.enums.users import UserStatus
+
+    _plan, owner_id, (pid,) = await _family(db, 1)
+    p = (await db.profiles(owner_id))[0]
+    db.panel.store[p.sub_remna_id].status = UserStatus.DISABLED
+    await db.run("UPDATE users SET is_blocked = true, updated_at = now() WHERE id = :u", u=owner_id)
+    out = await db.reconcile(owner_id)
+    assert out["suspended"] == [pid] and not out["errors"]
+    assert db.panel.count("disable") == 0
+
+
+async def test_traffic_is_reset_once_per_purchase(db):
+    """Оплата — одно обнуление трафика, сколько бы проходов крона ни было. Сорвавшееся
+    обнуление повторяется, удавшееся — нет."""
+    _plan, owner_id, (pid,) = await _family(db, 1)
+    await _renew_owner(db, owner_id, now() + timedelta(days=60))
+    real = db.panel.users.reset_user_traffic
+    calls = {"n": 0}
+
+    async def flaky_reset(uuid):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("панель моргнула")
+        return await real(uuid)
+
+    db.panel.users.reset_user_traffic = flaky_reset
+    for _ in range(4):
+        await db.reconcile(owner_id)
+    assert calls["n"] == 2, "обнуление трафика повторяется на каждом проходе"
+    assert db.panel.count("reset") == 1
