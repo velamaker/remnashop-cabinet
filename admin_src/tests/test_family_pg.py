@@ -1103,6 +1103,24 @@ async def test_purge_owner_removes_the_whole_family_in_panel(db):
     assert await db.scalar("SELECT count(*) FROM family_profiles") == 0
 
 
+async def test_purge_of_a_paying_owner_leaves_no_names_of_the_family(db):
+    """Владелец платил — его строку обезличивают, а не удаляют, и каскад не уносит
+    журнал семьи и неудачные попытки. Имена близких — личные данные: их быть не должно."""
+    purge = importlib.import_module("src.infrastructure.services.overlay_user_purge")
+    _plan, owner_id, _ids = await _family(db, 1)
+    db.panel.fail_create = BadRequestError("rejected")
+    assert (await db.create(owner_id, "Бабушка"))["result"] == "failed"
+    await _pay(db, owner_id, at_sql="now()")
+    assert await db.scalar("SELECT count(*) FROM family_events WHERE owner_user_id = :u", u=owner_id) > 0
+
+    async with db.session() as s:
+        result = await purge.purge_user(s, RemnawaveFacade(db.panel), owner_id)
+        await s.commit()
+    assert result["mode"] == "anonymized"
+    assert await db.scalar("SELECT count(*) FROM family_events WHERE owner_user_id = :u", u=owner_id) == 0
+    assert await db.scalar("SELECT count(*) FROM family_profiles WHERE owner_user_id = :u", u=owner_id) == 0
+
+
 async def test_purge_with_panel_down_changes_nothing(db):
     purge = importlib.import_module("src.infrastructure.services.overlay_user_purge")
     _plan, owner_id, _ids = await _family(db, 2)

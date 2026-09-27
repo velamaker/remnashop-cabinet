@@ -237,6 +237,11 @@ async def purge_user(
         await session.execute(
             text("DELETE FROM users WHERE id = ANY(:ids)"), {"ids": list(family_shadows)}
         )
+    # 1в) Имена близких — тоже личные данные. Каскад их не уносит, когда строку
+    #     человека обезличиваем, а не удаляем: журнал семьи и неудачные попытки
+    #     (без теневого аккаунта) остались бы с именами «Мама», «Сын».
+    await _quiet(session, "DELETE FROM family_events WHERE owner_user_id = :u", {"u": user_id})
+    await _quiet(session, "DELETE FROM family_profiles WHERE owner_user_id = :u", {"u": user_id})
 
     keep_row = await has_money_trace(session, user_id)
 
