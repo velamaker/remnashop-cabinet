@@ -55,8 +55,9 @@ function useFamily(allowed: boolean) {
     try {
       setData(await familyApi.get());
       setError(null);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "");
+    } catch {
+      // Текст бэкенда — русский при любом языке кабинета: показываем свой.
+      setError("load");
     } finally {
       setLoading(false);
     }
@@ -140,6 +141,21 @@ function ProfileCard({
   const [error, setError] = useState<string | null>(null);
   const active = profile.status === "active";
 
+  // Ошибки сброса и удаления — по статусу, своими словами на языке кабинета: текст
+  // бэкенда всегда русский. 404 — профиля уже нет (удалили в другой вкладке или
+  // боте): обновляем список, чтобы карточка не висела.
+  const failed = (e: unknown) => {
+    const status = e instanceof ApiError ? e.status : 0;
+    if (status === 404) {
+      setError(t("family.errNotFound"));
+      onChanged();
+    } else if (status === 502) {
+      setError(t("family.errPanel"));
+    } else {
+      setError(t("family.errGeneric"));
+    }
+  };
+
   const reset = async () => {
     setBusy("reset");
     setNote(null);
@@ -153,7 +169,7 @@ function ProfileCard({
       else setError(res.reason === "disabled" ? t("family.resetDisabled") : t("family.errGeneric"));
       onChanged();
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : t("family.errGeneric"));
+      failed(e);
     } finally {
       setBusy(null);
     }
@@ -173,7 +189,7 @@ function ProfileCard({
       resetFamilyNav();
       onChanged();
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : t("family.errGeneric"));
+      failed(e);
     } finally {
       setBusy(null);
     }
@@ -368,7 +384,7 @@ export default function FamilyPage() {
         </div>
       )}
 
-      {!loading && error != null && <p className="text-sm text-danger">{error || t("family.errLoad")}</p>}
+      {!loading && error != null && <p className="text-sm text-danger">{t("family.errLoad")}</p>}
 
       {!loading && data && !data.enabled && profiles.length === 0 && (
         <Card>

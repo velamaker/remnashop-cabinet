@@ -194,6 +194,38 @@ describe("FamilyPage", () => {
     expect(screen.queryByRole("button", { name: ru("family.add") })).toBeNull();
   });
 
+  it("ошибки сброса и удаления — своими словами на языке кабинета, не текстом бэкенда", async () => {
+    const { ApiError } = await import("@/types/api");
+    localStorage.setItem(STORAGE_KEY, "en");
+    setActiveLang("en");
+    const en = (key: string) => translate(key, {}, "en");
+    resetMock.mockRejectedValue(new ApiError(502, "Не удалось сбросить устройства. Попробуйте позже."));
+    removeMock.mockRejectedValue(new ApiError(404, "Профиль не найден"));
+    render(
+      <I18nProvider>
+        <FamilyPage />
+      </I18nProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: en("family.resetDevices") }));
+    await waitFor(() => expect(document.body.textContent).toContain(en("family.errPanel")));
+    expect(document.body.textContent).not.toContain("Не удалось");
+
+    const loads = getMock.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: en("family.delete") }));
+    fireEvent.click(screen.getByRole("button", { name: en("family.deleteYes") }));
+    await waitFor(() => expect(document.body.textContent).toContain(en("family.errNotFound")));
+    // Профиля уже нет — список перечитан, карточка не висит.
+    await waitFor(() => expect(getMock.mock.calls.length).toBeGreaterThan(loads));
+  });
+
+  it("ошибка загрузки — переведённый текст", async () => {
+    const { ApiError } = await import("@/types/api");
+    getMock.mockRejectedValue(new ApiError(500, "Внутренняя ошибка"));
+    renderPage();
+    expect(await screen.findByText(ru("family.errLoad"))).toBeTruthy();
+    expect(document.body.textContent).not.toContain("Внутренняя ошибка");
+  });
+
   it("функцию выключили, профили остались — видны и удаляются, новых не заводим", async () => {
     getMock.mockResolvedValue(
       answer({ enabled: false, available: false, reason: "disabled", period_limit: 3, created_in_period: 1 }),
