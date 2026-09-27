@@ -1286,13 +1286,33 @@ def _replay(saved: dict, owner_id: int) -> dict:
     return {"result": "failed", "repeat": True}
 
 
-async def _create_shadow(session: "AsyncSession", user_dao: Any, owner: OwnerState, label: str) -> Any:
+def shadow_name(owner_id: int, profile_id: Optional[int] = None) -> str:
+    """Имя теневого аккаунта — только из чисел, без имени профиля.
+
+    Имя профиля пишет человек, а `users.name` база подставляет в уведомления админам
+    как HTML (#UserDeviceAddedEvent, #UserFirstConnectionEvent): в 24 символа метки
+    помещается `<a href=…>`. Метка и так лежит в family_profiles.label.
+    """
+    base = f"Семья #{int(owner_id)}"
+    return f"{base} · профиль {int(profile_id)}" if profile_id is not None else base
+
+
+def panel_description(owner: OwnerState, profile_id: int) -> str:
+    """Описание пользователя в панели — тоже без имени профиля.
+
+    DESCRIPTION — плейсхолдер шаблонов страницы подписки: сырой HTML человека
+    оказался бы на странице, которую открывает участник семьи.
+    """
+    return f"Семья {owner.remna_name} · профиль {int(profile_id)}"
+
+
+async def _create_shadow(session: "AsyncSession", user_dao: Any, owner: OwnerState) -> Any:
     """Теневой аккаунт профиля — БАЗОВЫМ DAO, как база заводит панельных людей.
 
     Без телеграма, почты и пароля: войти в него нельзя ни одним способом. Правила
     приняты (иначе мидлварь правил остановила бы любой его апдейт), пробника нет
     (профиль — не новый клиент). `auth_type` — умолчание базы, свой не вводим:
-    колонку читает перечисление базы.
+    колонку читает перечисление базы. Имя — нейтральное (см. shadow_name).
     """
     from sqlalchemy.exc import IntegrityError
 
@@ -1307,7 +1327,7 @@ async def _create_shadow(session: "AsyncSession", user_dao: Any, owner: OwnerSta
             language = Locale(raw.lower())
         except ValueError:
             language = Locale.EN
-    name = f"Семья #{owner.user_id}: {label}"
+    name = shadow_name(owner.user_id)
     for attempt in range(5):
         dto = UserDto(
             telegram_id=None,
@@ -1389,7 +1409,7 @@ async def create_profile(
         return {"result": "label_taken"}
 
     target = target_for(owner)
-    shadow = await _create_shadow(session, user_dao, owner, clean)
+    shadow = await _create_shadow(session, user_dao, owner)
     username = panel_username(shadow.id)
     profile_id = (
         await session.execute(
@@ -1417,10 +1437,14 @@ async def create_profile(
         await session.rollback()
         return _replay(saved, owner_id) if saved else {"result": "conflict"}
     profile_id = int(profile_id)
+    await session.execute(
+        text("UPDATE users SET name = :n WHERE id = :u"),
+        {"n": shadow_name(owner_id, profile_id), "u": shadow.id},
+    )
     await _event(session, owner_id, profile_id, "create_started", actor, {"label": clean})
     await session.commit()
 
-    description = f"Семья {owner.remna_name}: «{clean}»"
+    description = panel_description(owner, profile_id)
     try:
         created = await panel_create(sdk, username=username, target=target, description=description)
     except Exception as exc:  # noqa: BLE001 — дальше выясняем, что с панелью на самом деле

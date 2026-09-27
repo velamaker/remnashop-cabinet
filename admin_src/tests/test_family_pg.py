@@ -474,7 +474,9 @@ async def test_created_profile_is_a_shadow_account_with_its_own_subscription(db)
     assert panel_user.hwid_device_limit == 2
     assert panel_user.traffic_limit_bytes == 200 * 1024**3
     assert panel_user.telegram_id is None
-    assert "Семья rs_" in panel_user.description and "«Профиль 1»" in panel_user.description
+    owner_tg = await db.scalar("SELECT telegram_id FROM users WHERE id = :u", u=owner_id)
+    # Описание — номера, без имени профиля (его пишет человек, а описание — HTML).
+    assert panel_user.description == f"Семья rs_{owner_tg} · профиль {pid}"
     # Теневой аккаунт: войти нельзя, пробника нет, код с префиксом, подписка своя.
     shadow = (
         await db.rows(
@@ -1444,3 +1446,21 @@ async def test_traffic_is_reset_once_per_purchase(db):
         await db.reconcile(owner_id)
     assert calls["n"] == 2, "обнуление трафика повторяется на каждом проходе"
     assert db.panel.count("reset") == 1
+
+
+async def test_profile_name_never_reaches_html_of_admins_or_the_subscription_page(db):
+    """Имя профиля пишет человек. В `users.name` теневого аккаунта (его база рендерит
+    в уведомлениях админам как HTML) и в описание пользователя панели (плейсхолдер
+    страницы подписки) оно не попадает — только номера."""
+    plan_id = await db.plan()
+    owner_id = await db.owner(plan_id)
+    evil = '<a href="x">Ма&ма</a>'
+    result = await db.create(owner_id, evil)
+    assert result["result"] == "created"
+    p = (await db.profiles(owner_id))[0]
+    assert p.label == family.clean_label(evil), "метка профиля хранится как есть — для показа"
+    name = await db.scalar("SELECT name FROM users WHERE id = :u", u=p.profile_user_id)
+    description = db.panel.by_name(p.panel_username).description
+    for text_ in (name, description):
+        assert not set("<>&") & set(text_), text_
+    assert name == f"Семья #{owner_id} · профиль {p.id}"
