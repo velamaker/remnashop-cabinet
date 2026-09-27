@@ -1111,12 +1111,20 @@ async def panel_sync(sdk: Any, remna_uuid: str, target: Target, *, status_active
     return updated
 
 
-async def panel_disable(sdk: Any, remna_uuid: str) -> Any:
-    """Выключить профиль статусом в теле PATCH — идемпотентно.
+def _already_disabled(exc: BaseException) -> bool:
+    """Ответ панели «уже выключен» (A029) — для нас это успех, а не ошибка."""
+    code = str(getattr(exc, "code", "") or "")
+    text_ = str(exc)
+    return code == "A029" or "A029" in text_ or "already disabled" in text_.lower()
 
-    Отдельное действие `actions/disable` на уже выключенном пользователе панель 3.4.4
-    отвечает ошибкой (A029 «уже выключен»), а `actions/enable` — A030 «уже включён»:
-    повтор после сбоя падал бы навсегда. PATCH со статусом повтор принимает молча.
+
+async def panel_disable(sdk: Any, remna_uuid: str) -> Any:
+    """Выключить профиль — идемпотентно, из любого статуса.
+
+    Сначала статусом в теле PATCH: повтор он принимает молча. Но панель 3.4.4 так
+    выключает только ACTIVE — пользователя в LIMITED (кончился трафик) или EXPIRED
+    PATCH оставляет как есть. Тогда — действием `actions/disable`, а его ответ «уже
+    выключен» (A029, повтор после сбоя) считаем успехом.
     """
     from remnapy.enums.users import UserStatus
     from remnapy.models import UpdateUserRequestDto
@@ -1127,6 +1135,16 @@ async def panel_disable(sdk: Any, remna_uuid: str) -> Any:
             UpdateUserRequestDto(uuid=_uuid(remna_uuid), status=UserStatus.DISABLED)
         )
     except Exception as exc:  # noqa: BLE001
+        if _is_not_found(exc):
+            raise PanelGone(str(exc)) from exc
+        raise PanelError(f"{type(exc).__name__}: {exc}") from exc
+    if _status_text(getattr(resp, "status", None)) == "DISABLED":
+        return resp
+    try:
+        resp = await sdk.users.disable_user(_uuid(remna_uuid))
+    except Exception as exc:  # noqa: BLE001
+        if _already_disabled(exc):
+            return resp
         if _is_not_found(exc):
             raise PanelGone(str(exc)) from exc
         raise PanelError(f"{type(exc).__name__}: {exc}") from exc

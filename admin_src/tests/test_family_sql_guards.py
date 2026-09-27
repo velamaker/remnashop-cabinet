@@ -289,13 +289,17 @@ def test_owner_passes_are_fair():
         assert sql.rstrip().endswith("LIMIT :lim")
 
 
-def test_on_off_goes_through_patch_status_not_actions():
+def test_on_off_goes_through_patch_status_first():
     """`actions/enable|disable` на панели 3.4.4 отвечают «уже включён/выключен» (A030 /
-    A029) — повтор после сбоя падал бы навсегда. Статус — только в теле PATCH."""
+    A029) — повтор после сбоя падал бы навсегда. Включение — только статусом в теле
+    PATCH; выключение — тоже PATCH, а действие — лишь запасной путь для LIMITED и
+    EXPIRED (их PATCH не выключает), где «уже выключен» считается успехом."""
     source = inspect.getsource(family)
-    assert "enable_user(" not in source and "disable_user(" not in source
+    assert "enable_user(" not in source
+    assert source.count("disable_user(") == 1
     disable = inspect.getsource(family.panel_disable)
-    assert "status=UserStatus.DISABLED" in disable
+    assert disable.index("status=UserStatus.DISABLED") < disable.index("disable_user(")
+    assert "_already_disabled(exc)" in disable
 
 
 def test_traffic_reset_is_the_last_step_and_marked_right_after():

@@ -153,6 +153,12 @@ class _Users:
             await self.p.gate.wait()
 
     async def update_user(self, body):
+        """PATCH /users по правилам панели 3.4.4 для статуса:
+        DISABLED — только из ACTIVE (LIMITED и EXPIRED остаются как есть);
+        ACTIVE — из любого не-ACTIVE; новый срок в будущем без статуса — EXPIRED → ACTIVE.
+        """
+        from remnapy.enums.users import UserStatus
+
         fields = sorted(body.model_dump(exclude_unset=True).keys())
         self.p.calls.append(("update", str(body.uuid), fields, body.expire_at))
         await self._slow()
@@ -160,12 +166,24 @@ class _Users:
             raise RuntimeError("panel is down")
         user = self._get(body.uuid)
         for name in body.model_fields_set:
-            if name == "uuid":
+            if name in ("uuid", "status"):
                 continue
             value = getattr(body, name)
             if name == "active_internal_squads":
                 value = [SimpleNamespace(uuid=s) for s in value or []]
             setattr(user, name, value)
+        wanted = body.status if "status" in body.model_fields_set else None
+        if wanted == UserStatus.DISABLED:
+            if user.status == UserStatus.ACTIVE:
+                user.status = UserStatus.DISABLED
+        elif wanted == UserStatus.ACTIVE:
+            user.status = UserStatus.ACTIVE
+        elif (
+            "expire_at" in body.model_fields_set
+            and user.status == UserStatus.EXPIRED
+            and body.expire_at > now()
+        ):
+            user.status = UserStatus.ACTIVE
         return user
 
     # Действия включения/выключения — как у панели 3.4.4: повтор на уже включённом
@@ -1629,3 +1647,74 @@ async def test_bonus_days_extend_the_family_without_a_traffic_reset(db):
     assert out["synced"] == [pid]
     assert abs((await db.profiles(owner_id))[0].sub_expire_at - new_expire) < timedelta(seconds=1)
     assert db.panel.count("reset") == 0
+
+
+async def test_resumed_profile_already_on_gets_one_traffic_reset(db):
+    """Профиль у нас приостановлен, а в панели уже ACTIVE (выключение не дошло); владелец
+    продлился. Возобновление с обнулением трафика — ровно одно обнуление за сколько угодно
+    проходов. Раньше включение шло отдельным действием, панель отвечала «уже включён»
+    (A030), отметка обнуления не ставилась — и каждый проход обнулял трафик заново."""
+    from remnapy.enums.users import UserStatus
+
+    _plan, owner_id, (pid,) = await _family(db, 1)
+    p = (await db.profiles(owner_id))[0]
+    await db.run(
+        "UPDATE family_profiles SET status = 'suspended', suspend_reason = 'owner_blocked', "
+        "suspended_at = now() WHERE id = :i",
+        i=pid,
+    )
+    assert db.panel.store[p.sub_remna_id].status == UserStatus.ACTIVE
+    await _renew_owner(db, owner_id, now() + timedelta(days=60))
+    for _ in range(3):
+        await db.reconcile(owner_id)
+    assert db.panel.count("reset") == 1
+    after = (await db.profiles(owner_id))[0]
+    assert after.status == "active" and after.fail_count == 0
+
+
+@pytest.mark.parametrize("panel_status", ["LIMITED", "EXPIRED"])
+async def test_profile_in_limited_or_expired_is_suspended(db, panel_status):
+    """PATCH со статусом DISABLED панель 3.4.4 применяет только к ACTIVE: профиль, у
+    которого кончился трафик или срок, выключается действием, и приостановка проходит."""
+    from remnapy.enums.users import UserStatus
+
+    _plan, owner_id, (pid,) = await _family(db, 1)
+    p = (await db.profiles(owner_id))[0]
+    db.panel.store[p.sub_remna_id].status = UserStatus(panel_status)
+    await db.run(
+        f"UPDATE subscriptions SET status = '{panel_status}' WHERE id = :s", s=p.sub_id
+    )
+    await db.run("UPDATE users SET is_blocked = true, updated_at = now() WHERE id = :u", u=owner_id)
+    out = await db.reconcile(owner_id)
+    assert out["suspended"] == [pid] and not out["errors"]
+    assert db.panel.store[p.sub_remna_id].status == UserStatus.DISABLED
+    after = (await db.profiles(owner_id))[0]
+    assert after.status == "suspended" and after.sub_status == "DISABLED"
+    # Повтор: намерение «приостановлен» есть, а панель снова показывает статус. LIMITED
+    # даёт доступ — выключаем снова; EXPIRED доступа не даёт — трогать нечего. Без ошибок.
+    db.panel.store[p.sub_remna_id].status = UserStatus(panel_status)
+    await db.run(f"UPDATE subscriptions SET status = '{panel_status}' WHERE id = :s", s=p.sub_id)
+    await db.run("UPDATE family_profiles SET last_reconciled_at = NULL")
+    out = await db.reconcile(owner_id)
+    expected = UserStatus.DISABLED if panel_status == "LIMITED" else UserStatus.EXPIRED
+    assert not out["errors"] and db.panel.store[p.sub_remna_id].status == expected
+
+
+async def test_disable_answering_already_disabled_is_success(db):
+    """Панель ответила «уже выключен» (A029) на действие — для нас это успех."""
+    from remnapy.enums.users import UserStatus
+
+    _plan, owner_id, (pid,) = await _family(db, 1)
+    p = (await db.profiles(owner_id))[0]
+    db.panel.store[p.sub_remna_id].status = UserStatus.LIMITED
+    real = db.panel.users.disable_user
+
+    async def already(uuid):
+        db.panel.store[str(uuid)].status = UserStatus.DISABLED
+        return await real(uuid)  # второй раз — A029
+
+    db.panel.users.disable_user = already
+    async with db.session() as s:
+        await family.panel_disable(db.panel, p.sub_remna_id)
+        await s.rollback()
+    assert db.panel.store[p.sub_remna_id].status == UserStatus.DISABLED
