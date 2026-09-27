@@ -485,13 +485,15 @@ def plan_decisions(
     grace_days: int,
     *,
     reset_traffic: bool = False,
-    purchase_at: Optional[datetime] = None,
+    period_start: Optional[datetime] = None,
 ) -> list[Decision]:
     """Таблица решений по каждому живому профилю. Ни базы, ни панели — только логика.
 
     `reset_traffic` — хук оплаты ЗНАЕТ, что владелец только что купил период: трафик
-    профилей обнуляется так же, как база обнуляет его владельцу. `purchase_at` — то же
-    для крона: оплата позже последней сверки профиля значит, что хук не дошёл.
+    профилей обнуляется так же, как база обнуляет его владельцу. `period_start` — то же
+    для крона (см. PERIOD_START_SQL): новый период владельца позже последнего свежего
+    трафика профиля значит, что хук не дошёл или период начался мимо оплаты (подарок,
+    промокод на тариф, выдача тарифа админом).
     """
     live = [p for p in profiles if p.status in ("active", "suspended")]
     condition = owner_condition(owner, now)
@@ -568,12 +570,12 @@ def plan_decisions(
         ):
             out.append(Decision(p.id, "delete", reason="panel_missing"))
             continue
-        # Оплата позже последнего свежего трафика профиля — значит, хук оплаты не
-        # дошёл, и обнулить должен крон. Отметка — именно трафика, а не сверки:
-        # сверку сбрасывают и выключение, и только что заведённый профиль.
+        # Новый период владельца позже последнего свежего трафика профиля — обнулить
+        # должен крон. Отметка — именно трафика, а не сверки: сверку сбрасывают и
+        # выключение, и только что заведённый профиль.
         fresh_at = p.traffic_reset_at or p.created_at
         reset = reset_traffic or (
-            purchase_at is not None and fresh_at is not None and purchase_at > fresh_at
+            period_start is not None and fresh_at is not None and period_start > fresh_at
         )
         if p.status == "suspended":
             out.append(Decision(p.id, "resume", target=target, reset=reset))
@@ -697,22 +699,6 @@ PROFILE_BY_REQUEST_SQL = (
     "SELECT id, owner_user_id, status, label FROM family_profiles WHERE request_id = :rid"
 )
 
-# Последняя НАСТОЯЩАЯ и уже ВЫДАННАЯ покупка владельца. Синтетические снимки
-# (пополнение, подарок, докупки — id < 0) период не продлевают и трафик не обнуляют.
-# «Выдана» — строка подписки обновлена не раньше оплаты: база сначала проводит счёт,
-# потом выдаёт период, и крон, попавший между ними, обнулил бы трафик семьи со
-# старым сроком (а при сорвавшейся выдаче — вовсе за неоплаченный период). CASE, а
-# не голый ::int: нечисловой id уронил бы всю сверку, а не одну строку.
-LAST_PURCHASE_SQL = (
-    "SELECT max(t.updated_at) FROM transactions t "
-    "JOIN users u ON u.id = t.user_id "
-    "JOIN subscriptions s ON s.id = u.current_subscription_id "
-    "WHERE t.user_id = :uid AND t.status::text = 'COMPLETED' AND t.is_test = false "
-    "AND (CASE WHEN t.plan_snapshot->>'id' ~ '^-?[0-9]+$' "
-    "     THEN (t.plan_snapshot->>'id')::int ELSE 0 END) > 0 "
-    "AND t.updated_at <= s.updated_at"
-)
-
 # Семьи, у которых что-то поменялось после последней сверки: подписка владельца
 # (продление, смена тарифа, пауза — всё это меняет её строку), сам владелец
 # (блокировка, удаление подписки снимает current_subscription_id) и условия тарифа.
@@ -750,15 +736,28 @@ PENDING_SQL = (
 )
 HAS_ANY_SQL = "SELECT EXISTS (SELECT 1 FROM family_profiles)"
 
-# Начало текущего оплаченного периода: последняя выданная покупка (продление) или
-# создание строки подписки (смена тарифа, новая подписка) — что позже.
+# Начало текущего периода владельца — то, с чем база обнуляет трафик ему самому:
+#   * последняя НАСТОЯЩАЯ и уже ВЫДАННАЯ покупка. Синтетические снимки (пополнение,
+#     подарок другому, докупки — id < 0) период не продлевают. «Выдана» — строка
+#     подписки обновлена не раньше оплаты: база сначала проводит счёт, потом выдаёт
+#     период, и крон, попавший между ними, обнулил бы трафик со старым сроком;
+#   * активация подарка или промокода на тариф (награда SUBSCRIPTION) — база обнуляет
+#     трафик и при ней;
+#   * создание текущей строки подписки: смена тарифа, новая подписка, выдача тарифа
+#     админом.
+# Дни по промокоду «+N дней», за приглашение и ручное «+дни» периода не начинают —
+# база трафик при них не обнуляет, и семья тоже. CASE, а не голый ::int: нечисловой
+# id уронил бы всю сверку, а не одну строку.
 PERIOD_START_SQL = (
     "SELECT GREATEST(s.created_at, ("
     "  SELECT max(t.updated_at) FROM transactions t "
     "  WHERE t.user_id = u.id AND t.status::text = 'COMPLETED' AND t.is_test = false "
     "  AND (CASE WHEN t.plan_snapshot->>'id' ~ '^-?[0-9]+$' "
     "       THEN (t.plan_snapshot->>'id')::int ELSE 0 END) > 0 "
-    "  AND t.updated_at <= s.updated_at)) "
+    "  AND t.updated_at <= s.updated_at), ("
+    "  SELECT max(a.activated_at) FROM promocode_activations a "
+    "  JOIN promocodes p ON p.id = a.promocode_id "
+    "  WHERE a.user_id = u.id AND p.reward_type::text = 'SUBSCRIPTION')) "
     "FROM users u JOIN subscriptions s ON s.id = u.current_subscription_id "
     "WHERE u.id = :uid"
 )
@@ -922,12 +921,12 @@ async def profile_by_request(session: "AsyncSession", request_id: Any) -> Option
     return {"id": int(row[0]), "owner_user_id": int(row[1]), "status": row[2], "label": row[3]}
 
 
-async def last_purchase_at(session: "AsyncSession", owner_id: int) -> Optional[datetime]:
-    return (await session.execute(text(LAST_PURCHASE_SQL), {"uid": owner_id})).scalar()
+async def period_started_at(session: "AsyncSession", owner_id: int) -> Optional[datetime]:
+    return (await session.execute(text(PERIOD_START_SQL), {"uid": owner_id})).scalar()
 
 
 async def created_in_period(session: "AsyncSession", owner_id: int) -> int:
-    since = (await session.execute(text(PERIOD_START_SQL), {"uid": owner_id})).scalar()
+    since = await period_started_at(session, owner_id)
     if since is None:
         return 0
     return int(
@@ -1825,9 +1824,9 @@ async def reconcile_owner(
         if not any(p.status in ("active", "suspended") for p in profiles):
             await session.rollback()
             break
-        purchase_at = None if reset_traffic else await last_purchase_at(session, owner_id)
+        period_start = None if reset_traffic else await period_started_at(session, owner_id)
         decisions = plan_decisions(
-            owner, profiles, now, grace, reset_traffic=reset_traffic, purchase_at=purchase_at
+            owner, profiles, now, grace, reset_traffic=reset_traffic, period_start=period_start
         )
         by_id = {p.id: p for p in profiles}
         step: Optional[Decision] = None

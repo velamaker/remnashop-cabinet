@@ -141,9 +141,12 @@ def test_reserve_is_judged_by_history_not_by_the_term():
 
 def test_traffic_reset_follows_only_real_plan_purchases():
     """Пополнение и докупки (id < 0) не продлевают период и не обнуляют трафик семьи."""
-    assert "t.status::text = 'COMPLETED'" in family.LAST_PURCHASE_SQL
-    assert "t.is_test = false" in family.LAST_PURCHASE_SQL
-    assert "ELSE 0 END) > 0" in family.LAST_PURCHASE_SQL
+    assert "t.status::text = 'COMPLETED'" in family.PERIOD_START_SQL
+    assert "t.is_test = false" in family.PERIOD_START_SQL
+    assert "ELSE 0 END) > 0" in family.PERIOD_START_SQL
+    # Подарок или промокод на тариф и новая строка подписки тоже начинают период.
+    assert "p.reward_type::text = 'SUBSCRIPTION'" in family.PERIOD_START_SQL
+    assert "GREATEST(s.created_at" in family.PERIOD_START_SQL
 
 
 def test_pending_rows_are_left_alone_for_a_grace_period():
@@ -269,7 +272,7 @@ def test_purge_targets_does_not_swallow_database_errors():
 
 def test_traffic_reset_waits_for_the_issued_period():
     """Обнулять — за выданный период: оплата не позже обновления строки подписки."""
-    assert "t.updated_at <= s.updated_at" in family.LAST_PURCHASE_SQL
+    assert "t.updated_at <= s.updated_at" in family.PERIOD_START_SQL
 
 
 

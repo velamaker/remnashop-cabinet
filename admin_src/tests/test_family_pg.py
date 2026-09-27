@@ -1489,3 +1489,50 @@ async def test_deleting_the_plan_does_not_take_the_family_mid_period(db):
         await raw_delete(plan_id=plan_id, _admin=SimpleNamespace(role=5), session=s)
     out = await db.reconcile(owner_id)
     assert out["suspended"] == [pid]
+
+
+async def _gift(db: Db, owner_id: int, *, reward_type: str = "SUBSCRIPTION") -> None:
+    """Владелец активировал подарок (или промокод) — как это записывает база."""
+    await db.run(
+        "WITH p AS (INSERT INTO promocodes (code, is_active, reward_type, availability, is_reusable) "
+        f"VALUES (:c, true, '{reward_type}', 'ALL', false) RETURNING id) "
+        "INSERT INTO promocode_activations (promocode_id, user_id, activated_at) "
+        "SELECT id, :u, clock_timestamp() FROM p",
+        c=uuid_lib.uuid4().hex[:10],
+        u=owner_id,
+    )
+
+
+async def test_gift_of_the_same_plan_renews_the_family_with_fresh_traffic(db):
+    """Подарок того же тарифа продлевает владельца и обнуляет ему трафик — семья
+    получает и срок, и свежий трафик, а период замен начинается заново."""
+    _plan, owner_id, (first, second) = await _family(db, 2, terms=(2, 2))
+    async with db.session() as s:
+        await family.delete_profile(s, db.panel, owner_id=owner_id, profile_id=first, actor="t")
+    assert (await db.create(owner_id, "Замена"))["result"] == "created"
+    async with db.session() as s:
+        await family.delete_profile(s, db.panel, owner_id=owner_id, profile_id=second, actor="t")
+    assert (await db.create(owner_id, "Ещё"))["reason"] == "period_limit"
+
+    await _gift(db, owner_id)
+    new_expire = now() + timedelta(days=60)
+    await _owner_expire(db, owner_id, new_expire)
+    out = await db.reconcile(owner_id)
+    assert out["synced"]
+    for p in await db.profiles(owner_id):
+        assert abs(p.sub_expire_at - new_expire) < timedelta(seconds=1)
+        assert ("reset", p.sub_remna_id) in db.panel.calls, "подарок не обнулил трафик семье"
+    assert (await db.create(owner_id, "Ещё"))["result"] == "created", "период замен не начался заново"
+
+
+async def test_bonus_days_extend_the_family_without_a_traffic_reset(db):
+    """Промокод «+N дней» или дни за приглашение — сдвиг срока, а не новый период:
+    база трафик владельцу не обнуляет, и семье — тоже."""
+    _plan, owner_id, (pid,) = await _family(db, 1)
+    await _gift(db, owner_id, reward_type="DURATION")
+    new_expire = now() + timedelta(days=37)
+    await _owner_expire(db, owner_id, new_expire)
+    out = await db.reconcile(owner_id)
+    assert out["synced"] == [pid]
+    assert abs((await db.profiles(owner_id))[0].sub_expire_at - new_expire) < timedelta(seconds=1)
+    assert db.panel.count("reset") == 0
